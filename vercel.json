@@ -16,12 +16,6 @@
       "dest": "/$1"
     }
   ],
-  "functions": {
-    "api/vercel_handler.py": {
-      "runtime": "python3.11",
-      "maxDuration": 30
-    }
-  },
   "env": {
     "PYTHONPATH": "."
   },
