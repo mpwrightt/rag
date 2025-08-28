@@ -47,6 +47,41 @@ const data = {
       icon: IconDashboard,
     },
     {
+      title: "RAG Chat",
+      url: "/dashboard/chat",
+      icon: IconMessageCircle,
+    },
+    {
+      title: "Documents",
+      url: "/dashboard/documents",
+      icon: IconFileDescription,
+    },
+    {
+      title: "Collections",
+      url: "/dashboard/collections",
+      icon: IconDatabase,
+    },
+    {
+      title: "Collection Chat",
+      url: "/dashboard/collection-chat",
+      icon: IconMessageCircle,
+    },
+    {
+      title: "Prompts",
+      url: "/dashboard/prompts",
+      icon: IconFileAi,
+    },
+    {
+      title: "Workflows",
+      url: "/dashboard/workflows",
+      icon: IconInnerShadowTop,
+    },
+    {
+      title: "Analytics",
+      url: "/dashboard/analytics",
+      icon: IconChartBar,
+    },
+    {
       title: "Payment gated",
       url: "/dashboard/payment-gated",
       icon: IconSparkles,
@@ -100,8 +135,8 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             >
               <Link href="/">
                 <ChatMaxingIconColoured className="!size-6" />
-                <span className="text-base font-semibold">Starter DIY</span>
-                <Badge variant="outline" className="text-muted-foreground  text-xs">Demo</Badge>
+                <span className="text-base font-semibold">RAG SaaS</span>
+                <Badge variant="outline" className="text-muted-foreground  text-xs">AI</Badge>
               </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>

@@ -1,6 +1,6 @@
-# Starter.diy - Elite Next.js SaaS Starter Kit
+# 🚀 RAG-Powered SaaS Platform
 
-A modern, production-ready SaaS starter template for building full-stack applications using Next.js 15, Convex, Clerk, and Clerk Billing. The easiest way to start accepting payments with beautiful UI and seamless integrations.
+A modern, production-ready SaaS platform combining advanced RAG (Retrieval-Augmented Generation) capabilities with enterprise-grade user management, authentication, and billing. Built with Next.js 15, Convex, Clerk, and your existing RAG infrastructure.
 
 [🌐 Live Demo](https://elite-next-clerk-convex-starter.vercel.app/) – Try the app in your browser!
 
