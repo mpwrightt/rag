@@ -1,0 +1,29 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "package.json",
+      "use": "@vercel/next"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/rag/(.*)",
+      "dest": "/api/vercel_handler.py"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/$1"
+    }
+  ],
+  "functions": {
+    "api/vercel_handler.py": {
+      "runtime": "python3.11",
+      "maxDuration": 30
+    }
+  },
+  "env": {
+    "PYTHONPATH": "."
+  },
+  "regions": ["iad1"]
+}

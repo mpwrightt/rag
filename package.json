@@ -6,7 +6,9 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "vercel-build": "next build",
+    "postbuild": "echo 'Build completed successfully'"
   },
   "dependencies": {
     "@clerk/backend": "^2.4.1",
