@@ -51,11 +51,20 @@ const Terminal: React.FC<TerminalProps> = ({
         {render &&
           childrenArray.map((child, i) => {
             if (React.isValidElement(child) && i <= currentLineIndex) {
-              return React.cloneElement(child, {
-                ...child.props,
-                onTypingComplete: handleTypingComplete,
-                startDelay: i === 0 ? 0 : undefined, // Only first child has no delay
-              });
+              // Only pass props to components that accept them
+              if (child.type === TypingAnimation) {
+                return React.cloneElement(child as React.ReactElement<any>, {
+                  onTypingComplete: handleTypingComplete,
+                  startDelay: i === 0 ? 0 : undefined, // Only first child has no delay
+                });
+              }
+              if (child.type === Pause) {
+                return React.cloneElement(child as React.ReactElement<any>, {
+                  onTypingComplete: handleTypingComplete,
+                });
+              }
+              // For other children (e.g., AnimatedSpan), render as-is
+              return child;
             }
             return null;
           })}
