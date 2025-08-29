@@ -25,10 +25,17 @@ except Exception:  # pragma: no cover
 
 
 def _normalize_path(path: str) -> str:
-    """Strip the /api/rag prefix added by vercel.json so routes match FastAPI app."""
+    """Normalize the path to match FastAPI routes.
+
+    - If the incoming path has an "/api/rag" prefix (e.g. from direct calls), strip it.
+    - Ensure the path is non-empty and starts with "/".
+    """
+    if not path:
+        return "/"
     if path.startswith("/api/rag"):
-        new_path = path[len("/api/rag"):]
-        return new_path or "/"
+        path = path[len("/api/rag"):]
+    if not path.startswith("/"):
+        path = "/" + path
     return path or "/"
 
 
@@ -42,9 +49,21 @@ async def _forward_to_asgi(event: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     method = event.get("httpMethod", "GET")
-    path = _normalize_path(event.get("path", "/"))
     headers = event.get("headers", {}) or {}
-    params = event.get("queryStringParameters", {}) or {}
+    params = dict(event.get("queryStringParameters", {}) or {})
+
+    # Reconstruct original path from the passthrough query param 'p' (see vercel.json)
+    # Example: /api/rag/documents -> dest /api/vercel_handler.py?p=documents
+    passthrough_path = None
+    if "p" in params and params["p"] is not None:
+        passthrough_path = params.pop("p")
+    incoming_path = event.get("path", "/")
+    if passthrough_path:
+        # Ensure leading '/'
+        path = _normalize_path(passthrough_path)
+    else:
+        # Fallback to normalizing the event path (covers local/dev invocations)
+        path = _normalize_path(incoming_path)
 
     # Decode body
     body: bytes | None
