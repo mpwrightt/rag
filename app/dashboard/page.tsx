@@ -41,11 +41,25 @@ export default function DashboardPage() {
     const fetchStats = async () => {
       try {
         // Fetch document stats
-        const docsResponse = await fetch(`${API_BASE}/documents`)
+        const docsResponse = await fetch(`${API_BASE}/documents?_=${Date.now()}`, {
+          headers: { 
+            'bypass-tunnel-reminder': 'true',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache',
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+          }
+        })
         const docsData = await docsResponse.json()
         
         // Fetch system health
-        const healthResponse = await fetch(`${API_BASE}/health`)
+        const healthResponse = await fetch(`${API_BASE}/health?_=${Date.now()}`, {
+          headers: { 
+            'ngrok-skip-browser-warning': 'true',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache'
+          }
+        })
         const healthData = await healthResponse.json()
         
         setStats({

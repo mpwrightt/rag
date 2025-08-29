@@ -36,7 +36,15 @@ export default function DocumentsPage() {
   const loadDocuments = async () => {
     setIsLoading(true)
     try {
-      const response = await fetch(`${API_BASE}/documents`)
+      const response = await fetch(`${API_BASE}/documents?_=${Date.now()}`, {
+        headers: { 
+          'bypass-tunnel-reminder': 'true',
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache',
+          'Accept': 'application/json',
+          'Content-Type': 'application/json'
+        }
+      })
       if (!response.ok) throw new Error('Failed to load documents')
       
       const data = await response.json()
@@ -66,6 +74,7 @@ export default function DocumentsPage() {
 
         const response = await fetch(`${API_BASE}/upload`, {
           method: 'POST',
+          headers: { 'ngrok-skip-browser-warning': 'true' },
           body: formData,
         })
 
@@ -91,6 +100,7 @@ export default function DocumentsPage() {
     try {
       const response = await fetch(`${API_BASE}/documents/${documentId}`, {
         method: 'DELETE',
+        headers: { 'ngrok-skip-browser-warning': 'true' },
       })
       
       if (!response.ok) throw new Error('Failed to delete document')

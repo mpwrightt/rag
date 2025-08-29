@@ -55,7 +55,9 @@ export default function ChatPage() {
   useEffect(() => {
     const checkConnection = async () => {
       try {
-        const res = await fetch(`${API_BASE}/health`)
+        const res = await fetch(`${API_BASE}/health`, {
+          headers: { 'bypass-tunnel-reminder': 'true' }
+        })
         setIsConnected(res.ok)
       } catch (error) {
         setIsConnected(false)
@@ -75,7 +77,9 @@ export default function ChatPage() {
       
       // First check debug info
       try {
-        const debugRes = await fetch(`${API_BASE}/api/questions/debug`)
+        const debugRes = await fetch(`${API_BASE}/api/questions/debug`, {
+          headers: { 'bypass-tunnel-reminder': 'true' }
+        })
         if (debugRes.ok) {
           const debugData = await debugRes.json()
           console.log('Database debug info:', debugData)
@@ -85,7 +89,9 @@ export default function ChatPage() {
       }
       
       try {
-        const res = await fetch(`${API_BASE}/api/questions/generate?limit=6`)
+        const res = await fetch(`${API_BASE}/api/questions/generate?limit=6`, {
+          headers: { 'bypass-tunnel-reminder': 'true' }
+        })
         if (res.ok) {
           const data = await res.json()
           console.log('Questions API response:', data)
@@ -140,7 +146,10 @@ export default function ChatPage() {
     try {
       const response = await fetch(`${API_BASE}/chat/stream`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'bypass-tunnel-reminder': 'true'
+        },
         body: JSON.stringify({ message: input.trim(), session_id: sessionIdRef.current }),
       })
 

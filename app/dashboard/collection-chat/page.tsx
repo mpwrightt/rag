@@ -193,7 +193,9 @@ This is a mock response that demonstrates how the collection chat would work. In
   const loadQuestionsForCollection = async (collectionId: string) => {
     setIsLoadingQuestions(true)
     try {
-      const res = await fetch(`${API_BASE}/api/questions/generate?collection_id=${collectionId}&limit=3`)
+      const res = await fetch(`${API_BASE}/api/questions/generate?collection_id=${collectionId}&limit=3`, {
+        headers: { 'bypass-tunnel-reminder': 'true' }
+      })
       if (res.ok) {
         const data = await res.json()
         setSuggestedQuestions(data.questions || [])

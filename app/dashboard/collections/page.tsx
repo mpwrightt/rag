@@ -60,7 +60,10 @@ export default function CollectionsPage() {
 
         const res = await fetch(`${API_BASE}/api/collections?${params.toString()}`, {
           signal: controller.signal,
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 
+            'Content-Type': 'application/json',
+            'bypass-tunnel-reminder': 'true'
+          },
         })
         if (!res.ok) throw new Error(`Failed to fetch collections: ${res.status}`)
         const data = await res.json()
@@ -114,6 +117,7 @@ export default function CollectionsPage() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'bypass-tunnel-reminder': 'true',
           // Optionally pass user/workspace context if available
           // 'x-user-id': currentUserId,
           // 'x-workspace-id': currentWorkspaceId,
