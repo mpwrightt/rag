@@ -96,12 +96,14 @@ export default function HeroSection() {
                                 </div>
 
                                 <h1 className="mx-auto mt-8 max-w-4xl text-balance text-5xl font-bold tracking-tight sm:text-6xl md:text-7xl">
-                                    Transform Your{" "}
+                                    Transform Your
+                                    <br className="block" />
                                     <span className="inline-block text-transparent bg-gradient-to-r from-purple-400 via-pink-400 to-orange-400 bg-clip-text min-w-[280px] sm:min-w-[320px] md:min-w-[400px] text-center">
                                         <WordRotate words={ragWords} />
                                     </span>
                                     <br />
-                                    into AI-Powered{" "}
+                                    into AI-Powered
+                                    <br className="block" />
                                     <span className="inline-block text-transparent bg-gradient-to-r from-cyan-400 via-blue-400 to-indigo-400 bg-clip-text min-w-[300px] sm:min-w-[360px] md:min-w-[450px] text-center">
                                         <WordRotate words={aiWords} />
                                     </span>

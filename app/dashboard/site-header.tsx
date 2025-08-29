@@ -3,6 +3,9 @@
 import { usePathname } from "next/navigation"
 import { Separator } from "@/components/ui/separator"
 import { SidebarTrigger } from "@/components/ui/sidebar"
+import { UserButton } from "@clerk/nextjs"
+import { dark } from '@clerk/themes'
+import { useTheme } from "next-themes"
 
 function getPageTitle(pathname: string): string {
   // Handle exact matches first
@@ -19,6 +22,11 @@ function getPageTitle(pathname: string): string {
 export function SiteHeader() {
   const pathname = usePathname()
   const pageTitle = getPageTitle(pathname)
+  const { theme } = useTheme()
+
+  const appearance = {
+    baseTheme: theme === "dark" ? dark : undefined,
+  }
 
   return (
     <header className="flex h-(--header-height) shrink-0 items-center gap-2 border-b transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-(--header-height)">
@@ -29,6 +37,9 @@ export function SiteHeader() {
           className="mx-2 data-[orientation=vertical]:h-4"
         />
         <h1 className="text-base font-medium">{pageTitle}</h1>
+        <div className="ml-auto">
+          <UserButton appearance={appearance} />
+        </div>
       </div>
     </header>
   )
