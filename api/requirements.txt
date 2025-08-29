@@ -5,3 +5,4 @@ asyncpg
 pydantic-ai
 google-genai
 httpx>=0.27
+mangum>=0.17.0

@@ -134,23 +134,37 @@ async def lifespan(app: FastAPI):
     logger.info("Starting up agentic RAG API...")
     
     try:
-        # Initialize database connections
-        await initialize_database()
-        logger.info("Database initialized")
-        
-        # Initialize graph database
-        await initialize_graph()
-        logger.info("Graph database initialized")
-        
-        # Test connections
-        db_ok = await test_connection()
-        graph_ok = await test_graph_connection()
-        
+        # Initialize database connections (tolerate failure and continue in degraded mode)
+        try:
+            await initialize_database()
+            logger.info("Database initialized")
+        except Exception as e:
+            logger.exception("Database initialization failed: %s", e)
+
+        # Initialize graph database (tolerate failure)
+        try:
+            await initialize_graph()
+            logger.info("Graph database initialized")
+        except Exception as e:
+            logger.exception("Graph initialization failed: %s", e)
+
+        # Test connections (report status but don't block startup)
+        try:
+            db_ok = await test_connection()
+        except Exception as e:
+            logger.exception("Database test failed during startup: %s", e)
+            db_ok = False
+        try:
+            graph_ok = await test_graph_connection()
+        except Exception as e:
+            logger.exception("Graph test failed during startup: %s", e)
+            graph_ok = False
+
         if not db_ok:
             logger.error("Database connection failed")
         if not graph_ok:
             logger.error("Graph database connection failed")
-        
+
         # Initialize question generator here (lifespan startup)
         global question_generator
         # Accept multiple env var names for compatibility with different configs
@@ -178,8 +192,8 @@ async def lifespan(app: FastAPI):
         logger.info("Agentic RAG API startup complete")
         
     except Exception as e:
-        logger.error(f"Startup failed: {e}")
-        raise
+        # Never fail the app startup; continue in degraded mode so /health can report status
+        logger.exception("Startup encountered unexpected error; continuing in degraded mode: %s", e)
     
     yield
     

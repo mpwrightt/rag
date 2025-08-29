@@ -11,14 +11,15 @@ const nextConfig: NextConfig = {
   },
   // Handle API proxy for Python backend in development
   async rewrites() {
-    return [
-      {
-        source: '/api/rag/:path*',
-        destination: process.env.NODE_ENV === 'development'
-          ? 'http://localhost:8058/api/:path*'
-          : '/api/:path*',
-      },
-    ];
+    if (process.env.NODE_ENV === 'development') {
+      return [
+        {
+          source: '/api/rag/:path*',
+          destination: 'http://localhost:8058/api/:path*',
+        },
+      ];
+    }
+    return [];
   },
   // Environment variables that should be available at build time
   env: {

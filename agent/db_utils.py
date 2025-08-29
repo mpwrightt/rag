@@ -34,7 +34,10 @@ class DatabasePool:
         self.database_url = database_url or os.getenv("DATABASE_URL")
         if not self.database_url:
             raise ValueError("DATABASE_URL environment variable not set")
-        
+        # Whether to require SSL when connecting (for providers like Neon/Supabase)
+        # Accepts: 1/true/yes/on/require (case-insensitive)
+        self.ssl_required = os.getenv("POSTGRES_SSL", "").lower() in ("1", "true", "yes", "on", "require")
+
         self.pool: Optional[Pool] = None
     
     async def initialize(self):
@@ -46,9 +49,10 @@ class DatabasePool:
                 max_size=20,
                 max_inactive_connection_lifetime=300,
                 command_timeout=60,
-                statement_cache_size=0
+                statement_cache_size=0,
+                ssl=self.ssl_required
             )
-            logger.info("Database connection pool initialized")
+            logger.info(f"Database connection pool initialized (ssl={self.ssl_required})")
     
     async def close(self):
         """Close connection pool."""

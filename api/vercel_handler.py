@@ -9,6 +9,8 @@ import json
 import base64
 from pathlib import Path
 from typing import Dict, Any
+from http.server import BaseHTTPRequestHandler
+from urllib.parse import urlparse, parse_qs
 
 # Add the project root to Python path for Vercel
 project_root = Path(__file__).parent
@@ -114,21 +116,109 @@ async def _forward_to_asgi(event: Dict[str, Any]) -> Dict[str, Any]:
         }
 
 
-# Vercel expects this function to be named `handler`
-def handler(event, context):
-    """Vercel serverless function handler forwarding to FastAPI app."""
-    import asyncio
+class handler(BaseHTTPRequestHandler):
+    """Vercel Python function entrypoint.
 
-    loop = asyncio.new_event_loop()
-    try:
-        asyncio.set_event_loop(loop)
-        return loop.run_until_complete(_forward_to_asgi(event))
-    finally:
+    Uses BaseHTTPRequestHandler as required by Vercel's Python runtime and forwards
+    the request to the FastAPI ASGI app via httpx.ASGITransport.
+    """
+
+    def _build_event(self) -> Dict[str, Any]:
+        # Parse URL and query params
+        parsed = urlparse(self.path)
+        query_params = {k: v[0] if isinstance(v, list) and v else None for k, v in parse_qs(parsed.query).items()}
+
+        # Extract passthrough path if present
+        passthrough_path = query_params.pop("p", None)
+        path = _normalize_path(passthrough_path or parsed.path)
+
+        # Collect headers into a case-insensitive dict
+        headers = {k: v for k, v in self.headers.items()}
+
+        # Read body if present
+        body_bytes = b""
+        content_length = int(self.headers.get("content-length", 0) or 0)
+        if content_length > 0:
+            body_bytes = self.rfile.read(content_length)
+
+        # Build Lambda-style event for reuse with existing forwarding logic
+        event: Dict[str, Any] = {
+            "httpMethod": self.command,
+            "headers": headers,
+            "queryStringParameters": query_params,
+            "path": path,
+        }
+
+        if body_bytes:
+            # Base64 encode binary bodies
+            event["isBase64Encoded"] = True
+            event["body"] = base64.b64encode(body_bytes).decode()
+        else:
+            event["isBase64Encoded"] = False
+            event["body"] = None
+
+        return event
+
+    def _send_response(self, result: Dict[str, Any]):
+        status = int(result.get("statusCode", 200))
+        headers = result.get("headers", {}) or {}
+        body = result.get("body", "")
+        is_b64 = result.get("isBase64Encoded", False)
+
+        # Default CORS if not set
+        headers.setdefault("Access-Control-Allow-Origin", "*")
+        headers.setdefault("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+        headers.setdefault("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+        self.send_response(status)
+        for k, v in headers.items():
+            # Skip transfer-encoding which can cause issues
+            if k.lower() != "transfer-encoding":
+                self.send_header(k, v)
+        self.end_headers()
+
+        if body is not None:
+            if isinstance(body, str):
+                if is_b64:
+                    self.wfile.write(base64.b64decode(body))
+                else:
+                    self.wfile.write(body.encode())
+            elif isinstance(body, (bytes, bytearray)):
+                self.wfile.write(body)
+
+    def do_OPTIONS(self):  # Handle CORS preflight
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.end_headers()
+
+    def _handle(self):
+        import asyncio
+        event = self._build_event()
+        loop = asyncio.new_event_loop()
         try:
-            loop.run_until_complete(loop.shutdown_asyncgens())
-        except Exception:
-            pass
-        loop.close()
+            asyncio.set_event_loop(loop)
+            result = loop.run_until_complete(_forward_to_asgi(event))
+        finally:
+            try:
+                loop.run_until_complete(loop.shutdown_asyncgens())
+            except Exception:
+                pass
+            loop.close()
+        self._send_response(result)
+
+    def do_GET(self):
+        self._handle()
+
+    def do_POST(self):
+        self._handle()
+
+    def do_PUT(self):
+        self._handle()
+
+    def do_DELETE(self):
+        self._handle()
 
 
 # For local testing
