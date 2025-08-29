@@ -1,5 +1,7 @@
 {
   "version": 2,
+  "installCommand": "pnpm install --no-frozen-lockfile",
+  "buildCommand": "pnpm run build",
   "routes": [
     {
       "src": "/api/rag/(.*)",

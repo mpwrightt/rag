@@ -15,7 +15,8 @@
       "Bash(set APP_PORT=8059)",
       "Bash(npm run dev:*)",
       "WebFetch(domain:magicui.design)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git push:*)"
     ],
     "deny": [],
     "ask": []

@@ -3,9 +3,8 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   // Vercel-specific configurations
   output: 'standalone',
-  experimental: {
-    serverComponentsExternalPackages: [],
-  },
+  // Next.js 15: moved from experimental.serverComponentsExternalPackages
+  serverExternalPackages: [],
   images: {
     domains: ['localhost'],
     unoptimized: process.env.NODE_ENV === 'development',
