@@ -5,9 +5,9 @@ import React, { useEffect, useId, useState } from "react";
 
 interface AnimatedBeamProps {
   className?: string;
-  containerRef: React.RefObject<Element>;
-  fromRef: React.RefObject<Element>;
-  toRef: React.RefObject<Element>;
+  containerRef: { current: Element | null };
+  fromRef: { current: Element | null };
+  toRef: { current: Element | null };
   curvature?: number;
   reverse?: boolean;
   pathColor?: string;
