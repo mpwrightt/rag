@@ -11,7 +11,9 @@ import { Protect } from '@clerk/nextjs'
 import CustomClerkPricing from '@/components/custom-clerk-pricing'
 
 // Backend API base URL
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8058'
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_BASE ||
+  (process.env.NODE_ENV === 'production' ? '/api/rag' : 'http://localhost:8058')
 
 // Local message types
 type BaseMessage = { role: 'user' | 'assistant'; content: string; timestamp?: string; id?: string }
