@@ -30,9 +30,15 @@ export default function Home() {
   const cardRefs = [card1Ref, card2Ref, card3Ref, card4Ref];
 
   return (
-    <div className="relative">
-      {/* Global dot pattern background */}
-      <DotPattern className="fixed inset-0 z-[-60] opacity-20" />
+    <div className="relative min-h-screen">
+      {/* Global dot pattern background across entire page */}
+      <DotPattern 
+        className="fixed inset-0 z-[-10]" 
+        size={32}
+        dotSize={2}
+        color="rgba(255,255,255,0.3)"
+        opacity={0.6}
+      />
       <HeroSection />
       {/* Logo/tech marquee */}
       <section className="py-6">

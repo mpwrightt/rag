@@ -28,9 +28,6 @@ export default function FAQs() {
 
     return (
         <section className="relative scroll-py-8 py-8 md:scroll-py-16 md:py-16 overflow-hidden">
-            {/* Background Effects */}
-            <DotPattern className="absolute inset-0 z-0 opacity-20" />
-            <Meteors number={20} />
             
             <div className="relative z-10 mx-auto max-w-6xl px-6">
                 <div className="text-center mb-16 space-y-6">

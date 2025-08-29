@@ -5,7 +5,6 @@ import { Separator } from "@/components/ui/separator"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { UserButton } from "@clerk/nextjs"
 import { dark } from '@clerk/themes'
-import { useTheme } from "next-themes"
 
 function getPageTitle(pathname: string): string {
   // Handle exact matches first
@@ -22,10 +21,9 @@ function getPageTitle(pathname: string): string {
 export function SiteHeader() {
   const pathname = usePathname()
   const pageTitle = getPageTitle(pathname)
-  const { theme } = useTheme()
 
   const appearance = {
-    baseTheme: theme === "dark" ? dark : undefined,
+    baseTheme: dark,
   }
 
   return (

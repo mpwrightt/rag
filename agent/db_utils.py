@@ -43,6 +43,13 @@ class DatabasePool:
     async def initialize(self):
         """Create connection pool."""
         if not self.pool:
+            # Ensure we don't hang indefinitely on unreachable DBs
+            # Configure via POSTGRES_CONNECT_TIMEOUT (seconds), default 10s
+            try:
+                connect_timeout = float(os.getenv("POSTGRES_CONNECT_TIMEOUT", "10"))
+            except Exception:
+                connect_timeout = 10.0
+
             self.pool = await asyncpg.create_pool(
                 self.database_url,
                 min_size=5,
@@ -50,7 +57,8 @@ class DatabasePool:
                 max_inactive_connection_lifetime=300,
                 command_timeout=60,
                 statement_cache_size=0,
-                ssl=self.ssl_required
+                ssl=self.ssl_required,
+                timeout=connect_timeout
             )
             logger.info(f"Database connection pool initialized (ssl={self.ssl_required})")
     

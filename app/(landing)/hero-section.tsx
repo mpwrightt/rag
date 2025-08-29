@@ -21,9 +21,6 @@ export default function HeroSection() {
         <>
             <HeroHeader />
             <main className="relative min-h-screen overflow-hidden">
-                {/* Enhanced background layers */}
-                <BackgroundBeams className="fixed inset-0 z-[-100]" />
-                <Meteors number={15} />
                 
                 <section className="relative z-10">
                     <div className="py-12 md:py-20">

@@ -16,7 +16,10 @@
       "Bash(npm run dev:*)",
       "WebFetch(domain:magicui.design)",
       "Bash(git add:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(lt:*)",
+      "Bash(cargo install:*)",
+      "Bash(git commit:*)"
     ],
     "deny": [],
     "ask": []

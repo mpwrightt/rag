@@ -13,7 +13,8 @@ from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
 # Add the project root to Python path for Vercel
-project_root = Path(__file__).parent
+# (__file__).parent is the 'api/' dir; we need the repo root one level up
+project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
 # Import the FastAPI app from the main API module
@@ -25,6 +26,39 @@ try:
 except Exception:  # pragma: no cover
     httpx = None  # Will raise at runtime if actually used without dependency present
 
+# Reuse a single ASGI transport/client across invocations so FastAPI lifespan
+# (startup/shutdown) runs once per cold start instead of on every request.
+_ASGI_TRANSPORT = None
+_ASGI_CLIENT = None
+
+def _get_httpx_client():
+    """Get a process-wide AsyncClient bound to the ASGI app.
+
+    This avoids re-running app lifespan on each request and reduces cold start
+    overhead. Timeouts are configurable via HANDLER_CONNECT_TIMEOUT and
+    HANDLER_READ_TIMEOUT environment variables.
+    """
+    global _ASGI_TRANSPORT, _ASGI_CLIENT
+    if httpx is None:
+        raise RuntimeError("httpx is not installed in the runtime")
+    if _ASGI_TRANSPORT is None:
+        _ASGI_TRANSPORT = httpx.ASGITransport(app=app)
+    if _ASGI_CLIENT is None:
+        # Configure conservative timeouts to avoid indefinite hangs
+        try:
+            connect_t = float(os.getenv("HANDLER_CONNECT_TIMEOUT", "8"))
+        except Exception:
+            connect_t = 8.0
+        try:
+            read_t = float(os.getenv("HANDLER_READ_TIMEOUT", "55"))
+        except Exception:
+            read_t = 55.0
+        _ASGI_CLIENT = httpx.AsyncClient(
+            transport=_ASGI_TRANSPORT,
+            base_url="http://asgi.internal",
+            timeout=httpx.Timeout(read=read_t, connect=connect_t),
+        )
+    return _ASGI_CLIENT
 
 def _normalize_path(path: str) -> str:
     """Normalize the path to match FastAPI routes.
@@ -79,16 +113,16 @@ async def _forward_to_asgi(event: Dict[str, Any]) -> Dict[str, Any]:
             # Treat as text
             body = raw_body.encode()
 
-    # Use ASGITransport to invoke FastAPI app without starting a server
-    transport = httpx.ASGITransport(app=app, lifespan="on")
-    async with httpx.AsyncClient(transport=transport, base_url="http://asgi.internal") as client:
-        resp = await client.request(
-            method,
-            path,
-            headers=headers,
-            params=params,
-            content=body,
-        )
+    # Use a shared ASGITransport/AsyncClient to invoke FastAPI app without
+    # starting a server. This ensures lifespan runs once per cold start.
+    client = _get_httpx_client()
+    resp = await client.request(
+        method,
+        path,
+        headers=headers,
+        params=params,
+        content=body,
+    )
 
     # Build Vercel response
     vercel_headers = dict(resp.headers)
@@ -196,16 +230,9 @@ class handler(BaseHTTPRequestHandler):
     def _handle(self):
         import asyncio
         event = self._build_event()
-        loop = asyncio.new_event_loop()
-        try:
-            asyncio.set_event_loop(loop)
-            result = loop.run_until_complete(_forward_to_asgi(event))
-        finally:
-            try:
-                loop.run_until_complete(loop.shutdown_asyncgens())
-            except Exception:
-                pass
-            loop.close()
+        # Run the async forwarder in a fresh event loop per request
+        # asyncio.run handles loop creation and teardown safely
+        result = asyncio.run(_forward_to_asgi(event))
         self._send_response(result)
 
     def do_GET(self):

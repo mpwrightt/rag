@@ -11,7 +11,6 @@ import { Authenticated, Unauthenticated, AuthLoading } from "convex/react";
 import { SignInButton, SignUpButton, UserButton } from "@clerk/nextjs";
 
 import { dark } from '@clerk/themes'
-import { useTheme } from "next-themes"
 
 
 
@@ -25,10 +24,9 @@ const menuItems = [
 export const HeroHeader = () => {
     const [menuState, setMenuState] = React.useState(false)
     const [isScrolled, setIsScrolled] = React.useState(false)
-    const { theme } = useTheme()
 
     const appearance = {
-        baseTheme: theme === "dark" ? dark : undefined,
+        baseTheme: dark,
     }
 
     React.useEffect(() => {
