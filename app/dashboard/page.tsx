@@ -55,7 +55,7 @@ export default function DashboardPage() {
         // Fetch system health
         const healthResponse = await fetch(`${API_BASE}/health?_=${Date.now()}`, {
           headers: { 
-            'ngrok-skip-browser-warning': 'true',
+            'bypass-tunnel-reminder': 'true',
             'Cache-Control': 'no-cache',
             'Pragma': 'no-cache'
           }

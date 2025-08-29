@@ -74,7 +74,7 @@ export default function DocumentsPage() {
 
         const response = await fetch(`${API_BASE}/upload`, {
           method: 'POST',
-          headers: { 'ngrok-skip-browser-warning': 'true' },
+          headers: { 'bypass-tunnel-reminder': 'true' },
           body: formData,
         })
 
@@ -100,7 +100,7 @@ export default function DocumentsPage() {
     try {
       const response = await fetch(`${API_BASE}/documents/${documentId}`, {
         method: 'DELETE',
-        headers: { 'ngrok-skip-browser-warning': 'true' },
+        headers: { 'bypass-tunnel-reminder': 'true' },
       })
       
       if (!response.ok) throw new Error('Failed to delete document')
