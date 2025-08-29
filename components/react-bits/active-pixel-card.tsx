@@ -133,28 +133,28 @@ const VARIANTS = {
   },
   blue: {
     activeColor: "#e0f2fe",
-    gap: 20,
-    speed: 25,
+    gap: 12,
+    speed: 15,
     colors: "#e0f2fe,#7dd3fc,#0ea5e9",
     noFocus: false,
   },
   yellow: {
     activeColor: "#fef08a",
-    gap: 3,
-    speed: 20,
+    gap: 8,
+    speed: 12,
     colors: "#fef08a,#fde047,#eab308",
     noFocus: false,
   },
   pink: {
     activeColor: "#fecdd3",
-    gap: 6,
-    speed: 80,
+    gap: 10,
+    speed: 18,
     colors: "#fecdd3,#fda4af,#e11d48",
     noFocus: true,
   },
 };
 
-interface PixelCardProps {
+interface ActivePixelCardProps {
   variant?: "default" | "blue" | "yellow" | "pink";
   gap?: number;
   speed?: number;
@@ -172,7 +172,7 @@ interface VariantConfig {
   noFocus: boolean;
 }
 
-export default function PixelCard({
+export default function ActivePixelCard({
   variant = "default",
   gap,
   speed,
@@ -180,7 +180,7 @@ export default function PixelCard({
   noFocus,
   className = "",
   children,
-}: PixelCardProps): JSX.Element {
+}: ActivePixelCardProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pixelsRef = useRef<Pixel[]>([]);
@@ -223,7 +223,7 @@ export default function PixelCard({
         const dx = x - width / 2;
         const dy = y - height / 2;
         const distance = Math.sqrt(dx * dx + dy * dy);
-        const delay = reducedMotion ? 0 : distance;
+        const delay = reducedMotion ? 0 : distance * 0.5; // Reduced delay for faster appearance
         if (!ctx) return;
         pxs.push(
           new Pixel(
@@ -244,7 +244,8 @@ export default function PixelCard({
   const doAnimate = (fnName: keyof Pixel) => {
     animationRef.current = requestAnimationFrame(() => doAnimate(fnName));
     const timeNow = performance.now();
-    const timePassed = timeNow - timePreviousRef.current;
+    const timePreviousRef2 = timePreviousRef.current;
+    const timePassed = timeNow - timePreviousRef2;
     const timeInterval = 1000 / 60;
 
     if (timePassed < timeInterval) return;
@@ -264,7 +265,16 @@ export default function PixelCard({
         allIdle = false;
       }
     }
-    if (allIdle) {
+    
+    // Keep animation running continuously for active state
+    if (fnName === 'appear' && allIdle) {
+      // Restart the animation cycle
+      setTimeout(() => {
+        handleAnimation("appear");
+      }, 2000);
+    }
+    
+    if (allIdle && fnName !== 'appear') {
       cancelAnimationFrame(animationRef.current);
     }
   };
@@ -276,19 +286,14 @@ export default function PixelCard({
     animationRef.current = requestAnimationFrame(() => doAnimate(name));
   };
 
-  const onMouseEnter = () => handleAnimation("appear");
-  const onMouseLeave = () => handleAnimation("disappear");
-  const onFocus: React.FocusEventHandler<HTMLDivElement> = (e) => {
-    if (e.currentTarget.contains(e.relatedTarget)) return;
-    handleAnimation("appear");
-  };
-  const onBlur: React.FocusEventHandler<HTMLDivElement> = (e) => {
-    if (e.currentTarget.contains(e.relatedTarget)) return;
-    handleAnimation("disappear");
-  };
-
+  // Auto-start animation when component mounts
   useEffect(() => {
     initPixels();
+    // Start animation automatically after a short delay
+    const timer = setTimeout(() => {
+      handleAnimation("appear");
+    }, 500);
+
     const observer = new ResizeObserver(() => {
       initPixels();
     });
@@ -296,6 +301,7 @@ export default function PixelCard({
       observer.observe(containerRef.current);
     }
     return () => {
+      clearTimeout(timer);
       observer.disconnect();
       if (animationRef.current !== null) {
         cancelAnimationFrame(animationRef.current);
@@ -304,14 +310,15 @@ export default function PixelCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [finalGap, finalSpeed, finalColors, finalNoFocus]);
 
+  const onMouseEnter = () => handleAnimation("appear");
+  const onMouseLeave = () => handleAnimation("disappear");
+
   return (
     <div
       ref={containerRef}
-      className={` relative overflow-hidden grid place-items-center  border rounded-[25px] isolate transition-colors duration-200 ease-[cubic-bezier(0.5,1,0.89,1)] select-none ${className}`}
+      className={`relative overflow-hidden grid place-items-center border rounded-3xl isolate transition-colors duration-200 ease-[cubic-bezier(0.5,1,0.89,1)] select-none ${className}`}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
-      onFocus={finalNoFocus ? undefined : onFocus}
-      onBlur={finalNoFocus ? undefined : onBlur}
       tabIndex={finalNoFocus ? -1 : 0}
     >
       <canvas className="w-full h-full block" ref={canvasRef} />

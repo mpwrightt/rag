@@ -12,7 +12,10 @@
       "Bash(npm install:*)",
       "Bash(python:*)",
       "Bash(timeout:*)",
-      "Bash(set APP_PORT=8059)"
+      "Bash(set APP_PORT=8059)",
+      "Bash(npm run dev:*)",
+      "WebFetch(domain:magicui.design)",
+      "Bash(git add:*)"
     ],
     "deny": [],
     "ask": []

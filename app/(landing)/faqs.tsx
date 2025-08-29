@@ -1,6 +1,6 @@
 export default function FAQs() {
     return (
-        <section className="scroll-py-16 py-16 md:scroll-py-32 md:py-32">
+        <section className="scroll-py-8 py-8 md:scroll-py-16 md:py-16">
             <div className="mx-auto max-w-5xl px-6">
                 <div className="grid gap-y-12 px-2 lg:[grid-template-columns:1fr_auto]">
                     <div className="text-center lg:text-left">
@@ -8,35 +8,25 @@ export default function FAQs() {
                             Frequently <br className="hidden lg:block" /> Asked <br className="hidden lg:block" />
                             Questions
                         </h2>
-                        <p>Accusantium quisquam. Illo, omnis?</p>
+                        <p className="text-muted-foreground">Have questions? We have answers. Here are some of the most common questions we get.</p>
                     </div>
 
                     <div className="divide-y divide-dashed sm:mx-auto sm:max-w-lg lg:mx-0">
                         <div className="pb-6">
-                            <h3 className="font-medium">What is the refund policy?</h3>
-                            <p className="text-muted-foreground mt-4">We offer a 30-day money back guarantee. If you are not satisfied with our product, you can request a refund within 30 days of your purchase.</p>
-
-                            <ol className="list-outside list-decimal space-y-2 pl-4">
-                                <li className="text-muted-foreground mt-4">To request a refund, please contact our support team with your order number and reason for the refund.</li>
-                                <li className="text-muted-foreground mt-4">Refunds will be processed within 3-5 business days.</li>
-                                <li className="text-muted-foreground mt-4">Please note that refunds are only available for new customers and are limited to one per customer.</li>
-                            </ol>
+                            <h3 className="font-medium">What is Retrieval-Augmented Generation (RAG)?</h3>
+                            <p className="text-muted-foreground mt-4">Retrieval-Augmented Generation (RAG) is an AI technique that enhances large language models (LLMs) by providing them with relevant, up-to-date information from your private knowledge base before they generate a response. This makes the answers more accurate, timely, and specific to your data.</p>
                         </div>
                         <div className="py-6">
-                            <h3 className="font-medium">How do I cancel my subscription?</h3>
-                            <p className="text-muted-foreground mt-4">You can cancel your subscription at any time by logging into your account and clicking on the cancel button.</p>
+                            <h3 className="font-medium">What kind of documents can I use?</h3>
+                            <p className="text-muted-foreground mt-4">You can ingest a wide variety of file types, including PDFs, Word documents, text files, and Markdown files. You can also connect to external data sources like Google Drive to keep your knowledge base synchronized.</p>
                         </div>
                         <div className="py-6">
-                            <h3 className="font-medium">Can I upgrade my plan?</h3>
-                            <p className="text-muted-foreground my-4">Yes, you can upgrade your plan at any time by logging into your account and selecting the plan you want to upgrade to.</p>
-                            <ul className="list-outside list-disc space-y-2 pl-4">
-                                <li className="text-muted-foreground">You will be charged the difference in price between your current plan and the plan you are upgrading to.</li>
-                                <li className="text-muted-foreground">Your new plan will take effect immediately and you will be billed at the new rate on your next billing cycle.</li>
-                            </ul>
+                            <h3 className="font-medium">Is my data secure?</h3>
+                            <p className="text-muted-foreground my-4">Yes, security is our top priority. Your data is encrypted both in transit and at rest. We use industry-standard security protocols to ensure that your knowledge base is isolated and accessible only to your authorized users.</p>
                         </div>
                         <div className="py-6">
-                            <h3 className="font-medium">Do you offer phone support?</h3>
-                            <p className="text-muted-foreground mt-4">We do not offer phone support at this time. However, you can contact us via email or live chat for any questions or concerns you may have.</p>
+                            <h3 className="font-medium">How does the knowledge graph work?</h3>
+                            <p className="text-muted-foreground mt-4">As your documents are ingested, our system automatically identifies key entities (like people, products, and concepts) and the relationships between them. This creates a dynamic knowledge graph, allowing the AI to understand context and connections, leading to deeper insights.</p>
                         </div>
                     </div>
                 </div>
@@ -44,3 +34,4 @@ export default function FAQs() {
         </section>
     )
 }
+

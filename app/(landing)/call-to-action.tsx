@@ -4,7 +4,7 @@ import PixelCard from '@/components/react-bits/pixel-card'
 
 export default function CallToAction() {
     return (
-        <section className="py-16 px-6">
+        <section className="py-8 px-6">
             <div className=" mx-auto max-w-5xl rounded-3xl px-6 py-12 md:py-20 lg:py-32">
                 <PixelCard variant="blue" className="w-full max-w-5xl h-auto aspect-[16/9]">
                 <div className="absolute text-center">
