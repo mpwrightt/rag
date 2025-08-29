@@ -4,7 +4,6 @@ import HeroSection from "./hero-section";
 import FeaturesOne from "./features-one";
 import { BentoGrid, BentoGridItem } from "@/components/magicui/bento-grid";
 import Testimonials from "./testimonials";
-import CallToAction from "./call-to-action";
 import FAQs from "./faqs";
 import Footer from "./footer";
 import CustomClerkPricing from "@/components/custom-clerk-pricing";
@@ -16,6 +15,9 @@ import Panel from "@/components/magicui/panel";
 import ShineBorder from "@/components/magicui/shine-border";
 import DotPattern from "@/components/magicui/dot-pattern";
 import { AnimatedBeam } from "@/components/magicui/animated-beam";
+import { SpotlightCard } from "@/components/magicui/spotlight-card";
+import { OrbitingCircles } from "@/components/magicui/orbiting-circles";
+import NumberTicker from "@/components/magicui/number-ticker";
 import { useRef } from "react";
 
 export default function Home() {
@@ -73,78 +75,74 @@ export default function Home() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8 relative">
               {/* Card 1 - Contextual Understanding */}
               <div ref={card1Ref} className="relative overflow-hidden rounded-3xl">
-                <ShineBorder 
-                  color={["#A07CFE", "#FE8FB5", "#FFBE7B"]}
-                  duration={12}
-                  borderWidth={2}
-                  className="h-full rounded-3xl overflow-hidden"
+                <SpotlightCard
+                  className="h-64 p-8 transition-all duration-300 hover:scale-[1.02] group"
+                  radius={150}
+                  strength={0.3}
                 >
-                  <ActivePixelCard variant="blue" className="h-64 p-8 rounded-3xl">
-                    <div className="absolute inset-0 flex flex-col justify-center text-center p-8 z-20">
-                      <h3 className="text-2xl font-bold text-white mb-4">Contextual Understanding</h3>
-                      <p className="text-gray-300 text-lg leading-relaxed">
-                        Our RAG agent deeply understands your documents, providing highly relevant answers with perfect context awareness.
-                      </p>
-                    </div>
-                  </ActivePixelCard>
-                </ShineBorder>
+                  <div className="flex flex-col justify-center text-center h-full space-y-4">
+                    <h3 className="text-2xl font-bold text-white group-hover:text-purple-200 transition-colors">
+                      Contextual Understanding
+                    </h3>
+                    <p className="text-gray-300 text-lg leading-relaxed group-hover:text-gray-100 transition-colors">
+                      Our RAG agent deeply understands your documents, providing highly relevant answers with perfect context awareness.
+                    </p>
+                  </div>
+                </SpotlightCard>
               </div>
 
               {/* Card 2 - Seamless Integration */}
               <div ref={card2Ref} className="relative overflow-hidden rounded-3xl">
-                <ShineBorder 
-                  color={["#A07CFE", "#FE8FB5", "#FFBE7B"]}
-                  duration={10}
-                  borderWidth={2}
-                  className="h-full rounded-3xl overflow-hidden"
+                <SpotlightCard
+                  className="h-64 p-8 transition-all duration-300 hover:scale-[1.02] group"
+                  radius={150}
+                  strength={0.3}
                 >
-                  <ActivePixelCard variant="pink" className="h-64 p-8 rounded-3xl">
-                    <div className="absolute inset-0 flex flex-col justify-center text-center p-8 z-20">
-                      <h3 className="text-2xl font-bold text-white mb-4">Seamless Integration</h3>
-                      <p className="text-gray-300 text-lg leading-relaxed">
-                        Easily integrate with your existing data sources and workflows through our comprehensive API ecosystem.
-                      </p>
-                    </div>
-                  </ActivePixelCard>
-                </ShineBorder>
+                  <div className="flex flex-col justify-center text-center h-full space-y-4">
+                    <h3 className="text-2xl font-bold text-white group-hover:text-purple-200 transition-colors">
+                      Seamless Integration
+                    </h3>
+                    <p className="text-gray-300 text-lg leading-relaxed group-hover:text-gray-100 transition-colors">
+                      Easily integrate with your existing data sources and workflows through our comprehensive API ecosystem.
+                    </p>
+                  </div>
+                </SpotlightCard>
               </div>
 
               {/* Card 3 - Scalable Knowledge Base */}
               <div ref={card3Ref} className="relative overflow-hidden rounded-3xl">
-                <ShineBorder 
-                  color={["#A07CFE", "#FE8FB5", "#FFBE7B"]}
-                  duration={8}
-                  borderWidth={2}
-                  className="h-full rounded-3xl overflow-hidden"
+                <SpotlightCard
+                  className="h-64 p-8 transition-all duration-300 hover:scale-[1.02] group"
+                  radius={150}
+                  strength={0.3}
                 >
-                  <ActivePixelCard variant="yellow" className="h-64 p-8 rounded-3xl">
-                    <div className="absolute inset-0 flex flex-col justify-center text-center p-8 z-20">
-                      <h3 className="text-2xl font-bold text-white mb-4">Scalable Knowledge Base</h3>
-                      <p className="text-gray-300 text-lg leading-relaxed">
-                        Grow your knowledge base without compromising on performance or accuracy, handling millions of documents.
-                      </p>
-                    </div>
-                  </ActivePixelCard>
-                </ShineBorder>
+                  <div className="flex flex-col justify-center text-center h-full space-y-4">
+                    <h3 className="text-2xl font-bold text-white group-hover:text-purple-200 transition-colors">
+                      Scalable Knowledge Base
+                    </h3>
+                    <p className="text-gray-300 text-lg leading-relaxed group-hover:text-gray-100 transition-colors">
+                      Grow your knowledge base without compromising on performance or accuracy, handling millions of documents.
+                    </p>
+                  </div>
+                </SpotlightCard>
               </div>
 
               {/* Card 4 - Real-time Insights */}
               <div ref={card4Ref} className="relative overflow-hidden rounded-3xl">
-                <ShineBorder 
-                  color={["#A07CFE", "#FE8FB5", "#FFBE7B"]}
-                  duration={14}
-                  borderWidth={2}
-                  className="h-full rounded-3xl overflow-hidden"
+                <SpotlightCard
+                  className="h-64 p-8 transition-all duration-300 hover:scale-[1.02] group"
+                  radius={150}
+                  strength={0.3}
                 >
-                  <ActivePixelCard variant="default" className="h-64 p-8 rounded-3xl">
-                    <div className="absolute inset-0 flex flex-col justify-center text-center p-8 z-20">
-                      <h3 className="text-2xl font-bold text-white mb-4">Real-time Insights</h3>
-                      <p className="text-gray-300 text-lg leading-relaxed">
-                        Get instant access to critical information from your documents with lightning-fast query processing.
-                      </p>
-                    </div>
-                  </ActivePixelCard>
-                </ShineBorder>
+                  <div className="flex flex-col justify-center text-center h-full space-y-4">
+                    <h3 className="text-2xl font-bold text-white group-hover:text-purple-200 transition-colors">
+                      Real-time Insights
+                    </h3>
+                    <p className="text-gray-300 text-lg leading-relaxed group-hover:text-gray-100 transition-colors">
+                      Get instant access to critical information from your documents with lightning-fast query processing.
+                    </p>
+                  </div>
+                </SpotlightCard>
               </div>
 
               {/* Animated Beams connecting the cards */}
@@ -182,14 +180,63 @@ export default function Home() {
           </div>
         </div>
       </section>
-      {/* Live feed style animated list */}
-      <section className="bg-muted/40 py-8">
+      {/* Real-time Platform Metrics */}
+      <section className="relative py-16 overflow-hidden">
+        <div className="absolute inset-0 bg-gradient-to-b from-purple-900/20 via-transparent to-transparent" />
         <div className="mx-auto max-w-7xl px-6">
-          <div className="mb-8 text-center">
-            <h3 className="text-2xl font-semibold">What’s happening now</h3>
-            <p className="text-muted-foreground">Recent activity across projects</p>
+          <div className="text-center mb-16">
+            <h3 className="text-4xl font-bold text-white mb-4">Platform in Action</h3>
+            <p className="text-xl text-gray-300">Real-time metrics from our global RAG network</p>
           </div>
-          <AnimatedListCustom />
+          
+          {/* Clean Metrics Grid */}
+          <div className="mb-16">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-12">
+              {[
+                { label: 'Queries/min', value: 2847, color: 'text-cyan-400' },
+                { label: 'Active Users', value: 156, color: 'text-emerald-400' },
+                { label: 'Avg Response (ms)', value: 8.1, color: 'text-pink-400' },
+                { label: 'Documents', value: 47832, color: 'text-yellow-400' }
+              ].map((metric, index) => (
+                <SpotlightCard key={index} className="p-6 text-center h-32 flex flex-col justify-center">
+                  <NumberTicker 
+                    value={metric.value} 
+                    className={`text-3xl font-bold ${metric.color} mb-2`}
+                    decimalPlaces={metric.value === 8.1 ? 1 : 0}
+                  />
+                  <div className="text-gray-400 text-sm">{metric.label}</div>
+                </SpotlightCard>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {[
+                { label: 'Uptime', value: '99.8%', color: 'text-orange-400' },
+                { label: 'Latency', value: '24ms', color: 'text-blue-400' },
+                { label: 'Scale', value: 'Unlimited', color: 'text-green-400' }
+              ].map((metric, index) => (
+                <SpotlightCard key={index} className="p-8 text-center">
+                  <div className={`text-4xl font-bold ${metric.color} mb-3`}>{metric.value}</div>
+                  <div className="text-gray-400 text-base">{metric.label}</div>
+                </SpotlightCard>
+              ))}
+            </div>
+          </div>
+
+          {/* Bottom Stats Bar */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+            {[
+              { label: 'Data Centers', value: '12', color: 'text-purple-400' },
+              { label: 'Languages', value: '47', color: 'text-cyan-400' },
+              { label: 'Integrations', value: '200+', color: 'text-pink-400' },
+              { label: 'Enterprise Clients', value: '50+', color: 'text-emerald-400' }
+            ].map((stat, index) => (
+              <SpotlightCard key={index} className="p-6 text-center">
+                <div className={`text-2xl font-bold ${stat.color} mb-2`}>{stat.value}</div>
+                <div className="text-gray-400 text-sm">{stat.label}</div>
+              </SpotlightCard>
+            ))}
+          </div>
         </div>
       </section>
       <section className="bg-muted/50 py-8 md:py-16">
@@ -202,7 +249,6 @@ export default function Home() {
         </div>
       </section>
       <Testimonials />
-      <CallToAction />
       <FAQs />
       <Footer />
     </div>

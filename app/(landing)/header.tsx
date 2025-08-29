@@ -51,7 +51,7 @@ export const HeroHeader = () => {
                                 aria-label="home"
                                 className="flex items-center space-x-2">
                                 <ChatMaxingIconColoured />
-                                <span className="text-xl font-medium">Starter.diy</span>
+                                <span className="text-xl font-medium">DataDive</span>
                                 <Badge variant="outline" className="text-muted-foreground  text-xs">Demo</Badge>
                             </Link>
 

@@ -32,7 +32,7 @@ export default function HeroSection() {
                             {/* Hero Content with Orbiting Elements */}
                             <div className="text-center relative">
                                 {/* Floating stats cards */}
-                                <div className="absolute -top-10 -left-20 hidden lg:block">
+                                <div className="absolute top-5 -left-24 hidden lg:block">
                                     <MagicCard className="p-4 w-32 h-20">
                                         <div className="text-center">
                                             <NumberTicker value={99.9} decimalPlaces={1} className="text-xl font-bold text-purple-400" />
@@ -41,7 +41,7 @@ export default function HeroSection() {
                                     </MagicCard>
                                 </div>
                                 
-                                <div className="absolute -top-5 -right-24 hidden lg:block">
+                                <div className="absolute top-5 -right-24 hidden lg:block">
                                     <MagicCard className="p-4 w-36 h-20">
                                         <div className="text-center">
                                             <NumberTicker value={1200} className="text-xl font-bold text-cyan-400" />

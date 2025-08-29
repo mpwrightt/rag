@@ -161,13 +161,22 @@ export default function WallOfLoveSection() {
 
                     {/* Trust Indicators */}
                     <div className="mt-16 text-center">
-                        <p className="text-gray-400 mb-8">Trusted by companies of all sizes</p>
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-8 items-center opacity-60">
-                            {['Innovatech', 'BioGenetics', 'QuantumLeap', 'FusionDesk'].map((company) => (
-                                <div key={company} className="text-gray-500 font-semibold text-lg">
-                                    {company}
+                        <p className="text-gray-300 mb-8 text-lg font-medium">Trusted by companies of all sizes</p>
+                        <div className="relative">
+                            <MagicCard className="p-8 bg-gradient-to-r from-gray-900/50 to-gray-800/50 border-gray-700/50">
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-8 items-center">
+                                    {[
+                                        { name: 'Innovatech', color: 'text-purple-300' },
+                                        { name: 'BioGenetics', color: 'text-emerald-300' },
+                                        { name: 'QuantumLeap', color: 'text-cyan-300' },
+                                        { name: 'FusionDesk', color: 'text-pink-300' }
+                                    ].map((company) => (
+                                        <div key={company.name} className={`${company.color} font-bold text-xl hover:scale-105 transition-transform duration-200 cursor-default`}>
+                                            {company.name}
+                                        </div>
+                                    ))}
                                 </div>
-                            ))}
+                            </MagicCard>
                         </div>
                     </div>
                 </div>
