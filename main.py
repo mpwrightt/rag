@@ -6,15 +6,25 @@ with configuration suitable for Replit deployment.
 """
 
 import os
+import sys
 import uvicorn
 from pathlib import Path
 from dotenv import load_dotenv
 
+# Add current directory to Python path
+current_dir = Path(__file__).parent
+sys.path.insert(0, str(current_dir))
+
 # Load environment variables
 load_dotenv()
 
-# Import the FastAPI app from agent module
-from agent.api import app
+# Import the FastAPI app from agent module with error handling
+try:
+    from agent.api import app
+    print("✅ Successfully imported FastAPI app")
+except ImportError as e:
+    print(f"❌ Failed to import FastAPI app: {e}")
+    sys.exit(1)
 
 if __name__ == "__main__":
     # Get configuration from environment variables with Replit-friendly defaults
