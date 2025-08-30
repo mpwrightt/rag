@@ -1,0 +1,73 @@
+modules = ["python-3.11", "nodejs-20"]
+
+[nix]
+channel = "stable-24_05"
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Start Backend Server"
+
+[[workflows.workflow.tasks]]
+task = "workflow.preview"
+args = "8000"
+
+[[workflows.workflow]]
+name = "Start Backend Server"
+author = "agent"
+
+[workflows.workflow.metadata]
+agentRequireRestartOnSave = false
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python main.py"
+waitForPort = 8000
+
+[deployment]
+run = ["python", "main.py"]
+deploymentTarget = "cloudrun"
+ignorePorts = false
+
+[[ports]]
+localPort = 8000
+externalPort = 80
+exposeLocalhost = true
+
+[env]
+PYTHONPATH = "/home/runner/${REPL_SLUG}"
+APP_ENV = "production"
+HOST = "0.0.0.0"
+PORT = "8000"
+LOG_LEVEL = "info"
+
+[gitHubImport]
+requiredFiles = [".replit", "replit.nix", "requirements.txt", "main.py"]
+
+[languages]
+
+[languages.python3]
+pattern = "**/*.py"
+
+[languages.python3.languageServer]
+start = "pylsp"
+
+# Debugger configuration for Python
+[debugger]
+support = true
+
+[debugger.interactive]
+transport = "localhost:0"
+startCommand = ["dap-python", "main.py"]
+
+[debugger.interactive.integratedAdapter]
+dapTcpAddress = "localhost:0"
+dapTcpPort = 5678
+transport = "tcp"
