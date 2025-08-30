@@ -2,13 +2,6 @@
   "version": 2,
   "buildCommand": "npm run build && npx convex deploy --cmd-url-env-var-name CONVEX_SITE_URL",
   "installCommand": "npm install",
-  "env": {
-    "CONVEX_DEPLOYMENT": "@vercel-env",
-    "NEXT_PUBLIC_CONVEX_URL": "@vercel-env",
-    "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY": "@vercel-env",
-    "CLERK_SECRET_KEY": "@vercel-env",
-    "CLERK_WEBHOOK_SECRET": "@vercel-env"
-  },
   "functions": {
     "app/api/clerk-users-webhook/route.ts": {
       "maxDuration": 10
