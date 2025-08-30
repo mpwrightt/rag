@@ -7,7 +7,7 @@
       "maxDuration": 10
     },
     "api/vercel_handler.py": {
-      "runtime": "python3.12"
+      "maxDuration": 10
     }
   },
   "routes": [
