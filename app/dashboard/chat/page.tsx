@@ -41,7 +41,7 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<ExtendedChatMessage[]>([])
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
-  const [isConnected, setIsConnected] = useState<boolean | null>(null)
+  const [isConnected, setIsConnected] = useState<boolean | null>(true) // Start optimistic
   const [isTyping, setIsTyping] = useState(false)
   const [streamingText, setStreamingText] = useState('')
   const [suggestedQuestions, setSuggestedQuestions] = useState<string[]>([])
@@ -53,16 +53,30 @@ export default function ChatPage() {
   useEffect(() => {
     const checkConnection = async () => {
       try {
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), 10000) // 10 second timeout
+        
         const res = await fetch(`${API_BASE}/health`, {
-          headers: { 'bypass-tunnel-reminder': 'true' }
+          headers: { 'bypass-tunnel-reminder': 'true' },
+          signal: controller.signal
         })
-        setIsConnected(res.ok)
+        
+        clearTimeout(timeoutId)
+        
+        if (res.ok) {
+          setIsConnected(true)
+        } else {
+          console.warn('Health check failed, but continuing optimistically')
+          // Don't set as disconnected immediately, let chat attempts determine this
+        }
       } catch (error) {
-        setIsConnected(false)
-        console.error('Backend connection failed:', error)
+        console.warn('Health check failed, but continuing optimistically:', error)
+        // Don't set as disconnected immediately, let chat attempts determine this
       }
     }
-    checkConnection()
+    
+    // Delay the initial check to give the app time to load
+    setTimeout(checkConnection, 2000)
   }, [])
 
   // Load dynamic questions on component mount
@@ -262,11 +276,28 @@ export default function ChatPage() {
         }
       }
     } catch (error) {
-      console.error('Error:', error)
-      setMessages(prev => [...prev, { 
-        role: 'assistant', 
-        content: 'Sorry, I encountered an error. Please try again.' 
-      }])
+      console.error('Chat error:', error)
+      
+      // Check if this is a network/connection error
+      const isNetworkError = error instanceof Error && (
+        error.name === 'TypeError' || 
+        error.message.includes('fetch') || 
+        error.message.includes('Network') ||
+        error.message.includes('Failed to get response')
+      )
+      
+      if (isNetworkError) {
+        setIsConnected(false)
+        setMessages(prev => [...prev, { 
+          role: 'assistant', 
+          content: 'Unable to connect to the backend. Please check your connection and try again.' 
+        }])
+      } else {
+        setMessages(prev => [...prev, { 
+          role: 'assistant', 
+          content: 'Sorry, I encountered an error. Please try again.' 
+        }])
+      }
     } finally {
       setIsLoading(false)
       setIsTyping(false)
@@ -313,20 +344,31 @@ export default function ChatPage() {
       condition={(has) => has({ plan: 'pro' })}
       fallback={<UpgradeCard />}
     >
-      {isConnected === false ? (
+      {isConnected === false && messages.length === 0 ? (
         <div className="flex items-center justify-center h-full">
           <Card className="p-8 max-w-md text-center">
             <CardContent className="space-y-4">
               <div className="w-16 h-16 bg-destructive/10 rounded-full flex items-center justify-center mx-auto">
                 <Database className="w-8 h-8 text-destructive" />
               </div>
-              <h3 className="text-lg font-semibold">Backend Connection Failed</h3>
+              <h3 className="text-lg font-semibold">Connection Issue</h3>
               <p className="text-muted-foreground">
-                Unable to connect to the RAG API. Please check your connection and try again.
+                Unable to reach the backend. This may be temporary - you can try sending a message or refresh.
               </p>
-              <Button onClick={() => window.location.reload()} variant="outline">
-                Retry Connection
-              </Button>
+              <div className="flex gap-2 justify-center">
+                <Button 
+                  onClick={() => {
+                    setIsConnected(true)
+                    setMessages([])
+                  }} 
+                  variant="outline"
+                >
+                  Try Again
+                </Button>
+                <Button onClick={() => window.location.reload()} variant="outline">
+                  Refresh Page
+                </Button>
+              </div>
             </CardContent>
           </Card>
         </div>
