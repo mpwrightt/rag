@@ -1,7 +1,7 @@
 {
   "version": 2,
   "buildCommand": "npm run build && npx convex deploy --cmd-url-env-var-name CONVEX_SITE_URL",
-  "installCommand": "npm install",
+  "installCommand": "npm ci --no-cache --build-from-source",
   "functions": {
     "app/api/clerk-users-webhook/route.ts": {
       "maxDuration": 10
