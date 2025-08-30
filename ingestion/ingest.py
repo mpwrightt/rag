@@ -427,7 +427,7 @@ async def main():
     config = IngestionConfig(
         chunk_size=args.chunk_size,
         chunk_overlap=args.chunk_overlap,
-        use_semantic_chunking=not args.no_semantic,
+        use_semantic_splitting=not args.no_semantic,
         extract_entities=not args.no_entities,
         skip_graph_building=args.fast
     )
