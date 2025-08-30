@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "vercel-build": "next build && npx convex deploy --cmd-url-env-var-name CONVEX_SITE_URL",
+    "vercel-build": "next build",
     "postbuild": "echo 'Build completed successfully'",
     "postinstall": "npm install --no-save lightningcss@1.21.0 || true"
   },
