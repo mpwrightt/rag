@@ -1,0 +1,61 @@
+# Python backend files (deployed to Replit)
+agent/
+api/
+ingestion/
+main.py
+start_api.py
+requirements.txt
+__pycache__/
+*.py
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Replit-specific files
+.replit
+replit.nix
+REPLIT_DEPLOYMENT.md
+
+# Environment and config files not needed for frontend
+.env
+.env.local
+.env.example
+
+# Data and document files
+data/
+uploads/
+documents/
+*.pdf
+*.docx
+*.txt
+*.csv
+*.json
+!package.json
+!package-lock.json
+!tsconfig.json
+
+# Development files
+.vscode/
+.idea/
+*.log
+README.md
+*.md
+
+# Large media files
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.zip
+*.tar
+*.gz
+
+# Keep only essential frontend files
+!app/
+!components/
+!convex/
+!public/
+!next.config.ts
+!tailwind.config.ts
+!middleware.ts

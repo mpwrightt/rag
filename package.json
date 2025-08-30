@@ -56,7 +56,6 @@
   "devDependencies": {
     "@magicuidesign/mcp": "^1.0.6",
     "@modelcontextprotocol/sdk": "^1.10.0",
-    "@next/bundle-analyzer": "^15.5.2",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",

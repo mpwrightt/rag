@@ -22,7 +22,9 @@
       "Bash(git commit:*)",
       "Bash(npm run build:*)",
       "Bash(ANALYZE=true npm run build)",
-      "Bash(npm uninstall:*)"
+      "Bash(npm uninstall:*)",
+      "Bash(find:*)",
+      "WebFetch(domain:github.com)"
     ],
     "deny": [],
     "ask": []
