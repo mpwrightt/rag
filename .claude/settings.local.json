@@ -19,7 +19,10 @@
       "Bash(git push:*)",
       "Bash(lt:*)",
       "Bash(cargo install:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(npm run build:*)",
+      "Bash(ANALYZE=true npm run build)",
+      "Bash(npm uninstall:*)"
     ],
     "deny": [],
     "ask": []

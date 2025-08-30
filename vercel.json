@@ -1,40 +1,11 @@
 {
   "version": 2,
   "buildCommand": "npm run build && npx convex deploy --cmd-url-env-var-name CONVEX_SITE_URL",
-  "installCommand": "npm install --build-from-source",
+  "installCommand": "npm install",
   "functions": {
     "app/api/clerk-users-webhook/route.ts": {
       "maxDuration": 10
-    },
-    "api/vercel_handler.py": {
-      "maxDuration": 10
     }
   },
-  "routes": [
-    {
-      "src": "/api/(.*)",
-      "dest": "/api/vercel_handler.py"
-    },
-    {
-      "src": "/documents(.*)",
-      "dest": "/api/vercel_handler.py"
-    },
-    {
-      "src": "/health(.*)",
-      "dest": "/api/vercel_handler.py"
-    },
-    {
-      "src": "/upload(.*)",
-      "dest": "/api/vercel_handler.py"
-    },
-    {
-      "src": "/chat/(.*)",
-      "dest": "/api/vercel_handler.py"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/$1"
-    }
-  ],
   "regions": ["iad1"]
 }
