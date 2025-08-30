@@ -37,7 +37,7 @@ export default function FooterSection() {
                     aria-label="go home"
                     className="flex mx-auto gap-2 items-center size-fit">
                     <ChatMaxingIconColoured />
-                    <span className="text-xl font-medium">DataDive</span>
+                    <span className="text-xl font-medium">DataDiver</span>
                 </Link>
 
                 <div className="my-8 flex flex-wrap justify-center gap-6 text-sm">
@@ -159,7 +159,7 @@ export default function FooterSection() {
                         </svg>
                     </Link>
                 </div>
-                <span className="text-muted-foreground block text-center text-sm"> © {new Date().getFullYear()} DataDive, All rights reserved</span>
+                <span className="text-muted-foreground block text-center text-sm"> © {new Date().getFullYear()} DataDiver, All rights reserved</span>
             </div>
         </footer>
     )
