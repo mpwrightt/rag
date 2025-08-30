@@ -6,7 +6,8 @@ import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Upload, File, Trash2, Download, RefreshCw, AlertCircle, Search, Filter, Grid, List, Cloud, HardDrive, Folder } from 'lucide-react'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Upload, File, Trash2, Download, RefreshCw, AlertCircle, Search, Filter, Grid, List, Cloud, HardDrive, Folder, ChevronLeft, ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 // Backend API base URL  
@@ -31,12 +32,16 @@ export default function DocumentsPage() {
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid')
+  const [currentPage, setCurrentPage] = useState(1)
+  const [perPage, setPerPage] = useState(20)
+  const [totalDocuments, setTotalDocuments] = useState(0)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const loadDocuments = async () => {
+  const loadDocuments = async (page: number = currentPage, limit: number = perPage) => {
     setIsLoading(true)
     try {
-      const response = await fetch(`${API_BASE}/documents?_=${Date.now()}`, {
+      const offset = (page - 1) * limit
+      const response = await fetch(`${API_BASE}/documents?limit=${limit}&offset=${offset}&_=${Date.now()}`, {
         headers: { 
           'bypass-tunnel-reminder': 'true',
           'Cache-Control': 'no-cache',
@@ -49,9 +54,11 @@ export default function DocumentsPage() {
       
       const data = await response.json()
       setDocuments(data.documents || [])
+      setTotalDocuments(data.total || data.documents?.length || 0)
     } catch (error) {
       console.error('Failed to load documents:', error)
       setDocuments([])
+      setTotalDocuments(0)
     } finally {
       setIsLoading(false)
     }
@@ -60,6 +67,10 @@ export default function DocumentsPage() {
   useEffect(() => {
     loadDocuments()
   }, [])
+
+  useEffect(() => {
+    loadDocuments(currentPage, perPage)
+  }, [currentPage, perPage])
 
   const handleFileUpload = async (files: FileList | null) => {
     if (!files || files.length === 0) return
@@ -84,7 +95,7 @@ export default function DocumentsPage() {
         }
       }
 
-      await loadDocuments()
+      await loadDocuments(currentPage, perPage)
     } catch (error) {
       console.error('Upload error:', error)
       setUploadError(error instanceof Error ? error.message : 'Upload failed')
@@ -105,7 +116,7 @@ export default function DocumentsPage() {
       
       if (!response.ok) throw new Error('Failed to delete document')
       
-      await loadDocuments()
+      await loadDocuments(currentPage, perPage)
     } catch (error) {
       console.error('Delete error:', error)
     }
@@ -185,6 +196,19 @@ export default function DocumentsPage() {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
   }
 
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page)
+  }
+
+  const handlePerPageChange = (newPerPage: number) => {
+    setPerPage(newPerPage)
+    setCurrentPage(1) // Reset to first page when changing per-page
+  }
+
+  const totalPages = Math.ceil(totalDocuments / perPage)
+  const startIndex = (currentPage - 1) * perPage + 1
+  const endIndex = Math.min(currentPage * perPage, totalDocuments)
+
   const filteredDocuments = documents.filter(doc =>
     (doc.source?.toLowerCase()?.includes(searchQuery.toLowerCase()) ?? false) ||
     (doc.title?.toLowerCase()?.includes(searchQuery.toLowerCase()) ?? false)
@@ -203,9 +227,9 @@ export default function DocumentsPage() {
           </div>
           <div className="flex items-center gap-3">
             <Badge variant="secondary" className="px-3 py-1">
-              {documents.length} documents
+              {totalDocuments} documents
             </Badge>
-            <Button onClick={loadDocuments} variant="outline" size="sm">
+            <Button onClick={() => loadDocuments(currentPage, perPage)} variant="outline" size="sm">
               <RefreshCw className="w-4 h-4 mr-2" />
               Refresh
             </Button>
@@ -224,6 +248,17 @@ export default function DocumentsPage() {
             />
           </div>
           <div className="flex items-center gap-2">
+            <Select value={perPage.toString()} onValueChange={(value) => handlePerPageChange(parseInt(value))}>
+              <SelectTrigger className="w-20">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="10">10</SelectItem>
+                <SelectItem value="20">20</SelectItem>
+                <SelectItem value="50">50</SelectItem>
+                <SelectItem value="100">100</SelectItem>
+              </SelectContent>
+            </Select>
             <Button
               variant={viewMode === 'grid' ? 'default' : 'outline'}
               size="sm"
@@ -436,6 +471,66 @@ export default function DocumentsPage() {
                   </CardContent>
                 </Card>
               ))}
+            </div>
+          )}
+
+          {/* Pagination */}
+          {totalDocuments > 0 && (
+            <div className="mt-6 flex items-center justify-between">
+              <div className="text-sm text-muted-foreground">
+                Showing {startIndex} to {endIndex} of {totalDocuments} documents
+              </div>
+              
+              {totalPages > 1 && (
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handlePageChange(currentPage - 1)}
+                    disabled={currentPage === 1}
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                    Previous
+                  </Button>
+                  
+                  <div className="flex items-center gap-1">
+                    {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                      let pageNum;
+                      if (totalPages <= 5) {
+                        pageNum = i + 1;
+                      } else if (currentPage <= 3) {
+                        pageNum = i + 1;
+                      } else if (currentPage >= totalPages - 2) {
+                        pageNum = totalPages - 4 + i;
+                      } else {
+                        pageNum = currentPage - 2 + i;
+                      }
+                      
+                      return (
+                        <Button
+                          key={pageNum}
+                          variant={currentPage === pageNum ? "default" : "outline"}
+                          size="sm"
+                          onClick={() => handlePageChange(pageNum)}
+                          className="w-8 h-8 p-0"
+                        >
+                          {pageNum}
+                        </Button>
+                      );
+                    })}
+                  </div>
+                  
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handlePageChange(currentPage + 1)}
+                    disabled={currentPage === totalPages}
+                  >
+                    Next
+                    <ChevronRight className="w-4 h-4" />
+                  </Button>
+                </div>
+              )}
             </div>
           )}
         </div>

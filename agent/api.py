@@ -969,9 +969,15 @@ async def list_documents_endpoint(
         input_data = DocumentListInput(limit=limit, offset=offset)
         documents = await list_documents_tool(input_data)
         
+        # Get total count from database
+        from .db_utils import db_pool
+        async with db_pool.acquire() as conn:
+            total_count_result = await conn.fetchrow("SELECT COUNT(*) as total FROM documents")
+            total_count = total_count_result["total"] if total_count_result else 0
+        
         return {
             "documents": documents,
-            "total": len(documents),
+            "total": total_count,
             "limit": limit,
             "offset": offset
         }
