@@ -11,9 +11,7 @@ import { Protect } from '@clerk/nextjs'
 import CustomClerkPricing from '@/components/custom-clerk-pricing'
 
 // Backend API base URL
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE ||
-  (process.env.NODE_ENV === 'production' ? '/api/rag' : 'http://localhost:8058')
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8058'
 
 // Local message types
 type BaseMessage = { role: 'user' | 'assistant'; content: string; timestamp?: string; id?: string }
@@ -324,7 +322,7 @@ export default function ChatPage() {
               </div>
               <h3 className="text-lg font-semibold">Backend Connection Failed</h3>
               <p className="text-muted-foreground">
-                Unable to connect to the RAG API. Please make sure the Python backend is running on port 8058.
+                Unable to connect to the RAG API. Please check your connection and try again.
               </p>
               <Button onClick={() => window.location.reload()} variant="outline">
                 Retry Connection
