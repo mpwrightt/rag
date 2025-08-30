@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Upload, File, Trash2, Download, RefreshCw, AlertCircle, Search, Filter, Grid, List } from 'lucide-react'
+import { Upload, File, Trash2, Download, RefreshCw, AlertCircle, Search, Filter, Grid, List, Cloud, HardDrive, Folder } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 // Backend API base URL  
@@ -111,6 +111,72 @@ export default function DocumentsPage() {
     }
   }
 
+  const handleGoogleDriveIntegration = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/integrations/google-drive/auth`, {
+        method: 'GET',
+        headers: { 
+          'bypass-tunnel-reminder': 'true',
+          'Accept': 'application/json'
+        }
+      })
+      
+      if (!response.ok) throw new Error('Failed to get Google Drive auth URL')
+      
+      const data = await response.json()
+      if (data.auth_url) {
+        window.open(data.auth_url, '_blank', 'width=600,height=600')
+      }
+    } catch (error) {
+      console.error('Google Drive integration error:', error)
+      setUploadError('Google Drive integration temporarily unavailable')
+    }
+  }
+
+  const handleDropboxIntegration = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/integrations/dropbox/auth`, {
+        method: 'GET',
+        headers: { 
+          'bypass-tunnel-reminder': 'true',
+          'Accept': 'application/json'
+        }
+      })
+      
+      if (!response.ok) throw new Error('Failed to get Dropbox auth URL')
+      
+      const data = await response.json()
+      if (data.auth_url) {
+        window.open(data.auth_url, '_blank', 'width=600,height=600')
+      }
+    } catch (error) {
+      console.error('Dropbox integration error:', error)
+      setUploadError('Dropbox integration temporarily unavailable')
+    }
+  }
+
+  const handleOneDriveIntegration = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/integrations/onedrive/auth`, {
+        method: 'GET',
+        headers: { 
+          'bypass-tunnel-reminder': 'true',
+          'Accept': 'application/json'
+        }
+      })
+      
+      if (!response.ok) throw new Error('Failed to get OneDrive auth URL')
+      
+      const data = await response.json()
+      if (data.auth_url) {
+        window.open(data.auth_url, '_blank', 'width=600,height=600')
+      }
+    } catch (error) {
+      console.error('OneDrive integration error:', error)
+      setUploadError('OneDrive integration temporarily unavailable')
+    }
+  }
+
   const formatFileSize = (bytes: number): string => {
     if (bytes === 0) return '0 Bytes'
     const k = 1024
@@ -188,13 +254,14 @@ export default function DocumentsPage() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="border-2 border-dashed border-border rounded-lg p-8 text-center">
+              {/* Local File Upload */}
+              <div className="border-2 border-dashed border-border rounded-lg p-6 text-center mb-6">
                 <div className="space-y-4">
                   <div className="w-12 h-12 bg-primary/10 rounded-lg flex items-center justify-center mx-auto">
                     <Upload className="w-6 h-6 text-primary" />
                   </div>
                   <div>
-                    <h3 className="text-lg font-medium">Upload your documents</h3>
+                    <h3 className="text-lg font-medium">Upload from device</h3>
                     <p className="text-muted-foreground">
                       Drag & drop files here, or click to select files
                     </p>
@@ -217,6 +284,48 @@ export default function DocumentsPage() {
                   <p className="text-xs text-muted-foreground">
                     Supports: PDF, DOC, DOCX, TXT, MD (Max 10MB each)
                   </p>
+                </div>
+              </div>
+
+              {/* Cloud Integration */}
+              <div className="space-y-4">
+                <div className="text-center">
+                  <p className="text-sm font-medium text-muted-foreground mb-4">Or import from cloud storage</p>
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {/* Google Drive */}
+                  <Button
+                    variant="outline"
+                    onClick={handleGoogleDriveIntegration}
+                    className="h-16 flex flex-col gap-2 hover:bg-blue-50 hover:border-blue-200"
+                    disabled={isUploading}
+                  >
+                    <Cloud className="w-6 h-6 text-blue-600" />
+                    <span className="text-sm font-medium">Google Drive</span>
+                  </Button>
+
+                  {/* Dropbox */}
+                  <Button
+                    variant="outline"
+                    onClick={handleDropboxIntegration}
+                    className="h-16 flex flex-col gap-2 hover:bg-blue-50 hover:border-blue-200"
+                    disabled={isUploading}
+                  >
+                    <Folder className="w-6 h-6 text-blue-700" />
+                    <span className="text-sm font-medium">Dropbox</span>
+                  </Button>
+
+                  {/* OneDrive */}
+                  <Button
+                    variant="outline"
+                    onClick={handleOneDriveIntegration}
+                    className="h-16 flex flex-col gap-2 hover:bg-blue-50 hover:border-blue-200"
+                    disabled={isUploading}
+                  >
+                    <HardDrive className="w-6 h-6 text-blue-800" />
+                    <span className="text-sm font-medium">OneDrive</span>
+                  </Button>
                 </div>
               </div>
               {uploadError && (
