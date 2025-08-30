@@ -29,7 +29,7 @@ google-api-python-client==2.179.0
 google-auth==2.40.3
 google-auth-httplib2==0.2.0
 google-auth-oauthlib==1.2.2
-google-genai==1.31.0
+google-generativeai>=0.8.0
 googleapis-common-protos==1.70.0
 graphiti==0.1.13
 graphiti-core==0.12.4
@@ -62,7 +62,7 @@ pluggy==1.6.0
 prompt_toolkit==3.0.51
 propcache==0.3.2
 proto-plus==1.26.1
-protobuf==6.32.0
+protobuf>=3.19.5,<7.0.0
 pyasn1==0.6.1
 pyasn1_modules==0.4.2
 pydantic==2.11.7
@@ -98,7 +98,6 @@ typing-inspection==0.4.1
 typing_extensions==4.14.0
 uritemplate==4.2.0
 urllib3==2.5.0
-uuid==1.30
 uvicorn==0.34.3
 wcwidth==0.2.13
 websockets==15.0.1
