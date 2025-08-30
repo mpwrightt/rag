@@ -648,11 +648,21 @@ async def health_check():
 
 
 if __name__ == "__main__":
-    port = int(os.getenv("APP_PORT", 8058))
+    # Get configuration from environment with deployment-friendly defaults
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", os.getenv("APP_PORT", 8000)))
+    log_level = os.getenv("LOG_LEVEL", "info").lower()
+    app_env = os.getenv("APP_ENV", "production")
+    
+    print(f"🚀 Starting Enhanced RAG API Backend on {host}:{port}")
+    print(f"📊 Environment: {app_env}")
+    print(f"📝 Log Level: {log_level}")
+    
     uvicorn.run(
-        "agent.api_enhanced:app",
-        host="0.0.0.0",
+        "agent.api_enhanced:app",  # String format for deployment stability
+        host=host,
         port=port,
-        reload=True,
-        log_level="info"
+        log_level=log_level,
+        reload=False,  # Disabled for deployment stability
+        access_log=True
     )

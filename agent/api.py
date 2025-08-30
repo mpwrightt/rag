@@ -109,6 +109,20 @@ try:
 except ImportError as e:
     logger.warning(f"3rd party integrations not available: {e}")
     INTEGRATIONS_AVAILABLE = False
+    
+    # Create dummy classes to prevent unbound variable errors
+    class GoogleDriveIntegration:
+        def __init__(self, *args, **kwargs): pass
+    class DropboxIntegration:
+        def __init__(self, *args, **kwargs): pass
+    class OneDriveIntegration:
+        def __init__(self, *args, **kwargs): pass
+    class IntegrationConfig:
+        def __init__(self, *args, **kwargs): pass
+    
+    def create_google_drive_integration(*args, **kwargs): return None
+    def create_dropbox_integration(*args, **kwargs): return None
+    def create_onedrive_integration(*args, **kwargs): return None
 
 # Application configuration
 APP_ENV = os.getenv("APP_ENV", "development")

@@ -32,20 +32,21 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))   # Replit usually uses port 8000
     log_level = os.getenv("LOG_LEVEL", "info").lower()
     
-    # Check if running in development mode
-    reload = os.getenv("APP_ENV", "production") == "development"
+    # Default to production mode for deployment stability
+    app_env = os.getenv("APP_ENV", "production")
+    reload = app_env == "development"
     
     print(f"🚀 Starting RAG API Backend on {host}:{port}")
-    print(f"📊 Environment: {os.getenv('APP_ENV', 'production')}")
+    print(f"📊 Environment: {app_env}")
     print(f"📝 Log Level: {log_level}")
     print(f"🔄 Hot Reload: {reload}")
     
-    # Run the server
+    # Run the server using string-based app import for deployment stability
     uvicorn.run(
-        app,
+        "agent.api:app",  # String format instead of direct import
         host=host,
         port=port,
         log_level=log_level,
-        reload=reload,
+        reload=False,  # Disabled for deployment stability
         access_log=True
     )
