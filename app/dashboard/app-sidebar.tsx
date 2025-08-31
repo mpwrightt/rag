@@ -52,6 +52,12 @@ const data = {
       icon: IconMessageCircle,
     },
     {
+      title: "Modern Chat",
+      url: "/dashboard/modern-chat",
+      icon: IconBrandOpenai,
+      badge: "New"
+    },
+    {
       title: "Documents",
       url: "/dashboard/documents",
       icon: IconFileDescription,

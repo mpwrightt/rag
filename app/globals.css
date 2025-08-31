@@ -204,8 +204,10 @@ body {
   --animate-pulse: pulse var(--duration) ease-out infinite;
   --animate-orbit: orbit calc(var(--duration) * 1s) linear infinite;
   --animate-meteor: meteor 3s linear infinite;
+  --animate-meteor-effect: meteor 3s linear infinite;
   --animate-marquee: marquee var(--duration) linear infinite;
   --animate-marquee-vertical: marquee-vertical var(--duration) linear infinite;
+  --animate-border-beam: border-beam calc(var(--duration) * 1s) linear infinite;
   
   @keyframes pulse {
   0%, 100% {
@@ -223,6 +225,21 @@ body {
   }
   body {
     @apply bg-background text-foreground;
+  }
+}
+
+@layer utilities {
+  .line-clamp-2 {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+  }
+  .line-clamp-3 {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    overflow: hidden;
   }
 }
 
@@ -353,5 +370,14 @@ body {
   }
   100% {
     transform: translateY(-100%);
+  }
+}
+
+@keyframes border-beam {
+  0% {
+    --angle: 0deg;
+  }
+  100% {
+    --angle: 360deg;
   }
 }

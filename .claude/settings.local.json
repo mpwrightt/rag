@@ -24,7 +24,9 @@
       "Bash(ANALYZE=true npm run build)",
       "Bash(npm uninstall:*)",
       "Bash(find:*)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "WebSearch",
+      "Bash(npm run lint)"
     ],
     "deny": [],
     "ask": []
