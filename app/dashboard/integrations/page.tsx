@@ -451,7 +451,7 @@ export default function IntegrationsPage() {
 
                         {/* Actions */}
                         <div className="flex gap-2 pt-3 border-t">
-                          {integration.status === 'connected' ? (
+                          {integration.status === 'connected' || integration.status === 'syncing' ? (
                             <>
                               <Button 
                                 size="sm" 
@@ -466,7 +466,7 @@ export default function IntegrationsPage() {
                                 size="sm" 
                                 variant="outline"
                                 onClick={() => syncIntegration(integration.id)}
-                                disabled={integration.status === 'syncing' || integration.status === 'connected'}
+                                disabled={integration.status === 'syncing'}
                               >
                                 <RefreshCw className={cn("w-4 h-4", integration.status === 'syncing' ? "animate-spin" : "")} />
                               </Button>
