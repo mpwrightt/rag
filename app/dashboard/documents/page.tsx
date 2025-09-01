@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -59,6 +59,7 @@ import {
   Settings,
   ChevronDown,
   ChevronRight,
+  ChevronLeft,
   ArrowUpDown,
   SortAsc,
   SortDesc,
@@ -840,167 +841,207 @@ export default function DocumentsPage() {
   const [previewLoading, setPreviewLoading] = useState(false)
   const [showBulkActions, setShowBulkActions] = useState(false)
   const [dragOver, setDragOver] = useState(false)
+  // Pagination state (page-based)
+  const [pageSize] = useState<number>(20)
+  const [currentPage, setCurrentPage] = useState<number>(1)
+  const [totalCount, setTotalCount] = useState<number | null>(null)
+  const [isPageLoading, setIsPageLoading] = useState(false)
+  
+  // Pagination helpers
+  const totalPages = useMemo(() => {
+    return typeof totalCount === 'number' ? Math.max(1, Math.ceil(totalCount / pageSize)) : 1
+  }, [totalCount, pageSize])
+
+  const pageNumbers = useMemo<(number | string)[]>(() => {
+    const pages: (number | string)[] = []
+    const maxButtons = 7
+    if (totalPages <= maxButtons) {
+      for (let i = 1; i <= totalPages; i++) pages.push(i)
+      return pages
+    }
+    const left = Math.max(1, currentPage - 2)
+    const right = Math.min(totalPages, currentPage + 2)
+    if (left > 1) pages.push(1)
+    if (left > 2) pages.push('...')
+    for (let i = left; i <= right; i++) pages.push(i)
+    if (right < totalPages - 1) pages.push('...')
+    if (right < totalPages) pages.push(totalPages)
+    return pages
+  }, [totalPages, currentPage])
   
   const fileInputRef = useRef<HTMLInputElement>(null)
   
-  // Load documents
-  useEffect(() => {
-    const loadDocuments = async () => {
-      try {
-        const response = await fetch(`${API_BASE}/documents`, {
-          headers: { 'bypass-tunnel-reminder': 'true' }
-        })
-
-        if (response.ok) {
-          const data = await response.json()
-          const docs = Array.isArray(data)
-            ? data
-            : (data.documents || data.items || data.results || data.data || [])
-          setDocuments(enrichDocuments(normalizeDocuments(docs)))
-        } else {
-          // Mock data for demonstration
-          setDocuments(enrichDocuments([
-            {
-              id: 'doc-1',
-              name: 'environmental-impact-2024.pdf',
-              title: 'Environmental Impact Assessment Report 2024',
-              upload_date: '2024-01-22T10:00:00Z',
-              size: 2.4 * 1024 * 1024,
-              type: 'pdf',
-              status: 'ready',
-              chunk_count: 156,
-              collection_id: 'env-collection',
-              collection_name: 'Environmental Studies',
-              is_starred: true,
-              tags: ['environmental', 'impact', '2024'],
-              source: 'upload',
-              metadata: {
-                pages: 45,
-                language: 'English',
-                author: 'Environmental Consultants Inc.',
-                created_date: '2024-01-15T00:00:00Z',
-                word_count: 12450,
-                read_time: 25
-              }
-            },
-            {
-              id: 'doc-2',
-              name: 'site-assessment-north.pdf',
-              title: 'North Site Environmental Assessment',
-              upload_date: '2024-01-21T14:30:00Z',
-              size: 1.8 * 1024 * 1024,
-              type: 'pdf',
-              status: 'processing',
-              processing_progress: 65,
-              chunk_count: 89,
-              is_starred: false,
-              tags: ['assessment', 'north-site', 'environmental'],
-              source: 'upload',
-              metadata: {
-                pages: 32,
-                language: 'English',
-                word_count: 8750,
-                read_time: 18
-              }
-            },
-            {
-              id: 'doc-3',
-              name: 'remediation-plan-2024.docx',
-              title: 'Comprehensive Remediation Plan 2024',
-              upload_date: '2024-01-20T09:15:00Z',
-              size: 1.2 * 1024 * 1024,
-              type: 'docx',
-              status: 'ready',
-              chunk_count: 203,
-              collection_id: 'tech-collection',
-              collection_name: 'Technical Documentation',
-              is_starred: false,
-              tags: ['remediation', 'plan', 'technical'],
-              source: 'upload',
-              metadata: {
-                pages: 67,
-                language: 'English',
-                author: 'Remediation Specialists LLC',
-                created_date: '2024-01-18T00:00:00Z',
-                word_count: 15680,
-                read_time: 31
-              }
-            },
-            {
-              id: 'doc-4',
-              name: 'quarterly-report-q4.pdf',
-              title: 'Q4 2023 Environmental Quarterly Report',
-              upload_date: '2024-01-19T16:45:00Z',
-              size: 3.1 * 1024 * 1024,
-              type: 'pdf',
-              status: 'error',
-              processing_error: 'Document appears to be corrupted or password protected. Please check the file and try again.',
-              is_starred: false,
-              tags: ['quarterly', 'q4', '2023'],
-              source: 'upload',
-              metadata: {
-                pages: 78,
-                language: 'English'
-              }
-            },
-            {
-              id: 'doc-5',
-              name: 'legal-compliance-guide.pdf',
-              title: 'Environmental Legal Compliance Guide',
-              upload_date: '2024-01-18T11:20:00Z',
-              size: 4.5 * 1024 * 1024,
-              type: 'pdf',
-              status: 'ready',
-              chunk_count: 342,
-              collection_id: 'legal-collection',
-              collection_name: 'Legal & Compliance',
-              is_starred: true,
-              tags: ['legal', 'compliance', 'environmental'],
-              source: 'url',
-              source_url: 'https://example.com/legal-guide.pdf',
-              metadata: {
-                pages: 156,
-                language: 'English',
-                author: 'Legal Department',
-                created_date: '2024-01-10T00:00:00Z',
-                word_count: 28900,
-                read_time: 58
-              }
-            },
-            {
-              id: 'doc-6',
-              name: 'research-paper-contamination.pdf',
-              title: 'Heavy Metal Contamination in Soil: A Research Study',
-              upload_date: '2024-01-17T13:10:00Z',
-              size: 2.7 * 1024 * 1024,
-              type: 'pdf',
-              status: 'ready',
-              chunk_count: 187,
-              collection_id: 'research-collection',
-              collection_name: 'Research Papers',
-              is_starred: false,
-              tags: ['research', 'contamination', 'soil', 'heavy-metals'],
-              source: 'integration',
-              metadata: {
-                pages: 23,
-                language: 'English',
-                author: 'Dr. Sarah Johnson, Dr. Michael Chen',
-                created_date: '2023-12-15T00:00:00Z',
-                word_count: 6750,
-                read_time: 14
-              }
+  // Page-based loader
+  const fetchDocumentsPage = async (page: number) => {
+    const firstPage = page === 1 && documents.length === 0
+    firstPage ? setIsLoading(true) : setIsPageLoading(true)
+    try {
+      const params = new URLSearchParams({
+        limit: String(pageSize),
+        offset: String((page - 1) * pageSize)
+      })
+      const response = await fetch(`${API_BASE}/documents?${params.toString()}`, {
+        headers: { 'bypass-tunnel-reminder': 'true' }
+      })
+      if (response.ok) {
+        const data = await response.json()
+        const docs = Array.isArray(data)
+          ? data
+          : (data.documents || data.items || data.results || data.data || [])
+        const enriched = enrichDocuments(normalizeDocuments(docs))
+        setDocuments(enriched)
+        const total = Array.isArray(data)
+          ? enriched.length
+          : (data.total ?? data.count ?? data.total_count ?? data.pagination?.total ?? enriched.length)
+        setTotalCount(Number(total))
+      } else {
+        // Mock data for demonstration
+        const mock = enrichDocuments([
+          {
+            id: 'doc-1',
+            name: 'environmental-impact-2024.pdf',
+            title: 'Environmental Impact Assessment Report 2024',
+            upload_date: '2024-01-22T10:00:00Z',
+            size: 2.4 * 1024 * 1024,
+            type: 'pdf',
+            status: 'ready',
+            chunk_count: 156,
+            collection_id: 'env-collection',
+            collection_name: 'Environmental Studies',
+            is_starred: true,
+            tags: ['environmental', 'impact', '2024'],
+            source: 'upload',
+            metadata: {
+              pages: 45,
+              language: 'English',
+              author: 'Environmental Consultants Inc.',
+              created_date: '2024-01-15T00:00:00Z',
+              word_count: 12450,
+              read_time: 25
             }
-          ]))
-        }
-      } catch (error) {
-        console.error('Failed to load documents:', error)
-      } finally {
-        setIsLoading(false)
+          },
+          {
+            id: 'doc-2',
+            name: 'site-assessment-north.pdf',
+            title: 'North Site Environmental Assessment',
+            upload_date: '2024-01-21T14:30:00Z',
+            size: 1.8 * 1024 * 1024,
+            type: 'pdf',
+            status: 'processing',
+            processing_progress: 65,
+            chunk_count: 89,
+            is_starred: false,
+            tags: ['assessment', 'north-site', 'environmental'],
+            source: 'upload',
+            metadata: {
+              pages: 32,
+              language: 'English',
+              word_count: 8750,
+              read_time: 18
+            }
+          },
+          {
+            id: 'doc-3',
+            name: 'remediation-plan-2024.docx',
+            title: 'Comprehensive Remediation Plan 2024',
+            upload_date: '2024-01-20T09:15:00Z',
+            size: 1.2 * 1024 * 1024,
+            type: 'docx',
+            status: 'ready',
+            chunk_count: 203,
+            collection_id: 'tech-collection',
+            collection_name: 'Technical Documentation',
+            is_starred: false,
+            tags: ['remediation', 'plan', 'technical'],
+            source: 'upload',
+            metadata: {
+              pages: 67,
+              language: 'English',
+              author: 'Remediation Specialists LLC',
+              created_date: '2024-01-18T00:00:00Z',
+              word_count: 15680,
+              read_time: 31
+            }
+          },
+          {
+            id: 'doc-4',
+            name: 'quarterly-report-q4.pdf',
+            title: 'Q4 2023 Environmental Quarterly Report',
+            upload_date: '2024-01-19T16:45:00Z',
+            size: 3.1 * 1024 * 1024,
+            type: 'pdf',
+            status: 'error',
+            processing_error: 'Document appears to be corrupted or password protected. Please check the file and try again.',
+            is_starred: false,
+            tags: ['quarterly', 'q4', '2023'],
+            source: 'upload',
+            metadata: {
+              pages: 78,
+              language: 'English'
+            }
+          },
+          {
+            id: 'doc-5',
+            name: 'legal-compliance-guide.pdf',
+            title: 'Environmental Legal Compliance Guide',
+            upload_date: '2024-01-18T11:20:00Z',
+            size: 4.5 * 1024 * 1024,
+            type: 'pdf',
+            status: 'ready',
+            chunk_count: 342,
+            collection_id: 'legal-collection',
+            collection_name: 'Legal & Compliance',
+            is_starred: true,
+            tags: ['legal', 'compliance', 'environmental'],
+            source: 'url',
+            source_url: 'https://example.com/legal-guide.pdf',
+            metadata: {
+              pages: 156,
+              language: 'English',
+              author: 'Legal Department',
+              created_date: '2024-01-10T00:00:00Z',
+              word_count: 28900,
+              read_time: 58
+            }
+          },
+          {
+            id: 'doc-6',
+            name: 'research-paper-contamination.pdf',
+            title: 'Heavy Metal Contamination in Soil: A Research Study',
+            upload_date: '2024-01-17T13:10:00Z',
+            size: 2.7 * 1024 * 1024,
+            type: 'pdf',
+            status: 'ready',
+            chunk_count: 187,
+            collection_id: 'research-collection',
+            collection_name: 'Research Papers',
+            is_starred: false,
+            tags: ['research', 'contamination', 'soil', 'heavy-metals'],
+            source: 'integration',
+            metadata: {
+              pages: 23,
+              language: 'English',
+              author: 'Dr. Sarah Johnson, Dr. Michael Chen',
+              created_date: '2023-12-15T00:00:00Z',
+              word_count: 6750,
+              read_time: 14
+            }
+          }
+        ])
+        setDocuments(mock)
+        setTotalCount(mock.length)
       }
+    } catch (error) {
+      console.error('Failed to load documents:', error)
+    } finally {
+      firstPage ? setIsLoading(false) : setIsPageLoading(false)
     }
+  }
 
-    loadDocuments()
-  }, [])
+  useEffect(() => {
+    fetchDocumentsPage(currentPage)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPage, pageSize])
 
   // Filter and sort documents
   const filteredDocuments = documents
@@ -1224,6 +1265,8 @@ export default function DocumentsPage() {
     }
   }
 
+  // Removed incremental load-more handler in favor of page-based controls
+
   const handleBulkDelete = () => {
     setDocuments(prev => prev.filter(doc => !selectedDocuments.includes(doc.id)))
     setSelectedDocuments([])
@@ -1239,7 +1282,7 @@ export default function DocumentsPage() {
   }
 
   const stats = {
-    total: documents.length,
+    total: typeof totalCount === 'number' ? totalCount : documents.length,
     ready: documents.filter(d => d.status === 'ready').length,
     processing: documents.filter(d => d.status === 'processing').length,
     error: documents.filter(d => d.status === 'error').length,
@@ -1564,6 +1607,50 @@ export default function DocumentsPage() {
                   Upload Your First Document
                 </Button>
               )}
+            </div>
+          )}
+
+          {/* Pagination Controls */}
+          {typeof totalCount === 'number' && totalCount > 0 && (
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mt-8">
+              <div className="text-sm text-muted-foreground">
+                Showing {(currentPage - 1) * pageSize + 1}
+                –{Math.min(currentPage * pageSize, totalCount)} of {totalCount}
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                  disabled={currentPage === 1 || isPageLoading}
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </Button>
+                {pageNumbers.map((p, idx) => p === '...'
+                  ? (
+                    <span key={`ellipsis-${idx}`} className="px-2 text-muted-foreground">…</span>
+                    )
+                  : (
+                    <Button
+                      key={p as number}
+                      variant={(p as number) === currentPage ? 'default' : 'outline'}
+                      size="sm"
+                      onClick={() => setCurrentPage(p as number)}
+                      disabled={isPageLoading}
+                    >
+                      {p}
+                    </Button>
+                  )
+                )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                  disabled={currentPage === totalPages || isPageLoading}
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </Button>
+              </div>
             </div>
           )}
         </div>
