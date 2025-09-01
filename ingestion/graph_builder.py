@@ -8,6 +8,7 @@ from typing import List, Dict, Any, Optional, Set, Tuple
 from datetime import datetime, timezone
 import asyncio
 import re
+import time
 
 from graphiti_core import Graphiti
 from dotenv import load_dotenv
@@ -78,7 +79,21 @@ class GraphBuilder:
             return {"episodes_created": 0, "errors": []}
         
         logger.info(f"Adding {len(chunks)} chunks to knowledge graph for document: {document_title}")
-        logger.info("⚠️ Large chunks will be truncated to avoid Graphiti token limits.")
+        logger.info(" Large chunks will be truncated to avoid Graphiti token limits.")
+
+        # Retry/backoff configuration via env
+        try:
+            max_retries = int(os.getenv("GRAPH_EPISODE_RETRIES", "2"))
+        except Exception:
+            max_retries = 2
+        try:
+            backoff_base_sec = float(os.getenv("GRAPH_EPISODE_RETRY_BACKOFF_SEC", "1.0"))
+        except Exception:
+            backoff_base_sec = 1.0
+        try:
+            inter_episode_sleep = float(os.getenv("GRAPH_SLEEP_BETWEEN_EPISODES_SEC", "0.5"))
+        except Exception:
+            inter_episode_sleep = 0.5
         
         # Check for oversized chunks and warn
         oversized_chunks = [i for i, chunk in enumerate(chunks) if len(chunk.content) > 6000]
@@ -87,60 +102,95 @@ class GraphBuilder:
         
         episodes_created = 0
         errors = []
+        timeout_count = 0
+        retry_attempts_total = 0
+
+        overall_start = time.perf_counter()
         
         # Process chunks one by one to avoid overwhelming Graphiti
         for i, chunk in enumerate(chunks):
-            try:
-                # Create episode ID
-                episode_id = f"{document_source}_{chunk.index}_{datetime.now().timestamp()}"
-                
-                # Prepare episode content with size limits
-                episode_content = self._prepare_episode_content(
-                    chunk,
-                    document_title,
-                    document_metadata
-                )
-                
-                # Create source description (shorter)
-                source_description = f"Document: {document_title} (Chunk: {chunk.index})"
-                
-                # Add episode to graph
-                await self.graph_client.add_episode(
-                    episode_id=episode_id,
-                    content=episode_content,
-                    source=source_description,
-                    timestamp=datetime.now(timezone.utc),
-                    metadata={
-                        "document_title": document_title,
-                        "document_source": document_source,
-                        "chunk_index": chunk.index,
-                        "original_length": len(chunk.content),
-                        "processed_length": len(episode_content)
-                    }
-                )
-                
-                episodes_created += 1
-                logger.info(f"✓ Added episode {episode_id} to knowledge graph ({episodes_created}/{len(chunks)})")
-                
-                # Small delay between each episode to reduce API pressure
-                if i < len(chunks) - 1:
-                    await asyncio.sleep(0.5)
-                    
-            except Exception as e:
-                error_msg = f"Failed to add chunk {chunk.index} to graph: {str(e)}"
-                logger.error(error_msg)
-                errors.append(error_msg)
-                
-                # Continue processing other chunks even if one fails
-                continue
+            # Create episode ID
+            episode_id = f"{document_source}_{chunk.index}_{datetime.now().timestamp()}"
+
+            # Prepare episode content with size limits
+            episode_content = self._prepare_episode_content(
+                chunk,
+                document_title,
+                document_metadata
+            )
+
+            # Create source description (shorter)
+            source_description = f"Document: {document_title} (Chunk: {chunk.index})"
+
+            attempt = 0
+            while True:
+                try:
+                    attempt += 1
+                    start = time.perf_counter()
+                    await self.graph_client.add_episode(
+                        episode_id=episode_id,
+                        content=episode_content,
+                        source=source_description,
+                        timestamp=datetime.now(timezone.utc),
+                        metadata={
+                            "document_title": document_title,
+                            "document_source": document_source,
+                            "chunk_index": chunk.index,
+                            "original_length": len(chunk.content),
+                            "processed_length": len(episode_content)
+                        }
+                    )
+                    elapsed = time.perf_counter() - start
+                    episodes_created += 1
+                    logger.info(
+                        f" Added episode {episode_id} (chunk {chunk.index}) in {elapsed:.3f}s "
+                        f"[{episodes_created}/{len(chunks)}]"
+                    )
+                    break
+                except asyncio.TimeoutError as te:
+                    timeout_count += 1
+                    err = (
+                        f"Timeout adding episode for chunk {chunk.index} after attempt {attempt}: {te}"
+                    )
+                    logger.warning(err)
+                    if attempt <= max_retries:
+                        retry_attempts_total += 1
+                        backoff = backoff_base_sec * (2 ** (attempt - 1))
+                        logger.info(f"Retrying chunk {chunk.index} in {backoff:.2f}s (attempt {attempt}/{max_retries})")
+                        await asyncio.sleep(backoff)
+                        continue
+                    errors.append(err)
+                    break
+                except Exception as e:
+                    err = f"Failed to add chunk {chunk.index} (attempt {attempt}): {e}"
+                    logger.error(err)
+                    if attempt <= max_retries:
+                        retry_attempts_total += 1
+                        backoff = backoff_base_sec * (2 ** (attempt - 1))
+                        logger.info(f"Retrying chunk {chunk.index} in {backoff:.2f}s (attempt {attempt}/{max_retries})")
+                        await asyncio.sleep(backoff)
+                        continue
+                    errors.append(err)
+                    break
+
+            # Small delay between each episode to reduce DB pressure
+            if i < len(chunks) - 1 and inter_episode_sleep > 0:
+                await asyncio.sleep(inter_episode_sleep)
         
         result = {
             "episodes_created": episodes_created,
             "total_chunks": len(chunks),
-            "errors": errors
+            "errors": errors,
+            "timeouts": timeout_count,
+            "retries": retry_attempts_total,
+            "elapsed_sec": round(time.perf_counter() - overall_start, 3),
         }
         
-        logger.info(f"Graph building complete: {episodes_created} episodes created, {len(errors)} errors")
+        logger.info(
+            f"Graph building complete: {episodes_created}/{len(chunks)} episodes, "
+            f"{len(errors)} errors, {timeout_count} timeouts, {retry_attempts_total} retries, "
+            f"in {result['elapsed_sec']:.3f}s"
+        )
         return result
     
     def _prepare_episode_content(

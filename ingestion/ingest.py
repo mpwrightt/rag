@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 import argparse
+import time
+import faulthandler
 
 import asyncpg
 from dotenv import load_dotenv
@@ -80,11 +82,37 @@ class DocumentIngestionPipeline:
             return
         
         logger.info("Initializing ingestion pipeline...")
-        
-        # Initialize database connections
-        await initialize_database()
-        await initialize_graph()
-        await self.graph_builder.initialize()
+
+        # Env-configurable per-step init timeout
+        try:
+            init_step_timeout = float(os.getenv("INGEST_INIT_STEP_TIMEOUT", "20"))
+        except Exception:
+            init_step_timeout = 20.0
+
+        # Initialize database connections with timeout and timing logs
+        try:
+            start = time.perf_counter()
+            await asyncio.wait_for(initialize_database(), timeout=init_step_timeout)
+            logger.info(f"Database initialized in {time.perf_counter() - start:.3f}s")
+        except asyncio.TimeoutError:
+            logger.error(f"Database initialization timed out after {init_step_timeout}s")
+            raise
+
+        try:
+            start = time.perf_counter()
+            await asyncio.wait_for(initialize_graph(), timeout=init_step_timeout)
+            logger.info(f"Graph layer initialized in {time.perf_counter() - start:.3f}s")
+        except asyncio.TimeoutError:
+            logger.error(f"Graph layer initialization timed out after {init_step_timeout}s")
+            raise
+
+        try:
+            start = time.perf_counter()
+            await asyncio.wait_for(self.graph_builder.initialize(), timeout=init_step_timeout)
+            logger.info(f"Graph builder initialized in {time.perf_counter() - start:.3f}s")
+        except asyncio.TimeoutError:
+            logger.error(f"Graph builder initialization timed out after {init_step_timeout}s")
+            raise
         
         self._initialized = True
         logger.info("Ingestion pipeline initialized")
@@ -181,12 +209,14 @@ class DocumentIngestionPipeline:
         logger.info(f"Processing document: {document_title}")
         
         # Chunk the document
+        t0 = time.perf_counter()
         chunks = await self.chunker.chunk_document(
             content=document_content,
             title=document_title,
             source=document_source,
             metadata=document_metadata
         )
+        logger.info(f"Chunking produced {len(chunks)} chunks in {time.perf_counter() - t0:.3f}s")
         
         if not chunks:
             logger.warning(f"No chunks created for {document_title}")
@@ -215,10 +245,12 @@ class DocumentIngestionPipeline:
             logger.info(f"Extracted {entities_extracted} entities")
         
         # Generate embeddings
+        t1 = time.perf_counter()
         embedded_chunks = await self.embedder.embed_chunks(chunks)
-        logger.info(f"Generated embeddings for {len(embedded_chunks)} chunks")
+        logger.info(f"Generated embeddings for {len(embedded_chunks)} chunks in {time.perf_counter() - t1:.3f}s")
         
         # Save to PostgreSQL
+        t2 = time.perf_counter()
         document_id = await self._save_to_postgres(
             document_title,
             document_source,
@@ -226,28 +258,42 @@ class DocumentIngestionPipeline:
             embedded_chunks,
             document_metadata
         )
-        
-        logger.info(f"Saved document to PostgreSQL with ID: {document_id}")
+        logger.info(f"Saved document to PostgreSQL with ID: {document_id} in {time.perf_counter() - t2:.3f}s")
         
         # Add to knowledge graph (if enabled)
         relationships_created = 0
         graph_errors = []
         
         if not self.config.skip_graph_building:
+            # Env-configurable overall graph build timeout
+            try:
+                graph_build_timeout = float(os.getenv("INGEST_GRAPH_BUILD_TIMEOUT", "300"))
+            except Exception:
+                graph_build_timeout = 300.0
             try:
                 logger.info("Building knowledge graph relationships (this may take several minutes)...")
-                graph_result = await self.graph_builder.add_document_to_graph(
-                    chunks=embedded_chunks,
-                    document_title=document_title,
-                    document_source=document_source,
-                    document_metadata=document_metadata
+                t3 = time.perf_counter()
+                graph_result = await asyncio.wait_for(
+                    self.graph_builder.add_document_to_graph(
+                        chunks=embedded_chunks,
+                        document_title=document_title,
+                        document_source=document_source,
+                        document_metadata=document_metadata
+                    ),
+                    timeout=graph_build_timeout,
                 )
-                
                 relationships_created = graph_result.get("episodes_created", 0)
                 graph_errors = graph_result.get("errors", [])
-                
-                logger.info(f"Added {relationships_created} episodes to knowledge graph")
-                
+                logger.info(
+                    f"Added {relationships_created} episodes to knowledge graph in {time.perf_counter() - t3:.3f}s"
+                )
+            except asyncio.TimeoutError:
+                error_msg = (
+                    f"Knowledge graph building timed out after {graph_build_timeout}s; "
+                    f"partial progress may exist"
+                )
+                logger.error(error_msg)
+                graph_errors.append(error_msg)
             except Exception as e:
                 error_msg = f"Failed to add to knowledge graph: {str(e)}"
                 logger.error(error_msg)
@@ -442,14 +488,60 @@ async def main():
     def progress_callback(current: int, total: int):
         print(f"Progress: {current}/{total} documents processed")
     
+    # Global watchdog configuration via env
+    try:
+        global_timeout = float(os.getenv("INGEST_GLOBAL_TIMEOUT", "0"))
+    except Exception:
+        global_timeout = 0.0
+    try:
+        heartbeat_sec = float(os.getenv("INGEST_HEARTBEAT_SEC", "30"))
+    except Exception:
+        heartbeat_sec = 30.0
+    try:
+        watchdog_dump_sec = float(os.getenv("INGEST_WATCHDOG_DUMP_SEC", "300"))
+    except Exception:
+        watchdog_dump_sec = 300.0
+
+    async def _heartbeat_task():
+        last = time.perf_counter()
+        i = 0
+        while True:
+            await asyncio.sleep(heartbeat_sec)
+            i += 1
+            now = time.perf_counter()
+            # Keep light-weight to avoid adding pressure
+            logger.info(
+                f"[Heartbeat {i}] Ingestion running; elapsed since last beat: {now - last:.1f}s; total tasks: {len(asyncio.all_tasks())}"
+            )
+            last = now
+
+    hb_task: Optional[asyncio.Task] = None
+
     try:
         start_time = datetime.now()
-        
-        results = await pipeline.ingest_documents(progress_callback)
-        
+
+        # Start heartbeat and faulthandler watchdog
+        if heartbeat_sec > 0:
+            hb_task = asyncio.create_task(_heartbeat_task())
+        if watchdog_dump_sec and watchdog_dump_sec > 0:
+            try:
+                faulthandler.dump_traceback_later(watchdog_dump_sec, repeat=True)
+                logger.info(
+                    f"Event-loop watchdog enabled: dumping stack traces every {watchdog_dump_sec}s if blocked"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to enable watchdog traceback dumper: {e}")
+
+        # Run with optional global timeout
+        if global_timeout and global_timeout > 0:
+            logger.info(f"Applying global ingestion timeout: {global_timeout}s")
+            results = await asyncio.wait_for(pipeline.ingest_documents(progress_callback), timeout=global_timeout)
+        else:
+            results = await pipeline.ingest_documents(progress_callback)
+
         end_time = datetime.now()
         total_time = (end_time - start_time).total_seconds()
-        
+
         # Print summary
         print("\n" + "="*50)
         print("INGESTION SUMMARY")
@@ -461,22 +553,37 @@ async def main():
         print(f"Total errors: {sum(len(r.errors) for r in results)}")
         print(f"Total processing time: {total_time:.2f} seconds")
         print()
-        
+
         # Print individual results
         for result in results:
             status = "✓" if not result.errors else "✗"
             print(f"{status} {result.title}: {result.chunks_created} chunks, {result.entities_extracted} entities")
-            
+
             if result.errors:
                 for error in result.errors:
                     print(f"  Error: {error}")
-        
+
+    except asyncio.TimeoutError:
+        logger.error(
+            f"Global ingestion timed out after {global_timeout}s. Consider inspecting watchdog stack dumps and logs."
+        )
+        raise
     except KeyboardInterrupt:
         print("\nIngestion interrupted by user")
     except Exception as e:
         logger.error(f"Ingestion failed: {e}")
         raise
     finally:
+        if hb_task:
+            hb_task.cancel()
+            try:
+                await hb_task
+            except Exception:
+                pass
+        try:
+            faulthandler.cancel_dump_traceback_later()
+        except Exception:
+            pass
         await pipeline.close()
 
 

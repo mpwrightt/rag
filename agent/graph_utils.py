@@ -9,6 +9,7 @@ import logging
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timezone
 import asyncio
+import time
 
 from dotenv import load_dotenv
 from .db_utils import (
@@ -45,11 +46,26 @@ class KnowledgeGraphClient:
         if self._initialized:
             return
 
+        # Timeout for initialization (seconds)
         try:
-            # Test database connection and graph statistics
-            stats = await get_graph_statistics()
+            init_timeout = float(os.getenv("GRAPH_INIT_TIMEOUT", "15"))
+        except Exception:
+            init_timeout = 15.0
+
+        try:
+            # Test database connection and graph statistics with timeout
+            start = time.perf_counter()
+            stats = await asyncio.wait_for(get_graph_statistics(), timeout=init_timeout)
+            elapsed = time.perf_counter() - start
             self._initialized = True
-            logger.info(f"Knowledge graph client initialized. Stats: {stats}")
+            logger.info(
+                f"Knowledge graph client initialized in {elapsed:.3f}s. Stats: {stats}"
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                f"Knowledge graph initialization timed out after {init_timeout}s during get_graph_statistics()"
+            )
+            raise
         except Exception as e:
             logger.error(f"Failed to initialize knowledge graph: {e}")
             raise
@@ -80,14 +96,31 @@ class KnowledgeGraphClient:
         if not self._initialized:
             await self.initialize()
 
-        await add_episode_to_graph(
-            episode_id=episode_id,
-            content=content,
-            source=source,
-            metadata=metadata
-        )
+        # Timeout for episode addition (seconds)
+        try:
+            episode_timeout = float(os.getenv("GRAPH_EPISODE_TIMEOUT", "30"))
+        except Exception:
+            episode_timeout = 30.0
 
-        logger.info(f"Added episode {episode_id} to knowledge graph")
+        start = time.perf_counter()
+        try:
+            await asyncio.wait_for(
+                add_episode_to_graph(
+                    episode_id=episode_id,
+                    content=content,
+                    source=source,
+                    metadata=metadata
+                ),
+                timeout=episode_timeout,
+            )
+            logger.info(
+                f"Added episode {episode_id} to knowledge graph in {time.perf_counter() - start:.3f}s"
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                f"Timed out adding episode {episode_id} to knowledge graph after {episode_timeout}s"
+            )
+            raise
     
     async def search(
         self,
@@ -109,8 +142,15 @@ class KnowledgeGraphClient:
         if not self._initialized:
             await self.initialize()
 
+        # Timeout for graph queries (seconds)
         try:
-            results = await search_facts(query, limit=20)
+            query_timeout = float(os.getenv("GRAPH_QUERY_TIMEOUT", "20"))
+        except Exception:
+            query_timeout = 20.0
+
+        try:
+            start = time.perf_counter()
+            results = await asyncio.wait_for(search_facts(query, limit=20), timeout=query_timeout)
 
             # Convert to Graphiti-compatible format for backward compatibility
             return [
@@ -126,6 +166,9 @@ class KnowledgeGraphClient:
                 for result in results
             ]
 
+        except asyncio.TimeoutError:
+            logger.error(f"Graph search timed out after {query_timeout}s for query: {query!r}")
+            return []
         except Exception as e:
             logger.error(f"Graph search failed: {e}")
             return []
@@ -151,7 +194,26 @@ class KnowledgeGraphClient:
             await self.initialize()
 
         try:
-            return await db_get_entity_relationships(entity_name, depth)
+            query_timeout = float(os.getenv("GRAPH_QUERY_TIMEOUT", "20"))
+        except Exception:
+            query_timeout = 20.0
+
+        try:
+            start = time.perf_counter()
+            return await asyncio.wait_for(
+                db_get_entity_relationships(entity_name, depth),
+                timeout=query_timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                f"Entity relationship query timed out after {query_timeout}s for entity: {entity_name!r}"
+            )
+            return {
+                "central_entity": entity_name,
+                "related_facts": [],
+                "relationships": [],
+                "error": "timeout",
+            }
         except Exception as e:
             logger.error(f"Entity relationship query failed: {e}")
             return {
@@ -182,11 +244,25 @@ class KnowledgeGraphClient:
             await self.initialize()
 
         try:
-            return await db_get_entity_timeline(entity_name, start_date, end_date)
+            query_timeout = float(os.getenv("GRAPH_QUERY_TIMEOUT", "20"))
+        except Exception:
+            query_timeout = 20.0
+
+        try:
+            start = time.perf_counter()
+            return await asyncio.wait_for(
+                db_get_entity_timeline(entity_name, start_date, end_date),
+                timeout=query_timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                f"Entity timeline query timed out after {query_timeout}s for entity: {entity_name!r}"
+            )
+            return []
         except Exception as e:
             logger.error(f"Entity timeline query failed: {e}")
             return []
-
+    
     async def get_graph_statistics(self) -> Dict[str, Any]:
         """
         Get basic statistics about the knowledge graph.
@@ -198,7 +274,21 @@ class KnowledgeGraphClient:
             await self.initialize()
 
         try:
-            return await get_graph_statistics()
+            query_timeout = float(os.getenv("GRAPH_QUERY_TIMEOUT", "20"))
+        except Exception:
+            query_timeout = 20.0
+
+        try:
+            start = time.perf_counter()
+            return await asyncio.wait_for(get_graph_statistics(), timeout=query_timeout)
+        except asyncio.TimeoutError:
+            logger.error(
+                f"Failed to get graph statistics due to timeout after {query_timeout}s"
+            )
+            return {
+                "graph_initialized": False,
+                "error": "timeout",
+            }
         except Exception as e:
             logger.error(f"Failed to get graph statistics: {e}")
             return {
@@ -211,12 +301,22 @@ class KnowledgeGraphClient:
         if not self._initialized:
             await self.initialize()
 
-        success = await clear_graph()
+        try:
+            query_timeout = float(os.getenv("GRAPH_QUERY_TIMEOUT", "20"))
+        except Exception:
+            query_timeout = 20.0
+
+        try:
+            start = time.perf_counter()
+            success = await asyncio.wait_for(clear_graph(), timeout=query_timeout)
+        except asyncio.TimeoutError:
+            logger.error(f"Timed out clearing knowledge graph after {query_timeout}s")
+            success = False
         if success:
             logger.warning("Cleared all data from knowledge graph")
         else:
             logger.error("Failed to clear knowledge graph")
-
+    
     async def upsert_node(
         self,
         name: str,
@@ -239,8 +339,22 @@ class KnowledgeGraphClient:
         if not self._initialized:
             await self.initialize()
 
-        return await upsert_node(name, node_type, description, metadata)
+        try:
+            query_timeout = float(os.getenv("GRAPH_QUERY_TIMEOUT", "20"))
+        except Exception:
+            query_timeout = 20.0
 
+        try:
+            return await asyncio.wait_for(
+                upsert_node(name, node_type, description, metadata),
+                timeout=query_timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                f"Timed out upserting node {name!r}/{node_type!r} after {query_timeout}s"
+            )
+            raise
+    
     async def create_relationship(
         self,
         source_node_id: str,
@@ -265,8 +379,22 @@ class KnowledgeGraphClient:
         if not self._initialized:
             await self.initialize()
 
-        return await create_relationship(source_node_id, target_node_id, relationship_type, description, metadata)
+        try:
+            query_timeout = float(os.getenv("GRAPH_QUERY_TIMEOUT", "20"))
+        except Exception:
+            query_timeout = 20.0
 
+        try:
+            return await asyncio.wait_for(
+                create_relationship(source_node_id, target_node_id, relationship_type, description, metadata),
+                timeout=query_timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                f"Timed out creating relationship {relationship_type!r} after {query_timeout}s"
+            )
+            raise
+    
     async def add_fact(
         self,
         node_id: str,
@@ -295,7 +423,21 @@ class KnowledgeGraphClient:
         if not self._initialized:
             await self.initialize()
 
-        return await add_fact(node_id, content, source, valid_at, invalid_at, confidence, metadata)
+        try:
+            query_timeout = float(os.getenv("GRAPH_QUERY_TIMEOUT", "20"))
+        except Exception:
+            query_timeout = 20.0
+
+        try:
+            return await asyncio.wait_for(
+                add_fact(node_id, content, source, valid_at, invalid_at, confidence, metadata),
+                timeout=query_timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                f"Timed out adding fact to node {node_id} after {query_timeout}s"
+            )
+            raise
 
 
 # Global knowledge graph client instance (lazy initialization)

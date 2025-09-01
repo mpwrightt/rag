@@ -40,3 +40,13 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# python
+__pycache__/
+*.pyc
+
+# local tools (do not commit local Claude settings)
+/.claude/
+
+# windows device filename accidentally created
+nul

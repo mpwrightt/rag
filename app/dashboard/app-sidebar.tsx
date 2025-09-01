@@ -20,6 +20,16 @@ import {
   IconUsers,
   IconSparkles,
   IconBrandOpenai,
+  IconBell,
+  IconApi,
+  IconCloud,
+  IconPalette,
+  IconShare,
+  IconDownload,
+  IconUpload,
+  IconBrain,
+  IconRobot,
+  IconHistory
 } from "@tabler/icons-react"
 
 import { NavDocuments } from "@/app/dashboard/nav-documents"
@@ -45,42 +55,31 @@ const data = {
       title: "Dashboard",
       url: "/dashboard",
       icon: IconDashboard,
+      badge: "Analytics"
     },
     {
-      title: "RAG Chat",
+      title: "AI Chat",
       url: "/dashboard/chat",
       icon: IconMessageCircle,
-    },
-    {
-      title: "Modern Chat",
-      url: "/dashboard/modern-chat",
-      icon: IconBrandOpenai,
-      badge: "New"
+      badge: "Unified"
     },
     {
       title: "Documents",
       url: "/dashboard/documents",
       icon: IconFileDescription,
+      badge: "Smart Upload"
     },
     {
       title: "Collections",
       url: "/dashboard/collections",
       icon: IconDatabase,
+      badge: "Organize"
     },
     {
-      title: "Collection Chat",
-      url: "/dashboard/collection-chat",
-      icon: IconMessageCircle,
-    },
-    {
-      title: "Prompts",
+      title: "Prompts Library",
       url: "/dashboard/prompts",
-      icon: IconFileAi,
-    },
-    {
-      title: "Workflows",
-      url: "/dashboard/workflows",
-      icon: IconInnerShadowTop,
+      icon: IconBrain,
+      badge: "AI Enhanced"
     },
     {
       title: "Analytics",
@@ -88,43 +87,54 @@ const data = {
       icon: IconChartBar,
     },
     {
-      title: "Payment gated",
-      url: "/dashboard/payment-gated",
-      icon: IconSparkles,
+      title: "Integrations",
+      url: "/dashboard/integrations",
+      icon: IconApi,
+      badge: "Connect"
+    },
+    {
+      title: "Notifications",
+      url: "/dashboard/notifications",
+      icon: IconBell,
     },
   ],
   navSecondary: [
     {
+      title: "Search Everything",
+      url: "/dashboard/search",
+      icon: IconSearch,
+    },
+    {
+      title: "User Profile",
+      url: "/dashboard/profile",
+      icon: IconUsers,
+    },
+    {
       title: "Settings",
-      url: "#",
+      url: "/dashboard/settings",
       icon: IconSettings,
     },
     {
-      title: "Get Help",
-      url: "#",
+      title: "Help & Support",
+      url: "/dashboard/help",
       icon: IconHelp,
-    },
-    {
-      title: "Search",
-      url: "#",
-      icon: IconSearch,
     },
   ],
   documents: [
     {
-      name: "Data Library",
-      url: "#",
-      icon: IconDatabase,
+      name: "Team Spaces",
+      url: "/dashboard/teams",
+      icon: IconUsers,
     },
     {
-      name: "Reports",
-      url: "#",
-      icon: IconReport,
+      name: "Export/Backup",
+      url: "/dashboard/export",
+      icon: IconDownload,
     },
     {
-      name: "Word Assistant",
-      url: "#",
-      icon: IconFileWord,
+      name: "API Usage",
+      url: "/dashboard/api-usage",
+      icon: IconApi,
     },
   ],
 }
@@ -142,7 +152,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               <Link href="/">
                 <ChatMaxingIconColoured className="!size-6" />
                 <span className="text-base font-semibold">DataDiver</span>
-                <Badge variant="outline" className="text-muted-foreground  text-xs">AI</Badge>
+                <Badge variant="outline" className="text-muted-foreground text-xs">RAG AI</Badge>
               </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>

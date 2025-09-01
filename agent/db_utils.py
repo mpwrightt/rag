@@ -14,6 +14,7 @@ import logging
 import asyncpg
 from asyncpg.pool import Pool
 from dotenv import load_dotenv
+import time
 
 # Load environment variables
 load_dotenv()
@@ -49,18 +50,28 @@ class DatabasePool:
                 connect_timeout = float(os.getenv("POSTGRES_CONNECT_TIMEOUT", "10"))
             except Exception:
                 connect_timeout = 10.0
-
-            self.pool = await asyncpg.create_pool(
-                self.database_url,
-                min_size=5,
-                max_size=20,
-                max_inactive_connection_lifetime=300,
-                command_timeout=60,
-                statement_cache_size=0,
-                ssl=self.ssl_required,
-                timeout=connect_timeout
-            )
-            logger.info(f"Database connection pool initialized (ssl={self.ssl_required})")
+            start = time.perf_counter()
+            try:
+                self.pool = await asyncpg.create_pool(
+                    self.database_url,
+                    min_size=5,
+                    max_size=20,
+                    max_inactive_connection_lifetime=300,
+                    command_timeout=60,
+                    statement_cache_size=0,
+                    ssl=self.ssl_required,
+                    timeout=connect_timeout
+                )
+                elapsed = time.perf_counter() - start
+                logger.info(
+                    f"Database connection pool initialized (ssl={self.ssl_required}) in {elapsed:.3f}s"
+                )
+            except Exception as e:
+                elapsed = time.perf_counter() - start
+                logger.error(
+                    f"Failed to initialize DB connection pool after {elapsed:.3f}s (timeout={connect_timeout}s): {e}"
+                )
+                raise
     
     async def close(self):
         """Close connection pool."""
@@ -75,8 +86,25 @@ class DatabasePool:
         if not self.pool:
             await self.initialize()
         
-        async with self.pool.acquire() as connection:
-            yield connection
+        # Apply timeout to acquisition to avoid indefinite waits when pool is exhausted
+        try:
+            acquire_timeout = float(os.getenv("POSTGRES_ACQUIRE_TIMEOUT", "15"))
+        except Exception:
+            acquire_timeout = 15.0
+
+        start = time.perf_counter()
+        try:
+            async with self.pool.acquire(timeout=acquire_timeout) as connection:
+                logger.debug(
+                    f"DB connection acquired in {time.perf_counter() - start:.3f}s"
+                )
+                yield connection
+        except Exception as e:
+            elapsed = time.perf_counter() - start
+            logger.error(
+                f"Failed to acquire DB connection after {elapsed:.3f}s (timeout={acquire_timeout}s): {e}"
+            )
+            raise
 
 
 # Global database pool instance (lazy initialization)
@@ -809,23 +837,45 @@ async def upsert_node(
         Node ID
     """
     async with db_pool.acquire() as conn:
-        result = await conn.fetchrow(
-            """
-            INSERT INTO nodes (name, type, description, metadata)
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (name, type)
-            DO UPDATE SET
-                description = EXCLUDED.description,
-                metadata = EXCLUDED.metadata,
-                updated_at = CURRENT_TIMESTAMP
-            RETURNING id::text
-            """,
-            name,
-            node_type,
-            description,
-            json.dumps(metadata or {})
-        )
+        # Server-side timeouts
+        try:
+            st_ms = int(os.getenv("POSTGRES_STATEMENT_TIMEOUT_MS", "20000"))
+        except Exception:
+            st_ms = 20000
+        try:
+            lock_ms = int(os.getenv("POSTGRES_LOCK_TIMEOUT_MS", "5000"))
+        except Exception:
+            lock_ms = 5000
 
+        start_total = time.perf_counter()
+        async with conn.transaction():
+            await conn.execute(f"SET LOCAL statement_timeout = {st_ms}")
+            await conn.execute(f"SET LOCAL lock_timeout = {lock_ms}")
+
+            start = time.perf_counter()
+            result = await conn.fetchrow(
+                """
+                INSERT INTO nodes (name, type, description, metadata)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (name, type)
+                DO UPDATE SET
+                    description = EXCLUDED.description,
+                    metadata = EXCLUDED.metadata,
+                    updated_at = CURRENT_TIMESTAMP
+                RETURNING id::text
+                """,
+                name,
+                node_type,
+                description,
+                json.dumps(metadata or {})
+            )
+            logger.info(
+                f"upsert_node(name='{name}', type='{node_type}') executed in {time.perf_counter() - start:.3f}s"
+            )
+
+        logger.debug(
+            f"upsert_node total elapsed {time.perf_counter() - start_total:.3f}s (statement_timeout={st_ms}ms, lock_timeout={lock_ms}ms)"
+        )
         return result["id"]
 
 
@@ -850,23 +900,45 @@ async def create_relationship(
         Relationship ID
     """
     async with db_pool.acquire() as conn:
-        result = await conn.fetchrow(
-            """
-            INSERT INTO edges (source_node_id, target_node_id, relationship_type, description, metadata)
-            VALUES ($1::uuid, $2::uuid, $3, $4, $5)
-            ON CONFLICT (source_node_id, target_node_id, relationship_type)
-            DO UPDATE SET
-                description = EXCLUDED.description,
-                metadata = EXCLUDED.metadata
-            RETURNING id::text
-            """,
-            source_node_id,
-            target_node_id,
-            relationship_type,
-            description,
-            json.dumps(metadata or {})
-        )
+        # Server-side timeouts
+        try:
+            st_ms = int(os.getenv("POSTGRES_STATEMENT_TIMEOUT_MS", "20000"))
+        except Exception:
+            st_ms = 20000
+        try:
+            lock_ms = int(os.getenv("POSTGRES_LOCK_TIMEOUT_MS", "5000"))
+        except Exception:
+            lock_ms = 5000
 
+        start_total = time.perf_counter()
+        async with conn.transaction():
+            await conn.execute(f"SET LOCAL statement_timeout = {st_ms}")
+            await conn.execute(f"SET LOCAL lock_timeout = {lock_ms}")
+
+            start = time.perf_counter()
+            result = await conn.fetchrow(
+                """
+                INSERT INTO edges (source_node_id, target_node_id, relationship_type, description, metadata)
+                VALUES ($1::uuid, $2::uuid, $3, $4, $5)
+                ON CONFLICT (source_node_id, target_node_id, relationship_type)
+                DO UPDATE SET
+                    description = EXCLUDED.description,
+                    metadata = EXCLUDED.metadata
+                RETURNING id::text
+                """,
+                source_node_id,
+                target_node_id,
+                relationship_type,
+                description,
+                json.dumps(metadata or {})
+            )
+            logger.info(
+                f"create_relationship(type='{relationship_type}') executed in {time.perf_counter() - start:.3f}s"
+            )
+
+        logger.debug(
+            f"create_relationship total elapsed {time.perf_counter() - start_total:.3f}s (statement_timeout={st_ms}ms, lock_timeout={lock_ms}ms)"
+        )
         return result["id"]
 
 
@@ -895,21 +967,43 @@ async def add_fact(
         Fact ID
     """
     async with db_pool.acquire() as conn:
-        result = await conn.fetchrow(
-            """
-            INSERT INTO facts (node_id, content, source, valid_at, invalid_at, confidence, metadata)
-            VALUES ($1::uuid, $2, $3, $4, $5, $6, $7)
-            RETURNING id::text
-            """,
-            node_id,
-            content,
-            source,
-            valid_at or datetime.now(timezone.utc),
-            invalid_at,
-            confidence,
-            json.dumps(metadata or {})
-        )
+        # Server-side timeouts
+        try:
+            st_ms = int(os.getenv("POSTGRES_STATEMENT_TIMEOUT_MS", "20000"))
+        except Exception:
+            st_ms = 20000
+        try:
+            lock_ms = int(os.getenv("POSTGRES_LOCK_TIMEOUT_MS", "5000"))
+        except Exception:
+            lock_ms = 5000
 
+        start_total = time.perf_counter()
+        async with conn.transaction():
+            await conn.execute(f"SET LOCAL statement_timeout = {st_ms}")
+            await conn.execute(f"SET LOCAL lock_timeout = {lock_ms}")
+
+            start = time.perf_counter()
+            result = await conn.fetchrow(
+                """
+                INSERT INTO facts (node_id, content, source, valid_at, invalid_at, confidence, metadata)
+                VALUES ($1::uuid, $2, $3, $4, $5, $6, $7)
+                RETURNING id::text
+                """,
+                node_id,
+                content,
+                source,
+                valid_at or datetime.now(timezone.utc),
+                invalid_at,
+                confidence,
+                json.dumps(metadata or {})
+            )
+            logger.info(
+                f"add_fact(node_id={node_id}) executed in {time.perf_counter() - start:.3f}s"
+            )
+
+        logger.debug(
+            f"add_fact total elapsed {time.perf_counter() - start_total:.3f}s (statement_timeout={st_ms}ms, lock_timeout={lock_ms}ms)"
+        )
         return result["id"]
 
 
@@ -1037,19 +1131,47 @@ async def get_graph_statistics() -> Dict[str, Any]:
         Graph statistics
     """
     async with db_pool.acquire() as conn:
-        # Get basic counts
-        node_count = await conn.fetchval("SELECT COUNT(*) FROM nodes")
-        edge_count = await conn.fetchval("SELECT COUNT(*) FROM edges")
-        fact_count = await conn.fetchval("SELECT COUNT(*) FROM facts")
+        # Server-side timeouts
+        try:
+            st_ms = int(os.getenv("POSTGRES_STATEMENT_TIMEOUT_MS", "20000"))
+        except Exception:
+            st_ms = 20000
+        try:
+            lock_ms = int(os.getenv("POSTGRES_LOCK_TIMEOUT_MS", "5000"))
+        except Exception:
+            lock_ms = 5000
 
-        # Get nodes by type
-        type_results = await conn.fetch(
-            """
-            SELECT type, COUNT(*) as count
-            FROM nodes
-            GROUP BY type
-            ORDER BY count DESC
-            """
+        total_start = time.perf_counter()
+        async with conn.transaction():
+            await conn.execute(f"SET LOCAL statement_timeout = {st_ms}")
+            await conn.execute(f"SET LOCAL lock_timeout = {lock_ms}")
+
+            t = time.perf_counter()
+            node_count = await conn.fetchval("SELECT COUNT(*) FROM nodes")
+            logger.info(f"get_graph_statistics: nodes count in {time.perf_counter() - t:.3f}s")
+
+            t = time.perf_counter()
+            edge_count = await conn.fetchval("SELECT COUNT(*) FROM edges")
+            logger.info(f"get_graph_statistics: edges count in {time.perf_counter() - t:.3f}s")
+
+            t = time.perf_counter()
+            fact_count = await conn.fetchval("SELECT COUNT(*) FROM facts")
+            logger.info(f"get_graph_statistics: facts count in {time.perf_counter() - t:.3f}s")
+
+            # Get nodes by type
+            t = time.perf_counter()
+            type_results = await conn.fetch(
+                """
+                SELECT type, COUNT(*) as count
+                FROM nodes
+                GROUP BY type
+                ORDER BY count DESC
+                """
+            )
+            logger.info(f"get_graph_statistics: nodes_by_type in {time.perf_counter() - t:.3f}s")
+
+        logger.debug(
+            f"get_graph_statistics total elapsed {time.perf_counter() - total_start:.3f}s (statement_timeout={st_ms}ms, lock_timeout={lock_ms}ms)"
         )
 
         nodes_by_type = {row["type"]: row["count"] for row in type_results}
@@ -1075,28 +1197,50 @@ async def get_node_by_name(name: str, node_type: Optional[str] = None) -> Option
         Node data or None if not found
     """
     async with db_pool.acquire() as conn:
-        if node_type:
-            result = await conn.fetchrow(
-                """
-                SELECT id::text, name, type, description, metadata, created_at, updated_at
-                FROM nodes
-                WHERE name = $1 AND type = $2
-                """,
-                name,
-                node_type
-            )
-        else:
-            result = await conn.fetchrow(
-                """
-                SELECT id::text, name, type, description, metadata, created_at, updated_at
-                FROM nodes
-                WHERE name = $1
-                ORDER BY created_at DESC
-                LIMIT 1
-                """,
-                name
+        # Server-side timeouts
+        try:
+            st_ms = int(os.getenv("POSTGRES_STATEMENT_TIMEOUT_MS", "20000"))
+        except Exception:
+            st_ms = 20000
+        try:
+            lock_ms = int(os.getenv("POSTGRES_LOCK_TIMEOUT_MS", "5000"))
+        except Exception:
+            lock_ms = 5000
+
+        start_total = time.perf_counter()
+        async with conn.transaction():
+            await conn.execute(f"SET LOCAL statement_timeout = {st_ms}")
+            await conn.execute(f"SET LOCAL lock_timeout = {lock_ms}")
+
+            start = time.perf_counter()
+            if node_type:
+                result = await conn.fetchrow(
+                    """
+                    SELECT id::text, name, type, description, metadata, created_at, updated_at
+                    FROM nodes
+                    WHERE name = $1 AND type = $2
+                    """,
+                    name,
+                    node_type
+                )
+            else:
+                result = await conn.fetchrow(
+                    """
+                    SELECT id::text, name, type, description, metadata, created_at, updated_at
+                    FROM nodes
+                    WHERE name = $1
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    name
+                )
+            logger.info(
+                f"get_node_by_name(name='{name}') executed in {time.perf_counter() - start:.3f}s"
             )
 
+        logger.debug(
+            f"get_node_by_name total elapsed {time.perf_counter() - start_total:.3f}s (statement_timeout={st_ms}ms, lock_timeout={lock_ms}ms)"
+        )
         if result:
             return {
                 "id": result["id"],
@@ -1160,10 +1304,36 @@ async def clear_graph() -> bool:
     """
     try:
         async with db_pool.acquire() as conn:
-            await conn.execute("DELETE FROM facts")
-            await conn.execute("DELETE FROM edges")
-            await conn.execute("DELETE FROM nodes")
-        logger.warning("Cleared all data from knowledge graph")
+            # Server-side timeouts
+            try:
+                st_ms = int(os.getenv("POSTGRES_STATEMENT_TIMEOUT_MS", "60000"))
+            except Exception:
+                st_ms = 60000
+            try:
+                lock_ms = int(os.getenv("POSTGRES_LOCK_TIMEOUT_MS", "10000"))
+            except Exception:
+                lock_ms = 10000
+
+            total = time.perf_counter()
+            async with conn.transaction():
+                await conn.execute(f"SET LOCAL statement_timeout = {st_ms}")
+                await conn.execute(f"SET LOCAL lock_timeout = {lock_ms}")
+
+                t = time.perf_counter()
+                await conn.execute("DELETE FROM facts")
+                logger.info(f"clear_graph: deleted facts in {time.perf_counter() - t:.3f}s")
+
+                t = time.perf_counter()
+                await conn.execute("DELETE FROM edges")
+                logger.info(f"clear_graph: deleted edges in {time.perf_counter() - t:.3f}s")
+
+                t = time.perf_counter()
+                await conn.execute("DELETE FROM nodes")
+                logger.info(f"clear_graph: deleted nodes in {time.perf_counter() - t:.3f}s")
+
+            logger.warning(
+                f"Cleared all data from knowledge graph in {time.perf_counter() - total:.3f}s (statement_timeout={st_ms}ms, lock_timeout={lock_ms}ms)"
+            )
         return True
     except Exception as e:
         logger.error(f"Failed to clear graph: {e}")
