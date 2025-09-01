@@ -4,6 +4,7 @@ Main Pydantic AI agent for agentic RAG with knowledge graph.
 
 import os
 import logging
+import time
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 
@@ -28,6 +29,7 @@ from .tools import (
     EntityRelationshipInput,
     EntityTimelineInput
 )
+from .context import capture_search_results, emit_retrieval_event
 
 # Load environment variables
 load_dotenv()
@@ -85,13 +87,53 @@ async def vector_search(
         limit=limit
     )
     
+    # Emit retrieval start
+    session_id = getattr(getattr(ctx, 'deps', None), 'session_id', None)
+    start_ts = time.perf_counter()
+    if session_id:
+        await emit_retrieval_event(session_id, {
+            "type": "retrieval",
+            "event": "start",
+            "tool": "vector_search",
+            "args": {"query": query, "limit": limit}
+        })
+
     results = await vector_search_tool(input_data)
-    
+
     # Capture results for source tracking
-    from .context import capture_search_results
     capture_search_results(results)
-    
-    # Convert results to dict for agent
+
+    # Prepare simplified results
+    simplified = [
+        {
+            "content": r.content,
+            "score": r.score,
+            "document_title": r.document_title,
+            "document_source": r.document_source,
+            "chunk_id": r.chunk_id
+        }
+        for r in results[:8]
+    ]
+
+    # Emit retrieval results and end
+    if session_id:
+        try:
+            await emit_retrieval_event(session_id, {
+                "type": "retrieval",
+                "event": "results",
+                "tool": "vector_search",
+                "results": simplified
+            })
+        finally:
+            await emit_retrieval_event(session_id, {
+                "type": "retrieval",
+                "event": "end",
+                "tool": "vector_search",
+                "count": len(results),
+                "elapsed_ms": int((time.perf_counter() - start_ts) * 1000)
+            })
+
+    # Convert results to dict for agent (return full set to preserve behavior)
     return [
         {
             "content": r.content,
@@ -123,10 +165,49 @@ async def graph_search(
         List of facts with associated episodes and temporal data
     """
     input_data = GraphSearchInput(query=query)
-    
+
+    # Emit retrieval start
+    session_id = getattr(getattr(ctx, 'deps', None), 'session_id', None)
+    start_ts = time.perf_counter()
+    if session_id:
+        await emit_retrieval_event(session_id, {
+            "type": "retrieval",
+            "event": "start",
+            "tool": "graph_search",
+            "args": {"query": query}
+        })
+
     results = await graph_search_tool(input_data)
-    
-    # Convert results to dict for agent
+
+    simplified = [
+        {
+            "fact": r.fact,
+            "uuid": r.uuid,
+            "valid_at": r.valid_at,
+            "invalid_at": r.invalid_at,
+            "source_node_uuid": r.source_node_uuid
+        }
+        for r in results[:12]
+    ]
+
+    if session_id:
+        try:
+            await emit_retrieval_event(session_id, {
+                "type": "retrieval",
+                "event": "results",
+                "tool": "graph_search",
+                "results": simplified
+            })
+        finally:
+            await emit_retrieval_event(session_id, {
+                "type": "retrieval",
+                "event": "end",
+                "tool": "graph_search",
+                "count": len(results),
+                "elapsed_ms": int((time.perf_counter() - start_ts) * 1000)
+            })
+
+    # Convert results to dict for agent (return full set to preserve behavior)
     return [
         {
             "fact": r.fact,
@@ -167,13 +248,51 @@ async def hybrid_search(
         text_weight=text_weight
     )
     
+    # Emit retrieval start
+    session_id = getattr(getattr(ctx, 'deps', None), 'session_id', None)
+    start_ts = time.perf_counter()
+    if session_id:
+        await emit_retrieval_event(session_id, {
+            "type": "retrieval",
+            "event": "start",
+            "tool": "hybrid_search",
+            "args": {"query": query, "limit": limit, "text_weight": text_weight}
+        })
+
     results = await hybrid_search_tool(input_data)
-    
-    # Capture results for source tracking
-    from .context import capture_search_results
+
+    # Capture results
     capture_search_results(results)
-    
-    # Convert results to dict for agent
+
+    simplified = [
+        {
+            "content": r.content,
+            "score": r.score,
+            "document_title": r.document_title,
+            "document_source": r.document_source,
+            "chunk_id": r.chunk_id
+        }
+        for r in results[:8]
+    ]
+
+    if session_id:
+        try:
+            await emit_retrieval_event(session_id, {
+                "type": "retrieval",
+                "event": "results",
+                "tool": "hybrid_search",
+                "results": simplified
+            })
+        finally:
+            await emit_retrieval_event(session_id, {
+                "type": "retrieval",
+                "event": "end",
+                "tool": "hybrid_search",
+                "count": len(results),
+                "elapsed_ms": int((time.perf_counter() - start_ts) * 1000)
+            })
+
+    # Convert results to dict for agent (return full set to preserve behavior)
     return [
         {
             "content": r.content,

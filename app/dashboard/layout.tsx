@@ -27,14 +27,15 @@ export default function DashboardLayout({
         } as React.CSSProperties
       }
       className="group/layout"
+      className="group/layout h-svh overflow-hidden"
     >
       <AppSidebar variant="inset" />
-      <SidebarInset>
+      <SidebarInset className="min-h-0 overflow-hidden">
         <LoadingBar />
         <SiteHeader />
-        <div className="flex flex-1 flex-col">
-          <div className={cn("@container/main flex flex-1 flex-col", isChat ? "gap-0" : "gap-2") }>
-            <div className={cn("flex flex-col", isChat ? "gap-4 py-0" : "gap-4 py-4 md:gap-6 md:py-6") }>
+        <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
+          <div className={cn("@container/main flex flex-1 min-h-0 flex-col", isChat ? "gap-0" : "gap-2") }>
+            <div className={cn("flex flex-1 min-h-0 flex-col", isChat ? "gap-4 py-0" : "gap-4 py-4 md:gap-6 md:py-6") }>
               {children}
             </div>
           </div>

@@ -48,6 +48,7 @@ import {
 } from 'lucide-react'
 import { Protect } from '@clerk/nextjs'
 import CustomClerkPricing from '@/components/custom-clerk-pricing'
+import { useRouter, useSearchParams } from 'next/navigation'
 
 // Backend API base URL
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8058'
@@ -102,6 +103,20 @@ type AIEnhancement = {
   status: 'analyzing' | 'complete' | 'error'
 }
 
+function UpgradeCard() {
+  return (
+    <>
+      <div className="text-center py-8">
+        <h1 className="text-center text-2xl font-semibold lg:text-3xl">Upgrade to a paid plan</h1>
+        <p>This page is available on paid plans. Choose a plan that fits your needs.</p>
+      </div>
+      <div className="px-8 lg:px-12">
+        <CustomClerkPricing />
+      </div>
+    </>
+  )
+}
+
 export default function PromptsPage() {
   const [prompts, setPrompts] = useState<Prompt[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -123,19 +138,20 @@ export default function PromptsPage() {
     visibility: 'private' as 'private' | 'public' | 'shared'
   })
 
-  function UpgradeCard() {
-    return (
-      <>
-        <div className="mx-auto max-w-2xl space-y-4 text-center">
-          <h1 className="text-center text-2xl font-semibold lg:text-3xl">Upgrade to a paid plan</h1>
-          <p>This page is available on paid plans. Choose a plan that fits your needs.</p>
-        </div>
-        <div className="px-8 lg:px-12">
-          <CustomClerkPricing />
-        </div>
-      </>
-    )
-  }
+  const searchParams = useSearchParams()
+  const router = useRouter()
+
+  // Open create dialog when arriving with ?create=1, then clean the URL
+  useEffect(() => {
+    const create = searchParams.get('create')
+    if (create === '1') {
+      setIsCreateOpen(true)
+      const params = new URLSearchParams(Array.from(searchParams.entries()))
+      params.delete('create')
+      const query = params.toString()
+      router.replace(`/dashboard/prompts${query ? `?${query}` : ''}`)
+    }
+  }, [searchParams, router])
 
   // Enhanced mock data for prompts
   const mockPrompts: Prompt[] = [

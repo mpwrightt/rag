@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 
 from .agent import rag_agent, AgentDependencies
 
-from .context import get_current_search_results, clear_search_results
+from .context import get_current_search_results, clear_search_results, register_retrieval_listener, unregister_retrieval_listener, emit_retrieval_event
 from .db_utils import (
     initialize_database,
     close_database,
@@ -250,16 +250,25 @@ question_generator = None
 # Helper functions for agent execution
 async def get_or_create_session(request: ChatRequest) -> str:
     """Get existing session or create new one."""
+    # If client supplies a session_id, try to use/validate it but fall back gracefully
     if request.session_id:
-        session = await get_session(request.session_id)
-        if session:
+        try:
+            session = await get_session(request.session_id)
+            if session:
+                return request.session_id
+        except Exception as e:
+            logger.warning("get_session failed, using provided session_id without DB validation: %s", e)
             return request.session_id
     
-    # Create new session
-    return await create_session(
-        user_id=request.user_id,
-        metadata=request.metadata
-    )
+    # Create new session in DB, with graceful fallback to a generated ID
+    try:
+        return await create_session(
+            user_id=request.user_id,
+            metadata=request.metadata
+        )
+    except Exception as e:
+        logger.warning("create_session failed, generating in-memory session id: %s", e)
+        return request.session_id or str(uuid.uuid4())
 
 
 async def get_conversation_context(
@@ -760,39 +769,140 @@ async def chat_stream(request: ChatRequest):
                     ])
                     full_prompt = f"Previous conversation:\n{context_str}\n\nCurrent question: {request.message}"
                 
-                # Save user message immediately
-                await add_message(
-                    session_id=session_id,
-                    role="user",
-                    content=request.message,
-                    metadata={"user_id": request.user_id}
-                )
+                # Save user message immediately (best-effort)
+                try:
+                    await add_message(
+                        session_id=session_id,
+                        role="user",
+                        content=request.message,
+                        metadata={"user_id": request.user_id}
+                    )
+                except Exception as e:
+                    logger.warning("Failed to persist user message; continuing stream: %s", e)
                 
                 full_response = ""
+                # Register live retrieval events listener for this session (graceful fallback)
+                retrieval_queue = None
+                try:
+                    retrieval_queue = register_retrieval_listener(session_id)
+                except Exception:
+                    retrieval_queue = None
                 
-                # Stream using agent.iter() pattern
-                async with rag_agent.iter(full_prompt, deps=deps) as run:
-                    async for node in run:
-                        if rag_agent.is_model_request_node(node):
-                            # Stream tokens from the model
-                            async with node.stream(run.ctx) as request_stream:
-                                async for event in request_stream:
-                                    from pydantic_ai.messages import PartStartEvent, PartDeltaEvent, TextPartDelta
-                                    
-                                    if isinstance(event, PartStartEvent) and event.part.part_kind == 'text':
-                                        delta_content = event.part.content
-                                        yield f"data: {json.dumps({'type': 'text', 'content': delta_content})}\n\n"
-                                        full_response += delta_content
+                # Determine if mock streaming mode is enabled
+                use_mock = False
+                try:
+                    use_mock = bool(
+                        (getattr(request, "metadata", {}) or {}).get("mock_stream")
+                        or (getattr(request, "metadata", {}) or {}).get("mock")
+                        or os.getenv("MOCK_STREAM") == "1"
+                    )
+                except Exception:
+                    use_mock = False
+
+                if use_mock:
+                    # Emit mock retrieval events in the background so we exercise the event bus
+                    async def _emit_mock_retrieval_events():
+                        try:
+                            await emit_retrieval_event(session_id, {
+                                "type": "retrieval",
+                                "event": "start",
+                                "tool": "hybrid_search",
+                                "args": {"query": request.message, "limit": 5, "text_weight": 0.3}
+                            })
+                            await asyncio.sleep(0.1)
+                            await emit_retrieval_event(session_id, {
+                                "type": "retrieval",
+                                "event": "results",
+                                "tool": "hybrid_search",
+                                "results": [
+                                    {"content": "Mock result A", "score": 0.91, "document_title": "Doc A", "document_source": "mock", "chunk_id": "mock-a"},
+                                    {"content": "Mock result B", "score": 0.83, "document_title": "Doc B", "document_source": "mock", "chunk_id": "mock-b"}
+                                ]
+                            })
+                            await asyncio.sleep(0.05)
+                            await emit_retrieval_event(session_id, {
+                                "type": "retrieval",
+                                "event": "end",
+                                "tool": "hybrid_search",
+                                "count": 2,
+                                "elapsed_ms": 180
+                            })
+                        except Exception:
+                            # Never let mock emissions break streaming
+                            pass
+
+                    try:
+                        asyncio.create_task(_emit_mock_retrieval_events())
+                    except Exception:
+                        pass
+
+                    # Stream mock token chunks
+                    for chunk in ["This ", "is ", "a ", "mock ", "stream ", "response."]:
+                        await asyncio.sleep(0.05)
+                        yield f"data: {json.dumps({'type': 'text', 'content': chunk})}\n\n"
+                        full_response += chunk
+                        # Drain any pending retrieval events and stream them
+                        if retrieval_queue is not None:
+                            try:
+                                while True:
+                                    ev = retrieval_queue.get_nowait()
+                                    yield f"data: {json.dumps({'type': 'retrieval', 'session_id': session_id, 'data': ev})}\n\n"
+                            except asyncio.QueueEmpty:
+                                pass
+
+                    # No tool calls when in mock mode
+                    tools_used = []
+                else:
+                    # Stream using agent.iter() pattern
+                    async with rag_agent.iter(full_prompt, deps=deps) as run:
+                        async for node in run:
+                            if rag_agent.is_model_request_node(node):
+                                # Stream tokens from the model
+                                async with node.stream(run.ctx) as request_stream:
+                                    async for event in request_stream:
+                                        from pydantic_ai.messages import PartStartEvent, PartDeltaEvent, TextPartDelta
                                         
-                                    elif isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
-                                        delta_content = event.delta.content_delta
-                                        yield f"data: {json.dumps({'type': 'text', 'content': delta_content})}\n\n"
-                                        full_response += delta_content
-                
-                # Extract tools used from the final result
-                result = run.result
-                tools_used = extract_tool_calls(result)
-                
+                                        if isinstance(event, PartStartEvent) and event.part.part_kind == 'text':
+                                            delta_content = event.part.content
+                                            yield f"data: {json.dumps({'type': 'text', 'content': delta_content})}\n\n"
+                                            full_response += delta_content
+                                            
+                                            # Drain any pending retrieval events and stream them
+                                            if retrieval_queue is not None:
+                                                try:
+                                                    while True:
+                                                        ev = retrieval_queue.get_nowait()
+                                                        yield f"data: {json.dumps({'type': 'retrieval', 'session_id': session_id, 'data': ev})}\n\n"
+                                                except asyncio.QueueEmpty:
+                                                    pass
+                                            
+                                        elif isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
+                                            delta_content = event.delta.content_delta
+                                            yield f"data: {json.dumps({'type': 'text', 'content': delta_content})}\n\n"
+                                            full_response += delta_content
+                                            
+                                            # Drain any pending retrieval events and stream them
+                                            if retrieval_queue is not None:
+                                                try:
+                                                    while True:
+                                                        ev = retrieval_queue.get_nowait()
+                                                        yield f"data: {json.dumps({'type': 'retrieval', 'session_id': session_id, 'data': ev})}\n\n"
+                                                except asyncio.QueueEmpty:
+                                                    pass
+                    
+                    # Extract tools used from the final result
+                    result = run.result
+                    tools_used = extract_tool_calls(result)
+
+                # Final drain of retrieval events after model finished
+                if retrieval_queue is not None:
+                    try:
+                        while True:
+                            ev = retrieval_queue.get_nowait()
+                            yield f"data: {json.dumps({'type': 'retrieval', 'session_id': session_id, 'data': ev})}\n\n"
+                    except asyncio.QueueEmpty:
+                        pass
+
                 # Send tools used information
                 if tools_used:
                     tools_data = [
@@ -853,32 +963,37 @@ async def chat_stream(request: ChatRequest):
                                 "I've generated an interactive knowledge graph below.\n\n"
                                 + safe_response
                             )
-                        full_response = safe_response
+                        response_for_save = safe_response
                     except Exception:
                         # Do not fail the stream due to message post-processing
                         pass
-                
-                # Save assistant response
-                await add_message(
-                    session_id=session_id,
-                    role="assistant",
-                    content=full_response,
-                    metadata={
-                        "streamed": True,
-                        "tool_calls": len(tools_used),
-                        **({"graph": live_graph} if graph_included and live_graph else {})
-                    }
-                )
-                
+                else:
+                    response_for_save = full_response
+
+                # Save assistant message after streaming completes (best-effort)
+                try:
+                    await add_message(
+                        session_id=session_id,
+                        role="assistant",
+                        content=response_for_save,
+                        metadata={"user_id": request.user_id}
+                    )
+                except Exception as e:
+                    logger.warning("Failed to persist assistant message; continuing: %s", e)
+
+                # Final end event
                 yield f"data: {json.dumps({'type': 'end'})}\n\n"
-                
             except Exception as e:
-                logger.error(f"Stream error: {e}")
-                error_chunk = {
-                    "type": "error",
-                    "content": f"Stream error: {str(e)}"
-                }
-                yield f"data: {json.dumps(error_chunk)}\n\n"
+                # Stream error event and end
+                yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+                yield f"data: {json.dumps({'type': 'end'})}\n\n"
+            finally:
+                # Ensure we always unregister the retrieval listener
+                try:
+                    if retrieval_queue is not None:
+                        unregister_retrieval_listener(session_id, retrieval_queue)
+                except Exception:
+                    pass
         
         return StreamingResponse(
             generate_stream(),

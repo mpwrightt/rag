@@ -44,6 +44,7 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarTrigger,
 } from "@/components/ui/sidebar"
 import { ChatMaxingIconColoured } from "@/components/logo"
 import { Badge } from "@/components/ui/badge"
@@ -141,13 +142,13 @@ const data = {
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   return (
-    <Sidebar collapsible="offcanvas" {...props}>
+    <Sidebar collapsible="icon" {...props}>
       <SidebarHeader>
         <SidebarMenu>
-          <SidebarMenuItem>
+          <SidebarMenuItem className="flex items-center gap-2 group-data-[collapsible=icon]:flex-col group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:gap-1">
             <SidebarMenuButton
               asChild
-              className="data-[slot=sidebar-menu-button]:!p-1.5"
+              className="data-[slot=sidebar-menu-button]:!p-1.5 flex-1 group-data-[collapsible=icon]:hidden"
             >
               <Link href="/">
                 <ChatMaxingIconColoured className="!size-6" />
@@ -155,6 +156,12 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 <Badge variant="outline" className="text-muted-foreground text-xs">RAG AI</Badge>
               </Link>
             </SidebarMenuButton>
+            {/* Compact logo shown only when collapsed */}
+            <div className="hidden items-center justify-center shrink-0 overflow-visible group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:p-1">
+              <ChatMaxingIconColoured className="!size-5" aria-hidden="true" />
+            </div>
+            {/* Always-visible toggle; center when collapsed */}
+            <SidebarTrigger className="size-6" />
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>

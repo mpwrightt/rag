@@ -27,6 +27,13 @@ export function NavMain({
   const [optimisticPath, setOptimisticPath] = useOptimistic(pathname)
   const [isPending, startTransition] = useTransition()
 
+  const handleQuickCreate = () => {
+    startTransition(() => {
+      setOptimisticPath('/dashboard/prompts')
+      router.push('/dashboard/prompts?create=1')
+    })
+  }
+
   const handleNavigation = (url: string) => {
     startTransition(() => {
       setOptimisticPath(url)
@@ -37,15 +44,16 @@ export function NavMain({
   return (
     <SidebarGroup>
       <SidebarGroupContent className="flex flex-col gap-2" data-pending={isPending ? "" : undefined}>
-        {/* Quick create button */}
+        {/* New Prompt button */}
         <SidebarMenu>
           <SidebarMenuItem className="flex items-center gap-2 mb-4">
             <SidebarMenuButton
-              tooltip="Quick Create"
+              tooltip="New Prompt"
               className="bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground active:bg-primary/90 active:text-primary-foreground min-w-8 duration-200 ease-linear"
+              onClick={handleQuickCreate}
             >
               <IconCirclePlusFilled />
-              <span>Quick Create</span>
+              <span>New Prompt</span>
             </SidebarMenuButton>
             <Button
               size="icon"

@@ -17,6 +17,7 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/h
 import { Progress } from '@/components/ui/progress'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { 
   Send, 
   Bot, 
@@ -65,7 +66,8 @@ import {
   Share2,
   Edit3,
   SlidersHorizontal,
-  Menu
+  Menu,
+  Check
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Protect } from '@clerk/nextjs'
@@ -95,10 +97,8 @@ type ConfidenceMetrics = {
 type MessageMetadata = {
   processingTime?: number
   tokens?: number
-  model?: string
   temperature?: number
   searchQuery?: string
-  searchMode?: 'vector' | 'hybrid' | 'keyword'
 }
 
 type ChatMessage = {
@@ -120,8 +120,6 @@ type ChatSettings = {
   systemPrompt: string
   temperature: number
   maxTokens: number
-  model: 'gpt-4-turbo' | 'gpt-4' | 'gpt-3.5-turbo' | 'claude-3-sonnet'
-  searchMode: 'vector' | 'hybrid' | 'keyword'
   contextMode: 'all' | 'collections' | 'documents'
   selectedCollections: string[]
   selectedDocuments: string[]
@@ -130,7 +128,8 @@ type ChatSettings = {
   enableConfidence: boolean
   voiceEnabled: boolean
   topK: number
-  similarityThreshold: number
+  similarityThreshold: number,
+  searchMode: 'hybrid' | 'vector' | 'keyword'
 }
 
 type Collection = {
@@ -326,6 +325,7 @@ export default function ModernRAGChatPage() {
 
   // UI state
   const [showSources, setShowSources] = useState(false)
+  const [showRetrievalSidebar, setShowRetrievalSidebar] = useState(false)
 
   // Dynamic questions state
   const [suggestedQuestions, setSuggestedQuestions] = useState<string[]>([])
@@ -336,14 +336,13 @@ export default function ModernRAGChatPage() {
   const [documents, setDocuments] = useState<Document[]>([])
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [activeSources, setActiveSources] = useState<Source[]>([])
+  const [liveRetrieval, setLiveRetrieval] = useState<any[]>([])
 
   // Settings
   const [chatSettings, setChatSettings] = useState<ChatSettings>({
     systemPrompt: 'You are a helpful AI assistant with access to a comprehensive knowledge base. Provide accurate, detailed responses based on the available context. Always cite your sources when referencing specific documents.',
     temperature: 0.7,
     maxTokens: 2000,
-    model: 'gpt-4-turbo',
-    searchMode: 'hybrid',
     contextMode: 'all',
     selectedCollections: [],
     selectedDocuments: [],
@@ -353,6 +352,7 @@ export default function ModernRAGChatPage() {
     voiceEnabled: false,
     topK: 5,
     similarityThreshold: 0.7,
+    searchMode: 'hybrid',
   })
 
   // Refs
@@ -487,9 +487,7 @@ export default function ModernRAGChatPage() {
         reasoning_quality: 0
       },
       metadata: {
-        model: chatSettings.model,
         temperature: chatSettings.temperature,
-        searchMode: chatSettings.searchMode
       }
     }
 
@@ -509,8 +507,6 @@ export default function ModernRAGChatPage() {
             system_prompt: chatSettings.systemPrompt,
             temperature: chatSettings.temperature,
             max_tokens: chatSettings.maxTokens,
-            model: chatSettings.model,
-            search_mode: chatSettings.searchMode,
             enable_sources: chatSettings.enableSources,
             enable_confidence: chatSettings.enableConfidence,
             top_k: chatSettings.topK,
@@ -555,6 +551,8 @@ export default function ModernRAGChatPage() {
                   }
                   return newMessages
                 })
+              } else if (data.type === 'retrieval') {
+                setLiveRetrieval(prev => [...prev, data.data || data])
               } else if (data.type === 'sources' && data.sources) {
                 setMessages(prev => {
                   const newMessages = [...prev]
@@ -590,6 +588,7 @@ export default function ModernRAGChatPage() {
                   }
                   return newMessages
                 })
+                setLiveRetrieval([])
               }
             } catch (e) {
               console.error('Error parsing stream data:', e)
@@ -683,7 +682,7 @@ export default function ModernRAGChatPage() {
       condition={(has) => has({ plan: 'pro' })}
       fallback={<UpgradeCard />}
     >
-      <div className="flex h-full min-h-0 flex-col bg-background">
+      <div className="flex flex-1 min-h-0 flex-col bg-background overflow-hidden">
         {/* Top Toolbar */}
         <div className="flex-shrink-0 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 p-4 shadow-sm">
           <div className="flex items-center justify-between">
@@ -810,54 +809,18 @@ export default function ModernRAGChatPage() {
                   </div>
                 </PopoverContent>
               </Popover>
-              
-              {/* Search Mode Quick Access */}
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button variant="outline" size="sm">
-                    {chatSettings.searchMode === 'hybrid' ? <Network className="w-4 h-4 mr-2" /> :
-                     chatSettings.searchMode === 'vector' ? <Database className="w-4 h-4 mr-2" /> :
-                     <Search className="w-4 h-4 mr-2" />}
-                    {chatSettings.searchMode}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-64" align="end">
-                  <div className="space-y-3">
-                    <label className="text-sm font-medium">Search Method</label>
-                    <div className="space-y-2">
-                      {[
-                        { value: 'hybrid', label: 'Hybrid Search', desc: 'Vector + keyword matching', icon: Network },
-                        { value: 'vector', label: 'Vector Search', desc: 'Semantic similarity', icon: Database },
-                        { value: 'keyword', label: 'Keyword Search', desc: 'Exact text matching', icon: Search }
-                      ].map((mode) => {
-                        const IconComponent = mode.icon
-                        return (
-                          <div
-                            key={mode.value}
-                            className={cn(
-                              "flex items-start gap-3 p-3 rounded-lg cursor-pointer transition-colors",
-                              chatSettings.searchMode === mode.value
-                                ? "bg-primary/10 border border-primary/20"
-                                : "hover:bg-muted"
-                            )}
-                            onClick={() => setChatSettings(prev => ({ ...prev, searchMode: mode.value as any }))}
-                          >
-                            <IconComponent className="w-4 h-4 mt-0.5" />
-                            <div className="flex-1">
-                              <div className="font-medium text-sm">{mode.label}</div>
-                              <div className="text-xs text-muted-foreground">{mode.desc}</div>
-                            </div>
-                            {chatSettings.searchMode === mode.value && (
-                              <div className="w-2 h-2 bg-primary rounded-full mt-1" />
-                            )}
-                          </div>
-                        )
-                      })}
-                    </div>
-                  </div>
-                </PopoverContent>
-              </Popover>
 
+              {/* Retrieval Path Sidebar Trigger */}
+              <Button
+                variant="default"
+                size="sm"
+                onClick={() => setShowRetrievalSidebar(true)}
+                className="bg-purple-600 hover:bg-purple-600/90 text-white"
+              >
+                <GitBranch className="w-4 h-4 mr-2" />
+                Retrieval Path
+              </Button>
+              
               {/* Settings Modal Trigger */}
               <Popover>
                 <PopoverTrigger asChild>
@@ -869,32 +832,11 @@ export default function ModernRAGChatPage() {
                 <PopoverContent className="w-96" align="end">
                   <Tabs defaultValue="model" className="space-y-4">
                     <TabsList className="grid w-full grid-cols-2">
-                      <TabsTrigger value="model">Model</TabsTrigger>
+                      <TabsTrigger value="model">General</TabsTrigger>
                       <TabsTrigger value="advanced">Advanced</TabsTrigger>
                     </TabsList>
 
                     <TabsContent value="model" className="space-y-4">
-                      {/* Model Selection */}
-                      <div className="space-y-3">
-                        <label className="text-sm font-medium">AI Model</label>
-                        <Select 
-                          value={chatSettings.model} 
-                          onValueChange={(value: ChatSettings['model']) => 
-                            setChatSettings(prev => ({ ...prev, model: value }))
-                          }
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="gpt-4-turbo">GPT-4 Turbo (Recommended)</SelectItem>
-                            <SelectItem value="gpt-4">GPT-4</SelectItem>
-                            <SelectItem value="gpt-3.5-turbo">GPT-3.5 Turbo</SelectItem>
-                            <SelectItem value="claude-3-sonnet">Claude 3 Sonnet</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-
                       {/* Temperature */}
                       <div className="space-y-3">
                         <label className="text-sm font-medium">Creativity: {chatSettings.temperature.toFixed(1)}</label>
@@ -1027,7 +969,7 @@ export default function ModernRAGChatPage() {
         {/* Chat Messages Area */}
         <div className="flex-1 flex flex-col min-h-0">
           {/* Messages Area */}
-          <div className="flex-1 overflow-y-auto p-4 min-h-0">
+          <div className="flex-1 overflow-y-auto overscroll-contain p-4 min-h-0">
             <div className="max-w-4xl mx-auto">
               {messages.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-full py-12 w-full overflow-x-hidden">
@@ -1166,12 +1108,10 @@ export default function ModernRAGChatPage() {
                                         <Clock className="w-3.5 h-3.5" />
                                         <span className="font-medium">{message.timestamp.toLocaleTimeString()}</span>
                                       </div>
-                                      {message.metadata?.model && (
-                                        <Badge variant="secondary" className="text-xs px-2.5 py-1 bg-gray-100 text-gray-700 font-medium">
-                                          <Sparkles className="w-3 h-3 mr-1" />
-                                          {message.metadata.model.replace('gpt-', 'GPT-')}
-                                        </Badge>
-                                      )}
+                                      <Badge variant="secondary" className="text-xs px-2.5 py-1 bg-gray-100 text-gray-700 font-medium">
+                                        <Sparkles className="w-3 h-3 mr-1" />
+                                        Gemini
+                                      </Badge>
                                       {message.metadata?.processingTime && (
                                         <Badge variant="outline" className="text-xs px-2 py-0.5 text-gray-600">
                                           {message.metadata.processingTime}ms
@@ -1658,6 +1598,101 @@ export default function ModernRAGChatPage() {
             </div>
           </div>
         </div>
+
+        {/* Retrieval Path Right Sidebar */}
+        <Sheet open={showRetrievalSidebar} onOpenChange={setShowRetrievalSidebar}>
+          <SheetContent side="right" className="sm:max-w-md">
+            <SheetHeader>
+              <SheetTitle className="flex items-center gap-2">
+                <GitBranch className="w-4 h-4 text-purple-600" />
+                Retrieval Path
+              </SheetTitle>
+            </SheetHeader>
+            <div className="p-4 pt-0 space-y-4">
+              {/* Live status */}
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <div className={cn(
+                  "w-2 h-2 rounded-full",
+                  isLoading ? "bg-yellow-500 animate-pulse" : "bg-green-500"
+                )} />
+                <span>{isLoading ? 'Listening to retrieval events…' : 'Idle'}</span>
+                {liveRetrieval.length > 0 && (
+                  <Badge variant="secondary" className="ml-auto">{liveRetrieval.length} events</Badge>
+                )}
+              </div>
+
+              {/* Timeline */}
+              <div className="relative">
+                <div className="absolute left-3 top-0 bottom-0 w-px bg-border" />
+                <div className="space-y-4">
+                  {liveRetrieval.length === 0 && (
+                    <div className="text-sm text-muted-foreground">
+                      No retrieval activity yet. Ask a question to see the AI's search path.
+                    </div>
+                  )}
+                  {liveRetrieval.map((ev: any, idx: number) => {
+                    const type = ev?.event || ev?.type || 'event'
+                    const tool = ev?.tool || ev?.args?.tool || 'retrieval'
+                    const title = type === 'start'
+                      ? 'Search started'
+                      : type === 'results'
+                        ? 'Results received'
+                        : type === 'end'
+                          ? 'Search completed'
+                          : String(type).charAt(0).toUpperCase() + String(type).slice(1)
+                    const Icon = type === 'start' ? Search : type === 'end' ? Check : FileText
+                    return (
+                      <div key={idx} className="relative pl-8">
+                        <div className="absolute left-0 top-0">
+                          <span className={cn(
+                            "inline-flex items-center justify-center w-6 h-6 rounded-full border bg-background",
+                            type === 'start' ? 'border-blue-200 text-blue-600' :
+                            type === 'end' ? 'border-green-200 text-green-600' :
+                            'border-purple-200 text-purple-700'
+                          )}>
+                            <Icon className="w-3.5 h-3.5" />
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
+                          <Badge variant="outline" className="px-1.5 py-0 text-[10px] capitalize">{tool}</Badge>
+                          <span className="font-medium text-foreground text-sm">{title}</span>
+                        </div>
+                        {type === 'results' && Array.isArray(ev?.results) && (
+                          <div className="space-y-2">
+                            {ev.results.slice(0, 3).map((r: any, rIdx: number) => (
+                              <Card key={rIdx} className="p-3">
+                                <div className="flex items-start gap-3">
+                                  <div className="w-8 h-8 rounded-md bg-purple-100 flex items-center justify-center flex-shrink-0">
+                                    <FileText className="w-4 h-4 text-purple-600" />
+                                  </div>
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex items-center justify-between gap-2">
+                                      <div className="truncate text-sm font-medium">
+                                        {r.document_title || r.filename || r.id || 'Result'}
+                                      </div>
+                                      {typeof r.score !== 'undefined' && (
+                                        <Badge variant="secondary" className="text-[10px]">
+                                          {Math.round((r.score || r.relevance_score || 0) * 100)}%
+                                        </Badge>
+                                      )}
+                                    </div>
+                                    {r.preview && (
+                                      <p className="text-xs text-muted-foreground line-clamp-2 mt-1">{r.preview}</p>
+                                    )}
+                                  </div>
+                                </div>
+                              </Card>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            </div>
+          </SheetContent>
+        </Sheet>
 
         {/* Sources Modal */}
         {showSources && (
