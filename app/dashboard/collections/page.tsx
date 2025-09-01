@@ -151,7 +151,6 @@ function DraggableDocument({ document, onRemove }: {
     listeners,
     setNodeRef,
     transform,
-    transition,
     isDragging,
   } = useDraggable({
     id: document.id,
@@ -160,7 +159,6 @@ function DraggableDocument({ document, onRemove }: {
 
   const style = {
     transform: CSS.Transform.toString(transform),
-    transition,
   }
 
   return (
