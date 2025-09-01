@@ -800,32 +800,81 @@ async def chat_stream(request: ChatRequest):
                     use_mock = False
 
                 if use_mock:
-                    # Emit mock retrieval events in the background so we exercise the event bus
+                    # Emit mock staged retrieval events (guided_retrieval: graph -> vector)
                     async def _emit_mock_retrieval_events():
                         try:
+                            # Orchestrator start
                             await emit_retrieval_event(session_id, {
                                 "type": "retrieval",
                                 "event": "start",
-                                "tool": "hybrid_search",
-                                "args": {"query": request.message, "limit": 5, "text_weight": 0.3}
+                                "tool": "guided_retrieval",
+                                "args": {"query": request.message, "limit": 5}
                             })
-                            await asyncio.sleep(0.1)
+
+                            # Graph stage
+                            await emit_retrieval_event(session_id, {
+                                "type": "retrieval",
+                                "event": "start",
+                                "tool": "guided_retrieval",
+                                "stage": "graph"
+                            })
+                            await asyncio.sleep(0.05)
+                            mock_graph = [
+                                {"fact": "Company X acquired Startup Y in 2023", "uuid": "g-1"},
+                                {"fact": "Startup Y builds vector databases", "uuid": "g-2"}
+                            ]
                             await emit_retrieval_event(session_id, {
                                 "type": "retrieval",
                                 "event": "results",
-                                "tool": "hybrid_search",
-                                "results": [
-                                    {"content": "Mock result A", "score": 0.91, "document_title": "Doc A", "document_source": "mock", "chunk_id": "mock-a"},
-                                    {"content": "Mock result B", "score": 0.83, "document_title": "Doc B", "document_source": "mock", "chunk_id": "mock-b"}
-                                ]
+                                "tool": "guided_retrieval",
+                                "stage": "graph",
+                                "results": mock_graph
                             })
-                            await asyncio.sleep(0.05)
                             await emit_retrieval_event(session_id, {
                                 "type": "retrieval",
                                 "event": "end",
-                                "tool": "hybrid_search",
-                                "count": 2,
-                                "elapsed_ms": 180
+                                "tool": "guided_retrieval",
+                                "stage": "graph",
+                                "count": len(mock_graph),
+                                "elapsed_ms": 60
+                            })
+
+                            # Vector stage
+                            await emit_retrieval_event(session_id, {
+                                "type": "retrieval",
+                                "event": "start",
+                                "tool": "guided_retrieval",
+                                "stage": "vector",
+                                "args": {"limit": 5}
+                            })
+                            await asyncio.sleep(0.05)
+                            mock_vector = [
+                                {"content": "Mock result A", "score": 0.91, "document_title": "Doc A", "document_source": "mock", "chunk_id": "mock-a"},
+                                {"content": "Mock result B", "score": 0.83, "document_title": "Doc B", "document_source": "mock", "chunk_id": "mock-b"}
+                            ]
+                            await emit_retrieval_event(session_id, {
+                                "type": "retrieval",
+                                "event": "results",
+                                "tool": "guided_retrieval",
+                                "stage": "vector",
+                                "results": mock_vector
+                            })
+                            await emit_retrieval_event(session_id, {
+                                "type": "retrieval",
+                                "event": "end",
+                                "tool": "guided_retrieval",
+                                "stage": "vector",
+                                "count": len(mock_vector),
+                                "elapsed_ms": 70
+                            })
+
+                            # Orchestrator end
+                            await emit_retrieval_event(session_id, {
+                                "type": "retrieval",
+                                "event": "end",
+                                "tool": "guided_retrieval",
+                                "count": len(mock_graph) + len(mock_vector),
+                                "elapsed_ms": 140
                             })
                         except Exception:
                             # Never let mock emissions break streaming

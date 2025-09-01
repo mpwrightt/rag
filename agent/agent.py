@@ -306,6 +306,149 @@ async def hybrid_search(
 
 
 @rag_agent.tool
+async def guided_retrieval(
+    ctx: RunContext[AgentDependencies],
+    query: str,
+    limit: int = 10
+) -> Dict[str, Any]:
+    """
+    Stepwise retrieval that first queries the Knowledge Graph to extract context,
+    then performs Vector Search with an augmented query. Emits granular retrieval
+    events for each stage (KG start/results/end, then Vector start/results/end).
+
+    Args:
+        query: User question to search
+        limit: Maximum number of vector results to return (1-50)
+
+    Returns:
+        Combined dict including augmented query, graph and vector top results, and counts
+    """
+    session_id = getattr(getattr(ctx, 'deps', None), 'session_id', None)
+    start_ts = time.perf_counter()
+
+    if session_id:
+        await emit_retrieval_event(session_id, {
+            "type": "retrieval",
+            "event": "start",
+            "tool": "guided_retrieval",
+            "args": {"query": query, "limit": limit}
+        })
+
+    # Stage 1: Knowledge Graph search
+    kg_start = time.perf_counter()
+    if session_id:
+        await emit_retrieval_event(session_id, {
+            "type": "retrieval",
+            "event": "start",
+            "tool": "guided_retrieval",
+            "stage": "graph"
+        })
+    graph_results_models = await graph_search_tool(GraphSearchInput(query=query))
+    simplified_graph = [
+        {
+            "fact": r.fact,
+            "uuid": r.uuid,
+            "valid_at": r.valid_at,
+            "invalid_at": r.invalid_at,
+            "source_node_uuid": r.source_node_uuid
+        }
+        for r in graph_results_models[:12]
+    ]
+    if session_id:
+        try:
+            await emit_retrieval_event(session_id, {
+                "type": "retrieval",
+                "event": "results",
+                "tool": "guided_retrieval",
+                "stage": "graph",
+                "results": simplified_graph
+            })
+        finally:
+            await emit_retrieval_event(session_id, {
+                "type": "retrieval",
+                "event": "end",
+                "tool": "guided_retrieval",
+                "stage": "graph",
+                "count": len(graph_results_models),
+                "elapsed_ms": int((time.perf_counter() - kg_start) * 1000)
+            })
+
+    # Augment query using top KG facts (simple concatenation to bias semantics)
+    top_facts = [g.get("fact") for g in simplified_graph if g.get("fact")]
+    if top_facts:
+        # Keep augmentation concise
+        augmentation = "; ".join(top_facts[:3])
+        augmented_query = f"{query}. Context: {augmentation}"
+    else:
+        augmented_query = query
+
+    # Stage 2: Vector search with augmented query
+    vec_start = time.perf_counter()
+    if session_id:
+        await emit_retrieval_event(session_id, {
+            "type": "retrieval",
+            "event": "start",
+            "tool": "guided_retrieval",
+            "stage": "vector",
+            "args": {"limit": limit}
+        })
+    vector_results_models = await vector_search_tool(VectorSearchInput(query=augmented_query, limit=limit))
+
+    # Capture for source tracking (vector chunks only)
+    capture_search_results(vector_results_models)
+
+    simplified_vector = [
+        {
+            "content": r.content,
+            "score": r.score,
+            "document_title": r.document_title,
+            "document_source": r.document_source,
+            "chunk_id": r.chunk_id
+        }
+        for r in vector_results_models[:8]
+    ]
+
+    if session_id:
+        try:
+            await emit_retrieval_event(session_id, {
+                "type": "retrieval",
+                "event": "results",
+                "tool": "guided_retrieval",
+                "stage": "vector",
+                "results": simplified_vector
+            })
+        finally:
+            await emit_retrieval_event(session_id, {
+                "type": "retrieval",
+                "event": "end",
+                "tool": "guided_retrieval",
+                "stage": "vector",
+                "count": len(vector_results_models),
+                "elapsed_ms": int((time.perf_counter() - vec_start) * 1000)
+            })
+
+    # Final end for the orchestrator
+    if session_id:
+        await emit_retrieval_event(session_id, {
+            "type": "retrieval",
+            "event": "end",
+            "tool": "guided_retrieval",
+            "count": len(vector_results_models) + len(graph_results_models),
+            "elapsed_ms": int((time.perf_counter() - start_ts) * 1000)
+        })
+
+    return {
+        "augmented_query": augmented_query,
+        "graph_top": simplified_graph,
+        "vector_top": simplified_vector,
+        "counts": {
+            "graph": len(graph_results_models),
+            "vector": len(vector_results_models)
+        }
+    }
+
+
+@rag_agent.tool
 async def get_document(
     ctx: RunContext[AgentDependencies],
     document_id: str

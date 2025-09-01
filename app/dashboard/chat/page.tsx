@@ -552,6 +552,7 @@ export default function ModernRAGChatPage() {
                   return newMessages
                 })
               } else if (data.type === 'retrieval') {
+                console.debug('[Retrieval event]', data)
                 setLiveRetrieval(prev => [...prev, data.data || data])
               } else if (data.type === 'sources' && data.sources) {
                 setMessages(prev => {
@@ -588,7 +589,6 @@ export default function ModernRAGChatPage() {
                   }
                   return newMessages
                 })
-                setLiveRetrieval([])
               }
             } catch (e) {
               console.error('Error parsing stream data:', e)
