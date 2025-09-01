@@ -32,7 +32,7 @@ args = "python -m uvicorn agent.api:app --host 0.0.0.0 --port 8000"
 waitForPort = 8000
 
 [deployment]
-run = ["python", "-m", "uvicorn", "agent.api:app", "--host", "0.0.0.0", "--port", "8000"]
+run = ["python", "main.py"]
 deploymentTarget = "cloudrun"
 ignorePorts = false
 
@@ -45,7 +45,6 @@ exposeLocalhost = true
 PYTHONPATH = "/home/runner/${REPL_SLUG}"
 APP_ENV = "production"
 HOST = "0.0.0.0"
-PORT = "8000"
 LOG_LEVEL = "info"
 
 [gitHubImport]

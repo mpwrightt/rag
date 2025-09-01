@@ -26,7 +26,6 @@ export default function DashboardLayout({
           "--header-height": "calc(var(--spacing) * 12)",
         } as React.CSSProperties
       }
-      className="group/layout"
       className="group/layout h-svh overflow-hidden"
     >
       <AppSidebar variant="inset" />
@@ -36,7 +35,9 @@ export default function DashboardLayout({
         <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
           <div className={cn("@container/main flex flex-1 min-h-0 flex-col", isChat ? "gap-0" : "gap-2") }>
             <div className={cn("flex flex-1 min-h-0 flex-col", isChat ? "gap-4 py-0" : "gap-4 py-4 md:gap-6 md:py-6") }>
-              {children}
+              <React.Suspense fallback={<div className="p-4 text-sm text-muted-foreground">Loading…</div>}>
+                {children}
+              </React.Suspense>
             </div>
           </div>
         </div>
