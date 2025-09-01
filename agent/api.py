@@ -15,7 +15,7 @@ from datetime import datetime
 import uuid
 
 from fastapi import FastAPI, HTTPException, Request, Depends, UploadFile, File
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 import uvicorn
@@ -63,10 +63,12 @@ from .tools import (
     graph_search_tool,
     hybrid_search_tool,
     list_documents_tool,
+    get_document_tool,
     VectorSearchInput,
     GraphSearchInput,
     HybridSearchInput,
-    DocumentListInput
+    DocumentListInput,
+    DocumentInput
 )
 
 # Analytics tracker
@@ -1025,6 +1027,127 @@ async def delete_document_endpoint(document_id: str):
         raise
     except Exception as e:
         logger.error(f"Document deletion failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+def _extract_text_from_document(doc: Dict[str, Any]) -> Optional[str]:
+    """Best-effort text extraction from a document dict."""
+    if not isinstance(doc, dict):
+        return None
+
+    # Try direct fields
+    direct_candidates = [
+        doc.get("content"),
+        doc.get("text"),
+        doc.get("plain_text"),
+        doc.get("plaintext"),
+        doc.get("full_text"),
+        doc.get("raw_text"),
+        doc.get("body"),
+        doc.get("markdown"),
+        doc.get("md"),
+        doc.get("snippet"),
+        doc.get("preview"),
+        (doc.get("stats") or {}).get("content"),
+        (doc.get("stats") or {}).get("text"),
+        (doc.get("metadata") or {}).get("content"),
+        (doc.get("metadata") or {}).get("text"),
+        (doc.get("metadata") or {}).get("raw_text"),
+        (doc.get("metadata") or {}).get("markdown"),
+    ]
+    for c in direct_candidates:
+        if isinstance(c, str) and c.strip():
+            return c
+
+    # If content looks like JSON string, parse for common fields
+    try:
+        if isinstance(doc.get("content"), str) and doc["content"].strip().startswith("{"):
+            data = json.loads(doc["content"])  # type: ignore
+            for k in ("content", "text", "markdown", "md", "body"):
+                v = data.get(k)
+                if isinstance(v, str) and v.strip():
+                    return v
+    except Exception:
+        pass
+
+    # Try chunks
+    chunks = doc.get("chunks")
+    if isinstance(chunks, list) and chunks:
+        parts: List[str] = []
+        for ch in chunks[:50]:
+            if not isinstance(ch, dict):
+                continue
+            t = ch.get("content") or ch.get("text") or ch.get("body")
+            if isinstance(t, str) and t.strip():
+                parts.append(t.strip())
+            if len("\n\n".join(parts)) > 8000:
+                break
+        if parts:
+            return "\n\n".join(parts)
+
+    # Try pages array
+    pages = doc.get("pages")
+    if isinstance(pages, list) and pages:
+        parts: List[str] = []
+        for p in pages[:20]:
+            if not isinstance(p, dict):
+                continue
+            t = p.get("content") or p.get("text")
+            if isinstance(t, str) and t.strip():
+                parts.append(t.strip())
+            if len("\n\n".join(parts)) > 8000:
+                break
+        if parts:
+            return "\n\n".join(parts)
+
+    return None
+
+
+@app.get("/documents/{document_id}")
+async def get_document_endpoint(document_id: str):
+    """Return a complete document with chunks for preview/enrichment."""
+    try:
+        input_data = DocumentInput(document_id=document_id)
+        document = await get_document_tool(input_data)
+        if not document:
+            raise HTTPException(status_code=404, detail="Document not found")
+        return document
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Get document failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/documents/{document_id}/{variant}")
+async def get_document_content_endpoint(document_id: str, variant: str):
+    """Return raw textual content for a document in various variants for preview."""
+    allowed = {
+        "content", "raw", "text", "plaintext", "plain", "body",
+        "markdown", "md", "preview", "download", "file"
+    }
+    if variant not in allowed:
+        raise HTTPException(status_code=404, detail="Unknown variant")
+
+    try:
+        input_data = DocumentInput(document_id=document_id)
+        document = await get_document_tool(input_data)
+        if not document:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        text = _extract_text_from_document(document)
+        if not text or not text.strip():
+            raise HTTPException(status_code=404, detail="No textual content available for preview")
+
+        # Decide media type
+        title = (document.get("title") or "").lower() if isinstance(document, dict) else ""
+        source = (document.get("source") or "").lower() if isinstance(document, dict) else ""
+        is_markdown = variant in {"markdown", "md"} or title.endswith(".md") or source.endswith(".md")
+        media_type = "text/markdown; charset=utf-8" if is_markdown else "text/plain; charset=utf-8"
+        return Response(content=text, media_type=media_type)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Get document content failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

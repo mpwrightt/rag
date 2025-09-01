@@ -689,44 +689,44 @@ export default function PromptsPage() {
               </TabsList>
               
               <TabsContent value="my-prompts" className="mt-6">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {[...Array(4)].map((_, i) => (
-                    <Card key={i}>
-                      <CardHeader>
-                        <Skeleton className="h-5 w-3/4" />
-                        <Skeleton className="h-4 w-full" />
-                      </CardHeader>
-                      <CardContent>
-                        <Skeleton className="h-20 w-full" />
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
-                ) : filteredPrompts.length === 0 ? (
-                <div className="text-center py-12">
-                  <div className="w-16 h-16 bg-muted rounded-full flex items-center justify-center mx-auto mb-4">
-                    <MessageSquare className="w-8 h-8 text-muted-foreground" />
+                {isLoading ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {[...Array(4)].map((_, i) => (
+                      <Card key={i}>
+                        <CardHeader>
+                          <Skeleton className="h-5 w-3/4" />
+                          <Skeleton className="h-4 w-full" />
+                        </CardHeader>
+                        <CardContent>
+                          <Skeleton className="h-20 w-full" />
+                        </CardContent>
+                      </Card>
+                    ))}
                   </div>
-                  <h3 className="text-lg font-medium mb-2">No prompts found</h3>
-                  <p className="text-muted-foreground mb-4">
-                    {searchQuery 
-                      ? 'Try adjusting your search terms or filters'
-                      : 'Create your first prompt to get started'
-                    }
-                  </p>
-                  {!searchQuery && (
-                    <div className="flex gap-3 justify-center">
-                      <Button onClick={() => setIsCreateOpen(true)}>
-                        <Plus className="w-4 h-4 mr-2" />
-                        Create Prompt
-                      </Button>
-                      <Button variant="outline" onClick={() => setIsTemplateOpen(true)}>
-                        <Layers className="w-4 h-4 mr-2" />
-                        Use Template
-                      </Button>
+                ) : filteredPrompts.length === 0 ? (
+                  <div className="text-center py-12">
+                    <div className="w-16 h-16 bg-muted rounded-full flex items-center justify-center mx-auto mb-4">
+                      <MessageSquare className="w-8 h-8 text-muted-foreground" />
                     </div>
-                  )}
-                </div>
+                    <p className="text-muted-foreground mb-4">
+                      {searchQuery 
+                        ? 'Try adjusting your search terms or filters'
+                        : 'Create your first prompt to get started'
+                      }
+                    </p>
+                    {!searchQuery && (
+                      <div className="flex gap-3 justify-center">
+                        <Button onClick={() => setIsCreateOpen(true)}>
+                          <Plus className="w-4 h-4 mr-2" />
+                          Create Prompt
+                        </Button>
+                        <Button variant="outline" onClick={() => setIsTemplateOpen(true)}>
+                          <Layers className="w-4 h-4 mr-2" />
+                          Use Template
+                        </Button>
+                      </div>
+                    )}
+                  </div>
                 ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   {filteredPrompts.map((prompt) => (
@@ -887,7 +887,7 @@ export default function PromptsPage() {
                     </Card>
                   ))}
                 </div>
-                )
+                )}
               </TabsContent>
               
               <TabsContent value="ai-enhanced" className="mt-6">

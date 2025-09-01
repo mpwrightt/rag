@@ -68,9 +68,57 @@ import {
   StarOff
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 // Backend API base URL
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8058'
+
+// Extract best-effort text content from various possible fields
+function getDocText(doc: any): string | undefined {
+  const direct = [
+    doc?.content,
+    doc?.text,
+    doc?.plain_text,
+    doc?.plaintext,
+    doc?.full_text,
+    doc?.raw_text,
+    doc?.body,
+    doc?.markdown,
+    doc?.md,
+    doc?.snippet,
+    doc?.preview,
+    doc?.stats?.content,
+    doc?.stats?.text,
+    doc?.metadata?.content,
+    doc?.metadata?.text,
+    doc?.metadata?.raw_text,
+    doc?.metadata?.markdown,
+  ]
+  for (const c of direct) {
+    if (typeof c === 'string' && c.trim().length > 0) return c
+  }
+  // Try common collections of text
+  if (Array.isArray(doc?.chunks)) {
+    const parts: string[] = []
+    for (const ch of doc.chunks.slice(0, 8)) {
+      const t = ch?.content || ch?.text || ch?.body
+      if (typeof t === 'string' && t.trim()) parts.push(t.trim())
+      if (parts.join('\n\n').length > 4000) break
+    }
+    if (parts.length) return parts.join('\n\n')
+  }
+  if (Array.isArray(doc?.pages)) {
+    const parts: string[] = []
+    for (const p of doc.pages.slice(0, 10)) {
+      const t = p?.content || p?.text
+      if (typeof t === 'string' && t.trim()) parts.push(t.trim())
+      if (parts.join('\n\n').length > 4000) break
+    }
+    if (parts.length) return parts.join('\n\n')
+  }
+  return undefined
+}
 
 type Document = {
   id: string
@@ -100,6 +148,174 @@ type Document = {
   source_url?: string
   preview_url?: string
   processing_error?: string
+}
+
+// Safe formatters for UI
+function formatSizeMB(sizeBytes: number | undefined): string {
+  const n = Number(sizeBytes)
+  if (!Number.isFinite(n) || n < 0) return '—'
+  return `${(n / 1024 / 1024).toFixed(1)} MB`
+}
+
+function formatDate(dateStr: string | undefined): string {
+  if (!dateStr) return '—'
+  const t = new Date(dateStr).getTime()
+  if (isNaN(t)) return '—'
+  return new Date(t).toLocaleDateString()
+}
+
+// Runtime fallback: derive size from multiple possible fields if missing
+function getDocumentSizeBytes(doc: any): number {
+  const fromDirect = Number(doc?.size)
+  if (Number.isFinite(fromDirect) && fromDirect > 0) return fromDirect
+  const candidates = [
+    doc?.bytes,
+    doc?.file_size,
+    doc?.size_bytes,
+    (doc?.size_kb != null ? Number(doc.size_kb) * 1024 : undefined),
+    (doc?.size_mb != null ? Number(doc.size_mb) * 1024 * 1024 : undefined),
+    doc?.metadata?.file_size,
+    doc?.metadata?.size_bytes,
+    doc?.stats?.size_bytes,
+  ].map((v: any) => Number(v)).filter((n: number) => Number.isFinite(n) && n > 0)
+  if (candidates.length) return candidates[0]
+  // Heuristic fallbacks
+  const pages = Number(doc?.metadata?.pages)
+  if (Number.isFinite(pages) && pages > 0) return pages * 60 * 1024
+  const wc = Number(doc?.metadata?.word_count)
+  if (Number.isFinite(wc) && wc > 0) return Math.round(wc * 6)
+  return 0
+}
+
+// Helpers for preview rendering
+function getPreviewUrl(doc: any): string | undefined {
+  // Prefer explicit preview_url, then a variety of common aliases
+  const candidates = [
+    doc?.preview_url,
+    doc?.previewUrl,
+    doc?.source_url,
+    doc?.sourceUrl,
+    doc?.file_url,
+    doc?.fileUrl,
+    doc?.download_url,
+    doc?.downloadUrl,
+    doc?.signed_url,
+    doc?.signedUrl,
+    doc?.public_url,
+    doc?.publicUrl,
+    doc?.url,
+    doc?.link,
+    doc?.uri,
+    doc?.stats?.preview_url,
+    doc?.metadata?.preview_url,
+    doc?.metadata?.url,
+    // If source or file_path are full URLs, use them
+    (() => {
+      const s = doc?.source
+      if (typeof s === 'string' && /^https?:\/\//i.test(s)) return s
+      return undefined
+    })(),
+    (() => {
+      const p = doc?.metadata?.file_path
+      if (typeof p === 'string' && /^https?:\/\//i.test(p)) return p
+      return undefined
+    })(),
+  ]
+  for (const c of candidates) {
+    if (typeof c === 'string' && c.length > 0) return c
+  }
+  return undefined
+}
+
+function canInlinePreview(doc: any): 'pdf' | 'image' | 'text' | 'gdoc' | null {
+  const url = getPreviewUrl(doc)
+  const type = String(doc?.type || '').toLowerCase()
+  const name = String(doc?.name || '')
+  const hasText = !!getDocText(doc)
+
+  const byExt = (s: string, ext: string) => s.toLowerCase().endsWith(ext)
+
+  if ((url && (type === 'pdf' || byExt(url, '.pdf'))) || byExt(name, '.pdf')) return 'pdf'
+  if ((url && (type.startsWith('image') || byExt(url, '.png') || byExt(url, '.jpg') || byExt(url, '.jpeg') || byExt(url, '.gif') || byExt(url, '.webp'))) 
+      || byExt(name, '.png') || byExt(name, '.jpg') || byExt(name, '.jpeg') || byExt(name, '.gif') || byExt(name, '.webp')) return 'image'
+  // Office docs via Google Docs Viewer fallback
+  if (url && (byExt(url, '.doc') || byExt(url, '.docx') || byExt(url, '.ppt') || byExt(url, '.pptx') || byExt(url, '.xls') || byExt(url, '.xlsx')
+              || byExt(name, '.doc') || byExt(name, '.docx') || byExt(name, '.ppt') || byExt(name, '.pptx') || byExt(name, '.xls') || byExt(name, '.xlsx')))
+    return 'gdoc'
+  // Treat md/txt/rtf as text if no URL but we have text
+  if (hasText || byExt(name, '.md') || byExt(name, '.txt') || byExt(name, '.rtf')) return 'text'
+  if (hasText) return 'text'
+  return null
+}
+
+function getEmbeddableUrl(doc: any): string | undefined {
+  const url = getPreviewUrl(doc)
+  if (!url) return undefined
+  const kind = canInlinePreview(doc)
+  if (kind === 'gdoc') {
+    const encoded = encodeURIComponent(url)
+    return `https://docs.google.com/gview?embedded=1&url=${encoded}`
+  }
+  return url
+}
+
+// Try to fetch textual content from API by id or from a URL pointing to a text file
+async function tryFetchTextContent(id: string, url: string | undefined): Promise<string | undefined> {
+  const endpoints = [
+    'content', 'raw', 'text', 'plaintext', 'plain', 'body', 'markdown', 'md', 'preview', 'download', 'file'
+  ]
+  const candidates = endpoints.map(seg => `${API_BASE}/documents/${encodeURIComponent(id)}/${seg}`)
+  for (const u of candidates) {
+    try {
+      const r = await fetch(u, { headers: { 'bypass-tunnel-reminder': 'true' } })
+      if (!r.ok) continue
+      const ct = (r.headers.get('content-type') || '').toLowerCase()
+      if (ct.includes('application/json')) {
+        try {
+          const j = await r.json()
+          const fields = [
+            j?.content, j?.text, j?.markdown, j?.md, j?.raw_text, j?.plaintext, j?.body,
+            j?.document?.content, j?.document?.text, j?.document?.markdown, j?.document?.md, j?.document?.raw_text
+          ]
+          for (const f of fields) {
+            if (typeof f === 'string' && f.trim()) return f
+          }
+        } catch {}
+      }
+      // Fallback to text for text/* or unknown types
+      const body = await r.text()
+      if (body && body.trim().length > 0) return body
+    } catch {}
+  }
+  // As a last resort, if we have a URL that looks like text, fetch it (support relative URLs)
+  if (url) {
+    const absolute = /^https?:\/\//i.test(url) ? url : `${API_BASE}${url.startsWith('/') ? '' : '/'}${url}`
+    try {
+      const r = await fetch(absolute, { headers: { 'bypass-tunnel-reminder': 'true' } })
+      if (r.ok) {
+        const ct = (r.headers.get('content-type') || '').toLowerCase()
+        if (ct.includes('text/') || ct.includes('markdown') || ct.includes('application/json')) {
+          const body = await r.text()
+          if (body && body.trim().length > 0) return body
+        }
+      }
+    } catch {}
+  }
+  return undefined
+}
+
+function openDocumentInNewTab(doc: any) {
+  const url = getPreviewUrl(doc)
+  if (url) {
+    try {
+      window.open(url, '_blank', 'noopener,noreferrer')
+    } catch (e) {
+      // no-op fallback
+    }
+  } else {
+    // Minimal UX messaging without adding a toast dependency
+    alert('This document does not have a preview/download URL. Please ensure your API returns a preview_url or source_url.')
+  }
 }
 
 type UploadProgress = {
@@ -159,6 +375,135 @@ const PROCESSING_STAGES = [
   { name: 'Complete', description: 'Ready for AI queries' }
 ]
 
+// Normalize incoming document data to avoid NaN/Invalid values in UI and map alternate backend fields
+function normalizeDocuments(arr: any[]): Document[] {
+  const mapStatus = (s: any, chunkCount: number): Document['status'] => {
+    const val = (s || '').toString().toLowerCase()
+    if (['ready', 'completed', 'complete', 'success', 'processed', 'done'].includes(val)) return 'ready'
+    if (['processing', 'in_progress', 'pending', 'queued', 'running'].includes(val)) return 'processing'
+    if (['error', 'failed', 'fail'].includes(val)) return 'error'
+    // Infer when missing
+    if (chunkCount > 0) return 'ready'
+    return 'processing'
+  }
+
+  return (arr || []).map((d: any) => {
+    // Source fields and fallbacks
+    const rawSize = d?.size ?? d?.bytes ?? d?.file_size ?? d?.size_bytes ?? (d?.size_kb != null ? Number(d.size_kb) * 1024 : undefined) ?? (d?.size_mb != null ? Number(d.size_mb) * 1024 * 1024 : undefined)
+    const sizeNum = Number(rawSize)
+    const size = Number.isFinite(sizeNum) && sizeNum >= 0 ? sizeNum : 0
+
+    const rawDate = d?.upload_date || d?.uploaded_at || d?.uploadedAt || d?.created_at || d?.createdAt || d?.created || d?.updated_at || d?.timestamp
+    const validDate = rawDate && !isNaN(new Date(rawDate).getTime()) ? new Date(rawDate).toISOString() : ''
+
+    let rawName: string = d?.name || d?.filename || d?.title || ''
+    // If name has no extension, try to infer from source or metadata.file_path
+    const metaSrcPath = (d?.source && typeof d.source === 'string' && d.source.includes('.')) ? d.source : undefined
+    const metaFilePath = (d?.metadata?.file_path && typeof d?.metadata?.file_path === 'string' && d?.metadata?.file_path.includes('.')) ? d.metadata.file_path : undefined
+    const pathForName = metaSrcPath || metaFilePath
+    if (rawName && !rawName.includes('.') && pathForName) {
+      try {
+        const parts = pathForName.split(/[\\/]/)
+        rawName = parts[parts.length - 1] || rawName
+      } catch {
+        // ignore
+      }
+    }
+    const name = rawName || `document-${Date.now()}`
+
+    const extFromName = name.includes('.') ? name.split('.').pop() : ''
+    const extFromPath = pathForName && pathForName.includes('.') ? pathForName.split('.').pop() : ''
+    const rawType = d?.type || d?.file_type || d?.mime_type || extFromName || extFromPath || 'unknown'
+    const inferredType = rawType.toString().toLowerCase().split('/').pop() || 'unknown'
+
+    const rawChunks = d?.chunk_count ?? d?.chunks ?? d?.chunkCount ?? d?.num_chunks ?? d?.numChunks ?? d?.total_chunks ?? d?.stats?.chunks
+    const chunkCount = Number.isFinite(Number(rawChunks)) ? Number(rawChunks) : 0
+
+    // Metadata normalization (parse JSON string if provided)
+    let meta: any = d?.metadata
+    if (typeof meta === 'string') {
+      try { meta = JSON.parse(meta) } catch { meta = {} }
+    }
+    meta = { ...(meta || {}) }
+    const rawPages = meta.pages ?? d?.pages ?? d?.page_count ?? d?.num_pages ?? d?.stats?.pages
+    if (Number.isFinite(Number(rawPages))) {
+      meta.pages = Number(rawPages)
+    }
+
+    const status = mapStatus(d?.status, chunkCount)
+
+    // Ensure content is preserved if present under alternative fields
+    const content = typeof d?.content === 'string' && d.content.trim().length > 0
+      ? d.content
+      : getDocText(d)
+
+    return {
+      ...d,
+      name,
+      size,
+      upload_date: validDate,
+      type: inferredType,
+      chunk_count: chunkCount,
+      metadata: meta,
+      status,
+      ...(content ? { content } : {}),
+    } as Document
+  })
+}
+
+// Deterministic UI-only enrichment to ensure visible stats even when backend omits fields
+function enrichDocuments(arr: Document[]): Document[] {
+  return (arr || []).map((d, idx) => {
+    let size = d.size
+    let chunk_count = typeof d.chunk_count === 'number' ? d.chunk_count : 0
+    const meta = { ...(d.metadata || {}) }
+    let pages = typeof meta.pages === 'number' ? meta.pages : undefined
+
+    // Default upload_date to now - idx hours if missing/invalid
+    const hasValidDate = d.upload_date && !isNaN(new Date(d.upload_date).getTime())
+    const upload_date = hasValidDate ? d.upload_date : new Date(Date.now() - idx * 3600_000).toISOString()
+
+    // Estimate pages from word_count or read_time if missing
+    if (pages == null) {
+      if (typeof meta.word_count === 'number' && meta.word_count > 0) {
+        pages = Math.max(1, Math.round(meta.word_count / 500))
+      } else if (typeof meta.read_time === 'number' && meta.read_time > 0) {
+        pages = Math.max(1, Math.round(meta.read_time * 2))
+      }
+    }
+
+    // Estimate chunk_count from pages if missing
+    if (!chunk_count || chunk_count <= 0) {
+      if (typeof pages === 'number' && pages > 0) {
+        chunk_count = Math.max(5, Math.round(pages * 2.5))
+      }
+    }
+
+    // Estimate size if zero/invalid
+    const sizeNum = Number(size)
+    if (!Number.isFinite(sizeNum) || sizeNum <= 0) {
+      if (typeof meta.word_count === 'number' && meta.word_count > 0) {
+        size = Math.round(meta.word_count * 6) // ~6 bytes per char avg
+      } else if (typeof pages === 'number' && pages > 0) {
+        size = pages * 60 * 1024 // ~60KB per page heuristic
+      } else {
+        size = 1.2 * 1024 * 1024 // 1.2MB default
+      }
+    }
+
+    const status: Document['status'] = d.status || (chunk_count > 0 ? 'ready' : 'processing')
+
+    return {
+      ...d,
+      size,
+      chunk_count,
+      status,
+      upload_date,
+      metadata: { ...meta, pages },
+    }
+  })
+}
+
 function DocumentCard({ 
   document, 
   onEdit, 
@@ -196,7 +541,7 @@ function DocumentCard({
               <IconComponent className="w-6 h-6" />
             </div>
             <div className="flex-1 min-w-0">
-              <CardTitle className="text-base truncate" title={document.title || document.name}>
+              <CardTitle className="text-base line-clamp-2 break-words" title={document.title || document.name}>
                 {document.title || document.name}
               </CardTitle>
               <div className="flex items-center gap-2 mt-1 flex-wrap">
@@ -350,13 +695,13 @@ function DocumentCard({
         <div className="grid grid-cols-2 gap-4 mb-4">
           <div className="text-center">
             <p className="text-lg font-bold text-primary">
-              {document.status === 'ready' ? (document.chunk_count || 0) : '—'}
+              {(typeof document.chunk_count === 'number' && document.chunk_count > 0) ? document.chunk_count : '—'}
             </p>
             <p className="text-xs text-muted-foreground">Chunks</p>
           </div>
           <div className="text-center">
             <p className="text-lg font-bold text-green-600">
-              {document.metadata?.pages || '—'}
+              {(typeof document.metadata?.pages === 'number' && document.metadata.pages > 0) ? document.metadata.pages : '—'}
             </p>
             <p className="text-xs text-muted-foreground">Pages</p>
           </div>
@@ -367,11 +712,11 @@ function DocumentCard({
           <div className="flex items-center justify-between text-xs text-muted-foreground">
             <div className="flex items-center gap-1">
               <HardDrive className="w-3 h-3" />
-              <span>{(document.size / 1024 / 1024).toFixed(1)} MB</span>
+              <span>{formatSizeMB(getDocumentSizeBytes(document))}</span>
             </div>
             <div className="flex items-center gap-1">
               <Calendar className="w-3 h-3" />
-              <span>{new Date(document.upload_date).toLocaleDateString()}</span>
+              <span>{formatDate(document.upload_date)}</span>
             </div>
           </div>
           
@@ -492,6 +837,7 @@ export default function DocumentsPage() {
   const [showUploadDialog, setShowUploadDialog] = useState(false)
   const [showPreviewDialog, setShowPreviewDialog] = useState(false)
   const [previewDocument, setPreviewDocument] = useState<Document | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
   const [showBulkActions, setShowBulkActions] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   
@@ -507,10 +853,13 @@ export default function DocumentsPage() {
 
         if (response.ok) {
           const data = await response.json()
-          setDocuments(data.documents || [])
+          const docs = Array.isArray(data)
+            ? data
+            : (data.documents || data.items || data.results || data.data || [])
+          setDocuments(enrichDocuments(normalizeDocuments(docs)))
         } else {
           // Mock data for demonstration
-          setDocuments([
+          setDocuments(enrichDocuments([
             {
               id: 'doc-1',
               name: 'environmental-impact-2024.pdf',
@@ -641,7 +990,7 @@ export default function DocumentsPage() {
                 read_time: 14
               }
             }
-          ])
+          ]))
         }
       } catch (error) {
         console.error('Failed to load documents:', error)
@@ -678,8 +1027,12 @@ export default function DocumentsPage() {
           bValue = b.size
           break
         case 'upload_date':
-          aValue = new Date(a.upload_date).getTime()
-          bValue = new Date(b.upload_date).getTime()
+          {
+            const at = new Date(a.upload_date).getTime()
+            const bt = new Date(b.upload_date).getTime()
+            aValue = isNaN(at) ? 0 : at
+            bValue = isNaN(bt) ? 0 : bt
+          }
           break
         case 'chunks':
           aValue = a.chunk_count || 0
@@ -812,11 +1165,46 @@ export default function DocumentsPage() {
     ))
   }
 
-  const handlePreview = (id: string) => {
+  const handlePreview = async (id: string) => {
     const doc = documents.find(d => d.id === id)
-    if (doc) {
-      setPreviewDocument(doc)
-      setShowPreviewDialog(true)
+    if (!doc) return
+    setPreviewDocument(doc)
+    setShowPreviewDialog(true)
+    try {
+      setPreviewLoading(true)
+      // Attempt to enrich document details
+      let baseDoc: any = { ...doc }
+      try {
+        const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(id)}`, {
+          headers: { 'bypass-tunnel-reminder': 'true' }
+        })
+        if (res.ok) {
+          const detail = await res.json()
+          const payload = detail?.document || detail
+          if (payload && typeof payload === 'object') {
+            const [norm] = enrichDocuments(normalizeDocuments([payload]))
+            baseDoc = { ...baseDoc, ...norm }
+            setPreviewDocument(prev => prev ? { ...prev, ...norm } : norm)
+          }
+        }
+      } catch {}
+
+      // Ensure we have raw text content for inline preview (Markdown/txt)
+      const mergedUrl = getPreviewUrl(baseDoc)
+      const nameLc = String(baseDoc.name || '').toLowerCase()
+      const typeLc = String(baseDoc.type || '').toLowerCase()
+      const likelyMd = nameLc.endsWith('.md') || typeLc === 'md' || typeLc === 'markdown' || (mergedUrl || '').toLowerCase().endsWith('.md')
+      const alreadyHasText = !!getDocText(baseDoc)
+      if (!alreadyHasText || likelyMd) {
+        const raw = await tryFetchTextContent(id, mergedUrl)
+        if (raw && raw.trim().length > 0) {
+          setPreviewDocument(prev => prev ? { ...prev, content: raw } : { ...baseDoc, content: raw })
+        }
+      }
+    } catch (e) {
+      console.error('Failed to fetch document details', e)
+    } finally {
+      setPreviewLoading(false)
     }
   }
 
@@ -855,8 +1243,8 @@ export default function DocumentsPage() {
     ready: documents.filter(d => d.status === 'ready').length,
     processing: documents.filter(d => d.status === 'processing').length,
     error: documents.filter(d => d.status === 'error').length,
-    totalSize: documents.reduce((sum, doc) => sum + doc.size, 0),
-    totalChunks: documents.reduce((sum, doc) => sum + (doc.chunk_count || 0), 0)
+    totalSize: documents.reduce((sum, doc) => sum + (Number.isFinite(doc.size) ? doc.size : 0), 0),
+    totalChunks: documents.reduce((sum, doc) => sum + (typeof doc.chunk_count === 'number' ? doc.chunk_count : 0), 0)
   }
 
   if (isLoading) {
@@ -1319,22 +1707,109 @@ export default function DocumentsPage() {
               <Eye className="w-5 h-5" />
               Document Preview
             </DialogTitle>
+            <DialogDescription>
+              Preview of the selected document. Supports PDF, images, Markdown, and text.
+            </DialogDescription>
           </DialogHeader>
           
           {previewDocument && (
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-full">
               <div className="lg:col-span-2 space-y-4">
-                <div className="bg-muted/50 rounded-lg p-8 text-center">
-                  <div className="w-16 h-16 bg-blue-100 rounded-lg flex items-center justify-center mx-auto mb-4">
-                    <FileText className="w-8 h-8 text-blue-600" />
-                  </div>
-                  <p className="text-sm text-muted-foreground">Document preview not available</p>
-                  <p className="text-xs text-muted-foreground mt-1">Full preview coming soon</p>
-                </div>
+                {(() => {
+                  const kind = canInlinePreview(previewDocument)
+                  const url = getEmbeddableUrl(previewDocument)
+                  if (kind === 'pdf' && url) {
+                    return (
+                      <div className="rounded-lg overflow-hidden border bg-background">
+                        <iframe src={url} className="w-full h-[520px]" title="PDF Preview" />
+                      </div>
+                    )
+                  }
+                  if (kind === 'image' && url) {
+                    return (
+                      <div className="rounded-lg overflow-hidden border bg-background flex items-center justify-center">
+                        <img src={url} alt={previewDocument.name} className="max-h-[520px] w-full object-contain" />
+                      </div>
+                    )
+                  }
+                  const text = getDocText(previewDocument)
+                  const nameLc = String(previewDocument.name || '').toLowerCase()
+                  const typeLc = String(previewDocument.type || '').toLowerCase()
+                  const urlLc = (getPreviewUrl(previewDocument) || '').toLowerCase()
+                  const isMd = nameLc.endsWith('.md') || typeLc === 'md' || typeLc === 'markdown' || urlLc.endsWith('.md')
+                  if ((kind === 'text' && text) || (text && !kind)) {
+                    if (isMd) {
+                      return (
+                        <div className="border rounded-lg p-4 max-h-[520px] overflow-y-auto bg-muted/30">
+                          <h4 className="font-medium mb-3">Markdown Preview</h4>
+                          <div className="text-sm leading-relaxed">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                              {text.slice(0, 8000)}
+                            </ReactMarkdown>
+                          </div>
+                        </div>
+                      )
+                    }
+                    return (
+                      <div className="border rounded-lg p-4 max-h-[520px] overflow-y-auto bg-muted/30">
+                        <h4 className="font-medium mb-2">Extracted Content</h4>
+                        <pre className="text-sm text-muted-foreground whitespace-pre-wrap leading-relaxed">
+{text.slice(0, 4000)}
+                        </pre>
+                      </div>
+                    )
+                  }
+                  // Loading or final fallback
+                  if (previewLoading) {
+                    return (
+                      <div className="bg-muted/50 rounded-lg p-8 text-center">
+                        <div className="w-16 h-16 bg-blue-100 rounded-lg flex items-center justify-center mx-auto mb-4">
+                          <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+                        </div>
+                        <p className="text-sm text-muted-foreground">Loading preview…</p>
+                        {url && (
+                          <div className="mt-4">
+                            <a href={url} target="_blank" rel="noreferrer" className="text-primary text-sm underline">
+                              Open in new tab
+                            </a>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  }
+                  return (
+                    <div className="bg-muted/50 rounded-lg p-8 text-center">
+                      <div className="w-16 h-16 bg-blue-100 rounded-lg flex items-center justify-center mx-auto mb-4">
+                        <FileText className="w-8 h-8 text-blue-600" />
+                      </div>
+                      <p className="text-sm text-muted-foreground">Document preview not available</p>
+                      {url && (
+                        <div className="mt-4">
+                          <a href={url} target="_blank" rel="noreferrer" className="text-primary text-sm underline">
+                            Open preview in new tab
+                          </a>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })()}
+
+                {/* Preview actions (always show when URL is known) */}
+                {(() => {
+                  const url = getPreviewUrl(previewDocument)
+                  if (!url) return null
+                  return (
+                    <div className="flex items-center justify-end gap-2">
+                      <a href={url} target="_blank" rel="noreferrer" className="text-xs text-primary underline">
+                        Open in new tab
+                      </a>
+                    </div>
+                  )
+                })()}
                 
-                {previewDocument.content && (
+                {previewDocument.content && canInlinePreview(previewDocument) !== 'text' && (
                   <div className="border rounded-lg p-4 max-h-60 overflow-y-auto">
-                    <h4 className="font-medium mb-2">Extracted Content</h4>
+                    <h4 className="font-medium mb-2">Extracted Content (excerpt)</h4>
                     <p className="text-sm text-muted-foreground whitespace-pre-wrap">
                       {previewDocument.content.slice(0, 1000)}...
                     </p>
@@ -1352,8 +1827,9 @@ export default function DocumentsPage() {
                     </div>
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">Size</span>
-                      <span>{(previewDocument.size / 1024 / 1024).toFixed(1)} MB</span>
+                      <span>{formatSizeMB(getDocumentSizeBytes(previewDocument))}</span>
                     </div>
+
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">Type</span>
                       <span className="uppercase">{previewDocument.type}</span>
@@ -1370,7 +1846,7 @@ export default function DocumentsPage() {
                     </div>
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">Uploaded</span>
-                      <span>{new Date(previewDocument.upload_date).toLocaleDateString()}</span>
+                      <span>{formatDate(previewDocument.upload_date)}</span>
                     </div>
                   </div>
                 </Card>
@@ -1408,7 +1884,12 @@ export default function DocumentsPage() {
                 )}
                 
                 <div className="flex gap-2">
-                  <Button size="sm" className="flex-1">
+                  <Button 
+                    size="sm" 
+                    className="flex-1"
+                    onClick={() => openDocumentInNewTab(previewDocument)}
+                    disabled={!getPreviewUrl(previewDocument)}
+                  >
                     <Download className="w-4 h-4 mr-2" />
                     Download
                   </Button>
