@@ -30,7 +30,7 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning className="dark h-svh">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased overscroll-none h-full min-h-0 overflow-hidden dark`}
+        className={`${geistSans.variable} ${geistMono.variable} antialiased overscroll-none min-h-screen overflow-x-hidden dark`}
       >
         <ThemeProvider
           attribute="class"
