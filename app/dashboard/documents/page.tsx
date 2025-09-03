@@ -240,8 +240,8 @@ function canInlinePreview(doc: any): 'pdf' | 'image' | 'text' | 'gdoc' | null {
   if ((url && (type.startsWith('image') || byExt(url, '.png') || byExt(url, '.jpg') || byExt(url, '.jpeg') || byExt(url, '.gif') || byExt(url, '.webp'))) 
       || byExt(name, '.png') || byExt(name, '.jpg') || byExt(name, '.jpeg') || byExt(name, '.gif') || byExt(name, '.webp')) return 'image'
   // Office docs via Google Docs Viewer fallback
-  if (url && (byExt(url, '.doc') || byExt(url, '.docx') || byExt(url, '.ppt') || byExt(url, '.pptx') || byExt(url, '.xls') || byExt(url, '.xlsx')
-              || byExt(name, '.doc') || byExt(name, '.docx') || byExt(name, '.ppt') || byExt(name, '.pptx') || byExt(name, '.xls') || byExt(name, '.xlsx')))
+  if (url && (byExt(url, '.doc') || byExt(url, '.docx') || byExt(url, '.ppt') || byExt(url, '.pptx') || byExt(url, '.xls') || byExt(url, '.xlsx') || byExt(url, '.csv')
+              || byExt(name, '.doc') || byExt(name, '.docx') || byExt(name, '.ppt') || byExt(name, '.pptx') || byExt(name, '.xls') || byExt(name, '.xlsx') || byExt(name, '.csv')))
     return 'gdoc'
   // Treat md/txt/rtf as text if no URL but we have text
   if (hasText || byExt(name, '.md') || byExt(name, '.txt') || byExt(name, '.rtf')) return 'text'
@@ -334,6 +334,9 @@ const FILE_TYPE_ICONS: Record<string, React.ComponentType<any>> = {
   txt: FileText,
   md: FileText,
   rtf: FileText,
+  csv: FileText,
+  xls: FileText,
+  xlsx: FileText,
   jpg: ImageIcon,
   jpeg: ImageIcon,
   png: ImageIcon,
@@ -358,6 +361,9 @@ const FILE_TYPE_COLORS: Record<string, string> = {
   docx: 'text-blue-600 bg-blue-100',
   txt: 'text-gray-600 bg-gray-100',
   md: 'text-purple-600 bg-purple-100',
+  csv: 'text-emerald-600 bg-emerald-100',
+  xls: 'text-indigo-600 bg-indigo-100',
+  xlsx: 'text-indigo-600 bg-indigo-100',
   jpg: 'text-green-600 bg-green-100',
   jpeg: 'text-green-600 bg-green-100',
   png: 'text-green-600 bg-green-100',
@@ -1665,7 +1671,7 @@ export default function DocumentsPage() {
               Upload Documents
             </DialogTitle>
             <DialogDescription>
-              Add documents to your knowledge base. Supported formats: PDF, Word, PowerPoint, Text, Images, and more.
+              Add documents to your knowledge base. Supported formats: PDF, Word, Excel, CSV, PowerPoint, Text, Images, and more.
             </DialogDescription>
           </DialogHeader>
 
@@ -1695,13 +1701,17 @@ export default function DocumentsPage() {
                 multiple
                 className="hidden"
                 onChange={(e) => handleFileUpload(e.target.files)}
-                accept=".pdf,.doc,.docx,.txt,.md,.jpg,.jpeg,.png,.gif"
+                accept=".pdf,.doc,.docx,.txt,.md,.csv,.xls,.xlsx,.jpg,.jpeg,.png,.gif"
               />
               
-              <div className="grid grid-cols-3 gap-4 text-center text-sm text-muted-foreground">
+              <div className="grid grid-cols-4 gap-4 text-center text-sm text-muted-foreground">
                 <div className="flex items-center justify-center gap-2">
                   <FileText className="w-4 h-4 text-red-500" />
                   <span>PDF, Word</span>
+                </div>
+                <div className="flex items-center justify-center gap-2">
+                  <FileText className="w-4 h-4 text-emerald-500" />
+                  <span>Excel, CSV</span>
                 </div>
                 <div className="flex items-center justify-center gap-2">
                   <ImageIcon className="w-4 h-4 text-green-500" />
@@ -1795,7 +1805,7 @@ export default function DocumentsPage() {
               Document Preview
             </DialogTitle>
             <DialogDescription>
-              Preview of the selected document. Supports PDF, images, Markdown, and text.
+              Preview of the selected document. Supports PDF, Word, Excel, CSV, PowerPoint, images, Markdown, and text files.
             </DialogDescription>
           </DialogHeader>
           
@@ -1805,48 +1815,13 @@ export default function DocumentsPage() {
                 {(() => {
                   const kind = canInlinePreview(previewDocument)
                   const url = getEmbeddableUrl(previewDocument)
-                  if (kind === 'pdf' && url) {
-                    return (
-                      <div className="rounded-lg overflow-hidden border bg-background">
-                        <iframe src={url} className="w-full h-[520px]" title="PDF Preview" />
-                      </div>
-                    )
-                  }
-                  if (kind === 'image' && url) {
-                    return (
-                      <div className="rounded-lg overflow-hidden border bg-background flex items-center justify-center">
-                        <img src={url} alt={previewDocument.name} className="max-h-[520px] w-full object-contain" />
-                      </div>
-                    )
-                  }
+                  const directUrl = getPreviewUrl(previewDocument)
                   const text = getDocText(previewDocument)
                   const nameLc = String(previewDocument.name || '').toLowerCase()
                   const typeLc = String(previewDocument.type || '').toLowerCase()
-                  const urlLc = (getPreviewUrl(previewDocument) || '').toLowerCase()
-                  const isMd = nameLc.endsWith('.md') || typeLc === 'md' || typeLc === 'markdown' || urlLc.endsWith('.md')
-                  if ((kind === 'text' && text) || (text && !kind)) {
-                    if (isMd) {
-                      return (
-                        <div className="border rounded-lg p-4 max-h-[520px] overflow-y-auto bg-muted/30">
-                          <h4 className="font-medium mb-3">Markdown Preview</h4>
-                          <div className="text-sm leading-relaxed">
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                              {text.slice(0, 8000)}
-                            </ReactMarkdown>
-                          </div>
-                        </div>
-                      )
-                    }
-                    return (
-                      <div className="border rounded-lg p-4 max-h-[520px] overflow-y-auto bg-muted/30">
-                        <h4 className="font-medium mb-2">Extracted Content</h4>
-                        <pre className="text-sm text-muted-foreground whitespace-pre-wrap leading-relaxed">
-{text.slice(0, 4000)}
-                        </pre>
-                      </div>
-                    )
-                  }
-                  // Loading or final fallback
+                  const urlLc = (directUrl || '').toLowerCase()
+                  
+                  // Loading state
                   if (previewLoading) {
                     return (
                       <div className="bg-muted/50 rounded-lg p-8 text-center">
@@ -1854,29 +1829,271 @@ export default function DocumentsPage() {
                           <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
                         </div>
                         <p className="text-sm text-muted-foreground">Loading preview…</p>
-                        {url && (
+                        {directUrl && (
                           <div className="mt-4">
-                            <a href={url} target="_blank" rel="noreferrer" className="text-primary text-sm underline">
-                              Open in new tab
-                            </a>
+                            <Button variant="outline" size="sm" asChild>
+                              <a href={directUrl} target="_blank" rel="noreferrer">
+                                <ExternalLink className="w-4 h-4 mr-2" />
+                                Open in new tab
+                              </a>
+                            </Button>
                           </div>
                         )}
                       </div>
                     )
                   }
+
+                  // PDF Preview
+                  if (kind === 'pdf' && url) {
+                    return (
+                      <div className="space-y-4">
+                        <div className="flex items-center justify-between">
+                          <h4 className="font-medium flex items-center gap-2">
+                            <FileText className="w-4 h-4 text-red-500" />
+                            PDF Document
+                          </h4>
+                          <Button variant="outline" size="sm" asChild>
+                            <a href={directUrl || url} target="_blank" rel="noreferrer">
+                              <ExternalLink className="w-4 h-4 mr-2" />
+                              Open Full View
+                            </a>
+                          </Button>
+                        </div>
+                        <div className="rounded-lg overflow-hidden border bg-background">
+                          <iframe src={url} className="w-full h-[520px]" title="PDF Preview" />
+                        </div>
+                      </div>
+                    )
+                  }
+
+                  // Image Preview
+                  if (kind === 'image' && directUrl) {
+                    return (
+                      <div className="space-y-4">
+                        <div className="flex items-center justify-between">
+                          <h4 className="font-medium flex items-center gap-2">
+                            <ImageIcon className="w-4 h-4 text-green-500" />
+                            Image File
+                          </h4>
+                          <Button variant="outline" size="sm" asChild>
+                            <a href={directUrl} target="_blank" rel="noreferrer">
+                              <ExternalLink className="w-4 h-4 mr-2" />
+                              View Full Size
+                            </a>
+                          </Button>
+                        </div>
+                        <div className="rounded-lg overflow-hidden border bg-background flex items-center justify-center">
+                          <img src={directUrl} alt={previewDocument.name} className="max-h-[520px] w-full object-contain" />
+                        </div>
+                      </div>
+                    )
+                  }
+
+                  // Office Documents (Word, Excel, PowerPoint) via Google Docs Viewer
+                  if (kind === 'gdoc' && url) {
+                    const fileTypeIcon = typeLc === 'csv' ? '📊' : 
+                                       (typeLc === 'xls' || typeLc === 'xlsx') ? '📊' :
+                                       (typeLc === 'doc' || typeLc === 'docx') ? '📄' :
+                                       (typeLc === 'ppt' || typeLc === 'pptx') ? '📊' : '📄'
+                    
+                    return (
+                      <div className="space-y-4">
+                        <div className="flex items-center justify-between">
+                          <h4 className="font-medium flex items-center gap-2">
+                            <FileText className="w-4 h-4 text-indigo-500" />
+                            {typeLc === 'csv' ? 'CSV Spreadsheet' :
+                             (typeLc === 'xls' || typeLc === 'xlsx') ? 'Excel Spreadsheet' :
+                             (typeLc === 'doc' || typeLc === 'docx') ? 'Word Document' :
+                             (typeLc === 'ppt' || typeLc === 'pptx') ? 'PowerPoint Presentation' :
+                             'Office Document'} {fileTypeIcon}
+                          </h4>
+                          <Button variant="outline" size="sm" asChild>
+                            <a href={directUrl || url} target="_blank" rel="noreferrer">
+                              <ExternalLink className="w-4 h-4 mr-2" />
+                              Open Full View
+                            </a>
+                          </Button>
+                        </div>
+                        <div className="rounded-lg overflow-hidden border bg-background">
+                          <iframe src={url} className="w-full h-[520px]" title="Document Preview" />
+                        </div>
+                      </div>
+                    )
+                  }
+
+                  // Text/Markdown Content
+                  const isMd = nameLc.endsWith('.md') || typeLc === 'md' || typeLc === 'markdown' || urlLc.endsWith('.md')
+                  const isCSV = nameLc.endsWith('.csv') || typeLc === 'csv'
+                  
+                  if (text) {
+                    // CSV Preview with table formatting
+                    if (isCSV) {
+                      const csvLines = text.trim().split('\n').slice(0, 100) // Limit to first 100 rows
+                      const hasHeader = csvLines.length > 0
+                      const rows = csvLines.map(line => line.split(',').map(cell => cell.trim().replace(/^"|"$/g, '')))
+                      
+                      return (
+                        <div className="space-y-4">
+                          <div className="flex items-center justify-between">
+                            <h4 className="font-medium flex items-center gap-2">
+                              <FileText className="w-4 h-4 text-emerald-500" />
+                              CSV Data Preview
+                            </h4>
+                            {directUrl && (
+                              <Button variant="outline" size="sm" asChild>
+                                <a href={directUrl} target="_blank" rel="noreferrer">
+                                  <Download className="w-4 h-4 mr-2" />
+                                  Download CSV
+                                </a>
+                              </Button>
+                            )}
+                          </div>
+                          <div className="border rounded-lg overflow-hidden bg-background">
+                            <div className="max-h-[520px] overflow-auto">
+                              <table className="w-full text-sm">
+                                {hasHeader && rows.length > 0 && (
+                                  <thead className="bg-muted/50 sticky top-0">
+                                    <tr>
+                                      {rows[0].map((header, idx) => (
+                                        <th key={idx} className="px-3 py-2 text-left font-medium border-r border-border">
+                                          {header || `Column ${idx + 1}`}
+                                        </th>
+                                      ))}
+                                    </tr>
+                                  </thead>
+                                )}
+                                <tbody>
+                                  {rows.slice(hasHeader ? 1 : 0).map((row, rowIdx) => (
+                                    <tr key={rowIdx} className="hover:bg-muted/30 border-b border-border">
+                                      {row.map((cell, cellIdx) => (
+                                        <td key={cellIdx} className="px-3 py-2 border-r border-border">
+                                          {cell || '-'}
+                                        </td>
+                                      ))}
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                            {csvLines.length >= 100 && (
+                              <div className="p-3 bg-muted/30 text-center text-xs text-muted-foreground border-t">
+                                Showing first 100 rows. Download full file to see all data.
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    }
+                    
+                    // Markdown Preview
+                    if (isMd) {
+                      return (
+                        <div className="space-y-4">
+                          <div className="flex items-center justify-between">
+                            <h4 className="font-medium flex items-center gap-2">
+                              <FileText className="w-4 h-4 text-purple-500" />
+                              Markdown Document
+                            </h4>
+                            {directUrl && (
+                              <Button variant="outline" size="sm" asChild>
+                                <a href={directUrl} target="_blank" rel="noreferrer">
+                                  <ExternalLink className="w-4 h-4 mr-2" />
+                                  View Source
+                                </a>
+                              </Button>
+                            )}
+                          </div>
+                          <div className="border rounded-lg p-4 max-h-[520px] overflow-y-auto bg-background">
+                            <div className="prose prose-sm max-w-none">
+                              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                {text.slice(0, 8000)}
+                              </ReactMarkdown>
+                            </div>
+                            {text.length > 8000 && (
+                              <div className="mt-4 p-3 bg-muted/50 rounded text-xs text-center text-muted-foreground">
+                                Content truncated. View full document to see complete content.
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    }
+
+                    // Plain Text Preview
+                    return (
+                      <div className="space-y-4">
+                        <div className="flex items-center justify-between">
+                          <h4 className="font-medium flex items-center gap-2">
+                            <FileText className="w-4 h-4 text-gray-500" />
+                            Text Content
+                          </h4>
+                          {directUrl && (
+                            <Button variant="outline" size="sm" asChild>
+                              <a href={directUrl} target="_blank" rel="noreferrer">
+                                <Download className="w-4 h-4 mr-2" />
+                                Download
+                              </a>
+                            </Button>
+                          )}
+                        </div>
+                        <div className="border rounded-lg p-4 max-h-[520px] overflow-y-auto bg-muted/30">
+                          <pre className="text-sm text-foreground whitespace-pre-wrap leading-relaxed font-mono">
+{text.slice(0, 4000)}
+                          </pre>
+                          {text.length > 4000 && (
+                            <div className="mt-4 p-3 bg-muted/50 rounded text-xs text-center text-muted-foreground">
+                              Content truncated. View full document to see complete content.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  }
+
+                  // Fallback for documents with URL but no text content
+                  if (directUrl) {
+                    return (
+                      <div className="space-y-4">
+                        <div className="flex items-center justify-between">
+                          <h4 className="font-medium flex items-center gap-2">
+                            <FileText className="w-4 h-4 text-blue-500" />
+                            Document Preview
+                          </h4>
+                          <Button variant="outline" size="sm" asChild>
+                            <a href={directUrl} target="_blank" rel="noreferrer">
+                              <ExternalLink className="w-4 h-4 mr-2" />
+                              Open Document
+                            </a>
+                          </Button>
+                        </div>
+                        <div className="bg-muted/50 rounded-lg p-8 text-center">
+                          <div className="w-16 h-16 bg-blue-100 rounded-lg flex items-center justify-center mx-auto mb-4">
+                            <FileText className="w-8 h-8 text-blue-600" />
+                          </div>
+                          <p className="text-sm text-muted-foreground mb-4">
+                            This document can be viewed by opening it in a new tab.
+                          </p>
+                          <Button asChild>
+                            <a href={directUrl} target="_blank" rel="noreferrer">
+                              <ExternalLink className="w-4 h-4 mr-2" />
+                              Open Document
+                            </a>
+                          </Button>
+                        </div>
+                      </div>
+                    )
+                  }
+
+                  // Final fallback - no preview available
                   return (
                     <div className="bg-muted/50 rounded-lg p-8 text-center">
-                      <div className="w-16 h-16 bg-blue-100 rounded-lg flex items-center justify-center mx-auto mb-4">
-                        <FileText className="w-8 h-8 text-blue-600" />
+                      <div className="w-16 h-16 bg-gray-100 rounded-lg flex items-center justify-center mx-auto mb-4">
+                        <FileText className="w-8 h-8 text-gray-400" />
                       </div>
-                      <p className="text-sm text-muted-foreground">Document preview not available</p>
-                      {url && (
-                        <div className="mt-4">
-                          <a href={url} target="_blank" rel="noreferrer" className="text-primary text-sm underline">
-                            Open preview in new tab
-                          </a>
-                        </div>
-                      )}
+                      <p className="text-sm text-muted-foreground mb-2">Preview not available</p>
+                      <p className="text-xs text-muted-foreground">
+                        This document type cannot be previewed inline. Try downloading or processing the document first.
+                      </p>
                     </div>
                   )
                 })()}
