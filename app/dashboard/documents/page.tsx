@@ -858,7 +858,7 @@ export default function DocumentsPage() {
     return typeof totalCount === 'number' ? Math.max(1, Math.ceil(totalCount / pageSize)) : 1
   }, [totalCount, pageSize])
 
-  const pageNumbers = useMemo<(number | string)[]>(() => {
+  const pageNumbers = useMemo((): (number | string)[] => {
     const pages: (number | string)[] = []
     const maxButtons = 7
     if (totalPages <= maxButtons) {
@@ -1812,11 +1812,7 @@ export default function DocumentsPage() {
                 multiple
                 className="hidden"
                 onChange={(e) => handleFileUpload(e.target.files)}
-<<<<<<< HEAD
                 accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.csv,.tsv,.txt,.md,.rtf,.html,.htm,.jpg,.jpeg,.png,.gif,.webp,.svg"
-=======
-                accept=".pdf,.doc,.docx,.txt,.md,.csv,.xls,.xlsx,.jpg,.jpeg,.png,.gif"
->>>>>>> 881d15e22a524f3a0a36cecbe2b7ae909523f478
               />
               <p className="text-xs text-muted-foreground text-center -mt-2">
                 Files are automatically converted to Markdown for consistent RAG ingestion.
