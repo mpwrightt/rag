@@ -50,3 +50,6 @@ __pycache__/
 
 # windows device filename accidentally created
 nul
+
+# clerk configuration (can include secrets)
+/.clerk/
