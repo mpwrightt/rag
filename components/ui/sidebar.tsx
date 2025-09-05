@@ -164,6 +164,17 @@ function Sidebar({
   collapsible?: "offcanvas" | "icon" | "none"
 }) {
   const { isMobile, state, openMobile, setOpenMobile } = useSidebar()
+  // Use window size directly for mobile sidebar behavior
+  const [windowWidth, setWindowWidth] = React.useState<number | undefined>(undefined)
+  
+  React.useEffect(() => {
+    const handleResize = () => setWindowWidth(window.innerWidth)
+    handleResize()
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
+  
+  const isMobileSidebar = windowWidth ? windowWidth < 768 : false
 
   if (collapsible === "none") {
     return (
@@ -180,14 +191,15 @@ function Sidebar({
     )
   }
 
-  if (isMobile) {
+  // Mobile sheet overlay for very small screens (under 768px)
+  if (isMobileSidebar) {
     return (
       <Sheet open={openMobile} onOpenChange={setOpenMobile} {...props}>
         <SheetContent
           data-sidebar="sidebar"
           data-slot="sidebar"
           data-mobile="true"
-          className="bg-sidebar text-sidebar-foreground w-(--sidebar-width) p-0 [&>button]:hidden"
+          className="bg-sidebar text-sidebar-foreground w-(--sidebar-width) p-0 [&>button]:hidden touch-manipulation"
           style={
             {
               "--sidebar-width": SIDEBAR_WIDTH_MOBILE,
@@ -206,50 +218,108 @@ function Sidebar({
   }
 
   return (
-    <div
-      className="group peer text-sidebar-foreground hidden md:block"
-      data-state={state}
-      data-collapsible={state === "collapsed" ? collapsible : ""}
-      data-variant={variant}
-      data-side={side}
-      data-slot="sidebar"
-    >
-      {/* This is what handles the sidebar gap on desktop */}
+    <>
+      {/* Mobile sheet trigger for tablets (768px - 1023px) */}
+      {isMobile && !isMobileSidebar && (
+        <Sheet open={openMobile} onOpenChange={setOpenMobile}>
+          <SheetContent
+            data-sidebar="sidebar"
+            data-slot="sidebar"
+            data-mobile="tablet"
+            className="bg-sidebar text-sidebar-foreground w-(--sidebar-width) p-0 [&>button]:hidden touch-manipulation"
+            style={
+              {
+                "--sidebar-width": SIDEBAR_WIDTH_MOBILE,
+              } as React.CSSProperties
+            }
+            side={side}
+          >
+            <SheetHeader className="sr-only">
+              <SheetTitle>Sidebar</SheetTitle>
+              <SheetDescription>Displays the mobile sidebar.</SheetDescription>
+            </SheetHeader>
+            <div className="flex h-full w-full flex-col">{children}</div>
+          </SheetContent>
+        </Sheet>
+      )}
+      
+      {/* Desktop and tablet mini sidebar */}
       <div
-        data-slot="sidebar-gap"
         className={cn(
-          "relative w-(--sidebar-width) bg-transparent transition-[width] duration-200 ease-linear",
-          "group-data-[collapsible=offcanvas]:w-0",
-          "group-data-[side=right]:rotate-180",
-          variant === "floating" || variant === "inset"
-            ? "group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4)))]"
-            : "group-data-[collapsible=icon]:w-(--sidebar-width-icon)"
+          "group peer text-sidebar-foreground",
+          // Show on desktop always, show on tablet when not using sheet
+          isMobileSidebar ? "hidden" : "block"
         )}
-      />
-      <div
-        data-slot="sidebar-container"
-        className={cn(
-          "fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) transition-[left,right,width] duration-200 ease-linear md:flex",
-          side === "left"
-            ? "left-0 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]"
-            : "right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]",
-          // Adjust the padding for floating and inset variants.
-          variant === "floating" || variant === "inset"
-            ? "p-2 group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4))+2px)]"
-            : "group-data-[collapsible=icon]:w-(--sidebar-width-icon) group-data-[side=left]:border-r group-data-[side=right]:border-l",
-          className
-        )}
-        {...props}
+        data-state={state}
+        data-collapsible={state === "collapsed" ? collapsible : ""}
+        data-variant={variant}
+        data-side={side}
+        data-slot="sidebar"
+        data-mobile={isMobile ? "tablet" : "false"}
       >
+        {/* This is what handles the sidebar gap */}
         <div
-          data-sidebar="sidebar"
-          data-slot="sidebar-inner"
-          className="bg-sidebar group-data-[variant=floating]:border-sidebar-border flex h-full w-full flex-col group-data-[variant=floating]:rounded-lg group-data-[variant=floating]:border group-data-[variant=floating]:shadow-sm"
+          data-slot="sidebar-gap"
+          className={cn(
+            "relative bg-transparent transition-[width] duration-200 ease-linear",
+            // Mobile/tablet adjustments
+            isMobile
+              ? "w-0 group-data-[collapsible=icon]:w-(--sidebar-width-mobile-mini)"
+              : "w-(--sidebar-width) group-data-[collapsible=offcanvas]:w-0",
+            "group-data-[side=right]:rotate-180",
+            variant === "floating" || variant === "inset"
+              ? isMobile
+                ? "group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-mobile-mini)+(--spacing(4)))]"
+                : "group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4)))]"
+              : isMobile
+                ? "group-data-[collapsible=icon]:w-(--sidebar-width-mobile-mini)"
+                : "group-data-[collapsible=icon]:w-(--sidebar-width-icon)"
+          )}
+        />
+        <div
+          data-slot="sidebar-container"
+          className={cn(
+            "fixed inset-y-0 z-10 h-svh transition-[left,right,width] duration-200 ease-linear touch-manipulation",
+            // Show/hide logic
+            isMobileSidebar ? "hidden" : "flex",
+            // Width adjustments
+            isMobile
+              ? "w-(--sidebar-width-mobile-mini) group-data-[collapsible=icon]:w-(--sidebar-width-mobile-mini)"
+              : "w-(--sidebar-width) group-data-[collapsible=icon]:w-(--sidebar-width-icon)",
+            // Position adjustments
+            side === "left"
+              ? isMobile
+                ? "left-0"
+                : "left-0 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]"
+              : isMobile
+                ? "right-0"
+                : "right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]",
+            // Padding and border adjustments
+            variant === "floating" || variant === "inset"
+              ? isMobile
+                ? "p-2 group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-mobile-mini)+(--spacing(4))+2px)]"
+                : "p-2 group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4))+2px)]"
+              : isMobile
+                ? "group-data-[side=left]:border-r group-data-[side=right]:border-l"
+                : "group-data-[collapsible=icon]:w-(--sidebar-width-icon) group-data-[side=left]:border-r group-data-[side=right]:border-l",
+            className
+          )}
+          {...props}
         >
-          {children}
+          <div
+            data-sidebar="sidebar"
+            data-slot="sidebar-inner"
+            className={cn(
+              "bg-sidebar group-data-[variant=floating]:border-sidebar-border flex h-full w-full flex-col group-data-[variant=floating]:rounded-lg group-data-[variant=floating]:border group-data-[variant=floating]:shadow-sm",
+              // Mobile mini sidebar styling
+              isMobile && "overflow-hidden"
+            )}
+          >
+            {children}
+          </div>
         </div>
       </div>
-    </div>
+    </>
   )
 }
 
@@ -428,7 +498,7 @@ function SidebarGroupAction({
       className={cn(
         "text-sidebar-foreground ring-sidebar-ring hover:bg-sidebar-accent hover:text-sidebar-accent-foreground absolute top-3.5 right-3 flex aspect-square w-5 items-center justify-center rounded-md p-0 outline-hidden transition-transform focus-visible:ring-2 [&>svg]:size-4 [&>svg]:shrink-0",
         // Increases the hit area of the button on mobile.
-        "after:absolute after:-inset-2 md:after:hidden",
+        "after:absolute after:-inset-2 md:after:hidden touch-manipulation",
         "group-data-[collapsible=icon]:hidden",
         className
       )}
@@ -563,7 +633,7 @@ function SidebarMenuAction({
       className={cn(
         "text-sidebar-foreground ring-sidebar-ring hover:bg-sidebar-accent hover:text-sidebar-accent-foreground peer-hover/menu-button:text-sidebar-accent-foreground absolute top-1.5 right-1 flex aspect-square w-5 items-center justify-center rounded-md p-0 outline-hidden transition-transform focus-visible:ring-2 [&>svg]:size-4 [&>svg]:shrink-0",
         // Increases the hit area of the button on mobile.
-        "after:absolute after:-inset-2 md:after:hidden",
+        "after:absolute after:-inset-2 md:after:hidden touch-manipulation",
         "peer-data-[size=sm]/menu-button:top-1",
         "peer-data-[size=default]/menu-button:top-1.5",
         "peer-data-[size=lg]/menu-button:top-2.5",

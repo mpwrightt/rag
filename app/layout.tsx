@@ -20,6 +20,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "DataDiver",
   description: "Intelligent document analysis and RAG platform",
+  viewport: "width=device-width, initial-scale=1, maximum-scale=5, user-scalable=yes",
 };
 
 export default function RootLayout({
@@ -30,7 +31,7 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning className="dark h-svh">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased overscroll-none min-h-screen overflow-x-hidden dark`}
+        className={`${geistSans.variable} ${geistMono.variable} antialiased overscroll-none min-h-screen overflow-x-hidden dark touch-manipulation`}
       >
         <ThemeProvider
           attribute="class"

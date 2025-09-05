@@ -49,15 +49,15 @@ export function NavMain({
           <SidebarMenuItem className="flex items-center gap-2 mb-4">
             <SidebarMenuButton
               tooltip="New Prompt"
-              className="bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground active:bg-primary/90 active:text-primary-foreground min-w-8 duration-200 ease-linear"
+              className="bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground active:bg-primary/90 active:text-primary-foreground min-w-8 duration-200 ease-linear touch-manipulation min-h-11 sm:min-h-10"
               onClick={handleQuickCreate}
             >
-              <IconCirclePlusFilled />
-              <span>New Prompt</span>
+              <IconCirclePlusFilled className="w-5 h-5" />
+              <span className="text-sm">New Prompt</span>
             </SidebarMenuButton>
             <Button
               size="icon"
-              className="size-8 group-data-[collapsible=icon]:opacity-0"
+              className="size-10 group-data-[collapsible=icon]:opacity-0 touch-manipulation min-h-11 min-w-11 sm:size-8 sm:min-h-8 sm:min-w-8"
               variant="outline"
             >
               <IconMail />
@@ -77,6 +77,7 @@ export function NavMain({
                   tooltip={item.title}
                   isActive={isActive}
                   onClick={() => handleNavigation(item.url)}
+                  className="touch-manipulation min-h-11 sm:min-h-10"
                 >
                   {item.icon && <item.icon />}
                   <span>{item.title}</span>

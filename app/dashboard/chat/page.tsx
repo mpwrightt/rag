@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useState, useRef, useEffect, useCallback } from 'react'
+import { useIsMobile } from '@/hooks/use-mobile'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -18,6 +19,7 @@ import { Progress } from '@/components/ui/progress'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import { 
   Send, 
   Bot, 
@@ -316,9 +318,13 @@ function UpgradeCard() {
 
 // Main chat component
 export default function ModernRAGChatPage() {
+  // Mobile detection
+  const isMobile = useIsMobile()
+  
   // Core chat state
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
+  const [isInputFocused, setIsInputFocused] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [streamingText, setStreamingText] = useState('')
   const [isConnected, setIsConnected] = useState<boolean | null>(null)
@@ -359,6 +365,181 @@ export default function ModernRAGChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const sessionIdRef = useRef<string | null>(null)
+
+  // Copy response helper
+  const copyMessage = useCallback(async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text || '')
+    } catch (e) {
+      console.error('Clipboard copy failed', e)
+    }
+  }, [])
+
+  // Core send logic (reused by regenerate)
+  const sendPrompt = useCallback(async (prompt: string) => {
+    if (!prompt.trim() || isLoading) return
+
+    // Append user message
+    const userMessage: ChatMessage = {
+      id: `user-${Date.now()}`,
+      role: 'user',
+      content: prompt.trim(),
+      timestamp: new Date()
+    }
+    setMessages(prev => [...prev, userMessage])
+    setIsLoading(true)
+
+    // Create streaming assistant message
+    const assistantMessage: ChatMessage = {
+      id: `assistant-${Date.now()}`,
+      role: 'assistant',
+      content: '',
+      timestamp: new Date(),
+      isStreaming: true,
+      sources: [],
+      confidence: {
+        overall: 0,
+        factual_accuracy: 0,
+        source_reliability: 0,
+        completeness: 0,
+        reasoning_quality: 0
+      }
+    }
+    setMessages(prev => [...prev, assistantMessage])
+
+    try {
+      const controller = new AbortController()
+      const startTime = Date.now()
+      const res = await fetch(`${API_BASE}/chat/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'bypass-tunnel-reminder': 'true' },
+        body: JSON.stringify({ message: prompt, search_type: chatSettings.searchMode, session_id: undefined }),
+        signal: controller.signal
+      })
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
+
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { value, done } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+
+        const events = buffer.split('\n\n')
+        buffer = events.pop() || ''
+        for (const evt of events) {
+          if (!evt.startsWith('data:')) continue
+          const json = evt.slice(5).trim()
+          if (!json) continue
+          try {
+            const data = JSON.parse(json)
+            if (data.type === 'delta') {
+              const delta: string = data.delta || ''
+              setMessages(prev => {
+                const newMessages = [...prev]
+                const last = newMessages[newMessages.length - 1]
+                if (last?.role === 'assistant') {
+                  last.content = (last.content || '') + delta
+                }
+                return newMessages
+              })
+            }
+            if (data.type === 'metrics' && data.metrics) {
+              const metrics = data.metrics
+              setMessages(prev => {
+                const newMessages = [...prev]
+                const last = newMessages[newMessages.length - 1]
+                if (last?.role === 'assistant') {
+                  last.confidence = {
+                    overall: Math.round((metrics.overall || 0) * 100),
+                    factual_accuracy: Math.round((metrics.factual_accuracy || 0) * 100),
+                    source_reliability: Math.round((metrics.source_reliability || 0) * 100),
+                    completeness: Math.round((metrics.completeness || 0) * 100),
+                    reasoning_quality: Math.round((metrics.reasoning_quality || 0) * 100)
+                  }
+                }
+                return newMessages
+              })
+            }
+            if (data.type === 'sources' && Array.isArray(data.sources)) {
+              setMessages(prev => {
+                const newMessages = [...prev]
+                const last = newMessages[newMessages.length - 1]
+                if (last?.role === 'assistant') {
+                  last.sources = data.sources
+                }
+                return newMessages
+              })
+            }
+          } catch (e) {
+            console.error('Error parsing stream data:', e)
+          }
+        }
+      }
+
+      // Finalize assistant message
+      setMessages(prev => {
+        const newMessages = [...prev]
+        const last = newMessages[newMessages.length - 1]
+        if (last?.role === 'assistant') {
+          last.isStreaming = false
+          last.timestamp = new Date()
+          last.metadata = {
+            ...(last.metadata || {}),
+            processingTime: Date.now() - startTime,
+            tokens: (last.content || '').split(/\s+/).length
+          }
+        }
+        return newMessages
+      })
+    } catch (error) {
+      console.error('Chat error:', error)
+      setMessages(prev => {
+        const newMessages = [...prev]
+        const last = newMessages[newMessages.length - 1]
+        if (last?.role === 'assistant') {
+          last.isStreaming = false
+          last.content = last.content || 'Sorry, I ran into a problem generating the response.'
+        }
+        return newMessages
+      })
+    } finally {
+      setIsLoading(false)
+      setStreamingText('')
+    }
+  }, [API_BASE, chatSettings.searchMode, isLoading])
+
+  // Copy confidence metrics helper
+  const copyConfidenceMetrics = useCallback((message: ChatMessage) => {
+    const c = message?.confidence
+    if (!c) return
+    const text = [
+      'Confidence Metrics',
+      `Overall: ${c.overall}%`,
+      `Factual accuracy: ${c.factual_accuracy}%`,
+      `Source reliability: ${c.source_reliability}%`,
+      `Completeness: ${c.completeness}%`,
+      `Reasoning quality: ${c.reasoning_quality}%`,
+    ].join('\n')
+    navigator.clipboard.writeText(text).catch(() => {})
+  }, [])
+
+  // Regenerate helper: re-send the closest preceding user prompt
+  const regenerateFrom = useCallback((assistantMessageId: string) => {
+    const idx = messages.findIndex(m => m.id === assistantMessageId)
+    if (idx <= 0) return
+    let prompt = ''
+    for (let i = idx - 1; i >= 0; i--) {
+      if (messages[i].role === 'user' && messages[i].content?.trim()) {
+        prompt = messages[i].content
+        break
+      }
+    }
+    if (!prompt) return
+    void sendPrompt(prompt)
+  }, [messages, sendPrompt])
 
   // Check backend connection
   const checkConnection = useCallback(async () => {
@@ -432,7 +613,8 @@ export default function ModernRAGChatPage() {
       
       if (documentsResponse.ok) {
         const data = await documentsResponse.json()
-        setDocuments(data.documents || [])
+        const docs = Array.isArray(data) ? data : (data.documents || [])
+        setDocuments(docs)
       }
     } catch (error) {
       console.error('Failed to load context data:', error)
@@ -458,160 +640,9 @@ export default function ModernRAGChatPage() {
   // Handle message submission
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!input.trim() || isLoading) return
-    
-    const userMessage: ChatMessage = {
-      id: `user-${Date.now()}`,
-      role: 'user',
-      content: input.trim(),
-      timestamp: new Date()
-    }
-
-    setMessages(prev => [...prev, userMessage])
+    const prompt = input
     setInput('')
-    setIsLoading(true)
-    
-    // Create streaming assistant message
-    const assistantMessage: ChatMessage = {
-      id: `assistant-${Date.now()}`,
-      role: 'assistant',
-      content: '',
-      timestamp: new Date(),
-      isStreaming: true,
-      sources: [],
-      confidence: {
-        overall: 0,
-        factual_accuracy: 0,
-        source_reliability: 0,
-        completeness: 0,
-        reasoning_quality: 0
-      },
-      metadata: {
-        temperature: chatSettings.temperature,
-      }
-    }
-
-    setMessages(prev => [...prev, assistantMessage])
-
-    try {
-      const response = await fetch(`${API_BASE}/chat/stream`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'bypass-tunnel-reminder': 'true'
-        },
-        body: JSON.stringify({
-          message: userMessage.content,
-          session_id: sessionIdRef.current,
-          settings: {
-            system_prompt: chatSettings.systemPrompt,
-            temperature: chatSettings.temperature,
-            max_tokens: chatSettings.maxTokens,
-            enable_sources: chatSettings.enableSources,
-            enable_confidence: chatSettings.enableConfidence,
-            top_k: chatSettings.topK,
-            similarity_threshold: chatSettings.similarityThreshold
-          },
-          context: chatSettings.contextMode !== 'all' ? {
-            mode: chatSettings.contextMode,
-            collections: chatSettings.selectedCollections,
-            documents: chatSettings.selectedDocuments
-          } : null
-        })
-      })
-
-      if (!response.ok) throw new Error('Chat request failed')
-
-      const reader = response.body?.getReader()
-      if (!reader) throw new Error('No response stream')
-
-      const decoder = new TextDecoder()
-      let buffer = ''
-      const startTime = Date.now()
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6))
-              
-              if (data.type === 'content' || data.type === 'text') {
-                setMessages(prev => {
-                  const newMessages = [...prev]
-                  const lastMessage = newMessages[newMessages.length - 1]
-                  if (lastMessage?.role === 'assistant') {
-                    lastMessage.content += data.content || ''
-                  }
-                  return newMessages
-                })
-              } else if (data.type === 'retrieval') {
-                console.debug('[Retrieval event]', data)
-                setLiveRetrieval(prev => [...prev, data.data || data])
-              } else if (data.type === 'sources' && data.sources) {
-                setMessages(prev => {
-                  const newMessages = [...prev]
-                  const lastMessage = newMessages[newMessages.length - 1]
-                  if (lastMessage?.role === 'assistant') {
-                    lastMessage.sources = data.sources
-                    setActiveSources(data.sources)
-                  }
-                  return newMessages
-                })
-              } else if (data.type === 'confidence' && data.confidence) {
-                setMessages(prev => {
-                  const newMessages = [...prev]
-                  const lastMessage = newMessages[newMessages.length - 1]
-                  if (lastMessage?.role === 'assistant') {
-                    lastMessage.confidence = data.confidence
-                  }
-                  return newMessages
-                })
-              } else if (data.type === 'session' && data.session_id) {
-                sessionIdRef.current = data.session_id
-              } else if (data.type === 'end') {
-                setMessages(prev => {
-                  const newMessages = [...prev]
-                  const lastMessage = newMessages[newMessages.length - 1]
-                  if (lastMessage?.role === 'assistant') {
-                    lastMessage.isStreaming = false
-                    lastMessage.metadata = {
-                      ...lastMessage.metadata,
-                      processingTime: Date.now() - startTime,
-                      tokens: lastMessage.content.split(/\s+/).length
-                    }
-                  }
-                  return newMessages
-                })
-              }
-            } catch (e) {
-              console.error('Error parsing stream data:', e)
-            }
-          }
-        }
-      }
-    } catch (error) {
-      console.error('Chat error:', error)
-      setMessages(prev => {
-        const newMessages = [...prev]
-        const lastMessage = newMessages[newMessages.length - 1]
-        if (lastMessage?.role === 'assistant') {
-          lastMessage.content = 'Sorry, I encountered an error. Please try again.'
-          lastMessage.isStreaming = false
-        }
-        return newMessages
-      })
-      setIsConnected(false)
-    } finally {
-      setIsLoading(false)
-      setTimeout(() => inputRef.current?.focus(), 100)
-    }
+    await sendPrompt(prompt)
   }
 
   // Handle keyboard shortcuts
@@ -622,10 +653,7 @@ export default function ModernRAGChatPage() {
     }
   }
 
-  // Copy message content
-  const copyMessage = useCallback((content: string) => {
-    navigator.clipboard.writeText(content)
-  }, [])
+  // Copy message content (duplicate removed; see copyMessage above)
 
   // Clear conversation
   const clearChat = useCallback(() => {
@@ -682,35 +710,88 @@ export default function ModernRAGChatPage() {
       condition={(has) => has({ plan: 'pro' })}
       fallback={<UpgradeCard />}
     >
-      <div className="flex flex-1 min-h-0 flex-col bg-background overflow-hidden">
+      <div className="flex flex-1 min-h-0 sm:min-h-0 min-h-[100dvh] flex-col bg-background overflow-hidden overflow-x-hidden relative">
         {/* Top Toolbar */}
-        <div className="flex-shrink-0 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 p-4 shadow-sm">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-3">
-                <div className="relative">
-                  <div className="w-10 h-10 bg-gradient-to-br from-primary to-primary/60 rounded-xl flex items-center justify-center shadow-lg">
-                    <Brain className="w-5 h-5 text-primary-foreground" />
+        <div className="flex-shrink-0 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 p-2 sm:p-4 shadow-sm">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 sm:gap-4 min-w-0">
+              <div className="flex items-center gap-2 sm:gap-3">
+                <div className="relative flex-shrink-0">
+                  <div className="w-8 h-8 sm:w-10 sm:h-10 bg-gradient-to-br from-primary to-primary/60 rounded-lg sm:rounded-xl flex items-center justify-center shadow-lg">
+                    <Brain className="w-4 h-4 sm:w-5 sm:h-5 text-primary-foreground" />
                   </div>
                   {isConnected && (
-                    <div className="absolute -top-1 -right-1 w-3 h-3 bg-green-500 rounded-full border-2 border-background" />
+                    <div className="absolute -top-0.5 -right-0.5 sm:-top-1 sm:-right-1 w-2 h-2 sm:w-3 sm:h-3 bg-green-500 rounded-full border-2 border-background" />
                   )}
                 </div>
                 
-                <div>
-                  <h1 className="text-xl font-bold bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent">
-                    DataDiver RAG Chat
+                <div className="min-w-0">
+                  <h1 className="text-base sm:text-xl font-bold bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent truncate">
+                    {isMobile ? 'RAG Chat' : 'DataDiver RAG Chat'}
                   </h1>
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Sparkles className="w-3 h-3" />
-                    <span>AI-powered document intelligence</span>
-                  </div>
+                  {!isMobile && (
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Sparkles className="w-3 h-3" />
+                      <span>AI-powered document intelligence</span>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 sm:gap-2">
+              {/* Mobile menu for small screens */}
+              {isMobile && !isInputFocused && (
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 w-8 p-0"
+                    >
+                      <Menu className="w-4 h-4" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-72" align="end">
+                    <div className="space-y-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setShowRetrievalSidebar(true)}
+                        className="w-full justify-start"
+                      >
+                        <GitBranch className="w-4 h-4 mr-2" />
+                        Retrieval Path
+                      </Button>
+                      {messages.length > 0 && (
+                        <>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={exportConversation}
+                            className="w-full justify-start"
+                          >
+                            <Download className="w-4 h-4 mr-2" />
+                            Export Chat
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={clearChat}
+                            className="w-full justify-start text-destructive"
+                          >
+                            <RotateCcw className="w-4 h-4 mr-2" />
+                            Clear Chat
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              )}
+              
               {/* Collections Filter Quick Access */}
+              {!isInputFocused && (
               <Popover>
                 <PopoverTrigger asChild>
                   <Button
@@ -718,13 +799,21 @@ export default function ModernRAGChatPage() {
                     size="sm"
                     className={cn(
                       "transition-colors",
-                      chatSettings.contextMode !== 'all' ? "bg-blue-50 border-blue-200 text-blue-700" : ""
+                      chatSettings.contextMode !== 'all' ? "bg-blue-50 border-blue-200 text-blue-700" : "",
+                      isMobile && "h-8 px-2"
                     )}
                   >
-                    <Filter className="w-4 h-4 mr-2" />
-                    {chatSettings.contextMode === 'all' ? 'All Documents' : 
-                     chatSettings.contextMode === 'collections' ? `${chatSettings.selectedCollections.length} Collections` :
-                     `${chatSettings.selectedDocuments.length} Documents`}
+                    <Filter className="w-4 h-4 mr-1 sm:mr-2" />
+                    <span className="hidden sm:inline">
+                      {chatSettings.contextMode === 'all' ? 'All Documents' : 
+                       chatSettings.contextMode === 'collections' ? `${chatSettings.selectedCollections.length} Collections` :
+                       `${chatSettings.selectedDocuments.length} Documents`}
+                    </span>
+                    <span className="sm:hidden">
+                      {chatSettings.contextMode === 'all' ? 'All' : 
+                       chatSettings.contextMode === 'collections' ? chatSettings.selectedCollections.length :
+                       chatSettings.selectedDocuments.length}
+                    </span>
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className="w-80" align="end">
@@ -809,137 +898,23 @@ export default function ModernRAGChatPage() {
                   </div>
                 </PopoverContent>
               </Popover>
+              )}
 
-              {/* Retrieval Path Sidebar Trigger */}
-              <Button
-                variant="default"
-                size="sm"
-                onClick={() => setShowRetrievalSidebar(true)}
-                className="bg-purple-600 hover:bg-purple-600/90 text-white"
-              >
-                <GitBranch className="w-4 h-4 mr-2" />
-                Retrieval Path
-              </Button>
-              
-              {/* Settings Modal Trigger */}
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button variant="outline" size="sm">
-                    <Settings className="w-4 h-4 mr-2" />
-                    Settings
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-96" align="end">
-                  <Tabs defaultValue="model" className="space-y-4">
-                    <TabsList className="grid w-full grid-cols-2">
-                      <TabsTrigger value="model">General</TabsTrigger>
-                      <TabsTrigger value="advanced">Advanced</TabsTrigger>
-                    </TabsList>
+              {/* Retrieval Path Sidebar Trigger - Hidden on mobile */}
+              {!isMobile && (
+                <Button
+                  variant="default"
+                  size="sm"
+                  onClick={() => setShowRetrievalSidebar(true)}
+                  className="bg-purple-600 hover:bg-purple-600/90 text-white"
+                >
+                  <GitBranch className="w-4 h-4 mr-2" />
+                  Retrieval Path
+                </Button>
+              )}
 
-                    <TabsContent value="model" className="space-y-4">
-                      {/* Temperature */}
-                      <div className="space-y-3">
-                        <label className="text-sm font-medium">Creativity: {chatSettings.temperature.toFixed(1)}</label>
-                        <Slider
-                          value={[chatSettings.temperature]}
-                          onValueChange={(value) => setChatSettings(prev => ({ ...prev, temperature: value[0] }))}
-                          max={1}
-                          min={0}
-                          step={0.1}
-                          className="w-full"
-                        />
-                        <div className="flex justify-between text-xs text-muted-foreground">
-                          <span>Precise</span>
-                          <span>Creative</span>
-                        </div>
-                      </div>
-
-                      {/* System Prompt */}
-                      <div className="space-y-3">
-                        <label className="text-sm font-medium">System Prompt</label>
-                        <Textarea
-                          value={chatSettings.systemPrompt}
-                          onChange={(e) => setChatSettings(prev => ({ ...prev, systemPrompt: e.target.value }))}
-                          rows={3}
-                          className="text-sm"
-                          placeholder="Define how the AI should behave..."
-                        />
-                      </div>
-                    </TabsContent>
-
-                    <TabsContent value="advanced" className="space-y-4">
-                      {/* Feature Toggles */}
-                      <div className="space-y-4">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <Zap className="w-4 h-4 text-primary" />
-                            <span className="text-sm font-medium">Streaming</span>
-                          </div>
-                          <Switch
-                            checked={chatSettings.enableStreaming}
-                            onCheckedChange={(checked) => setChatSettings(prev => ({ ...prev, enableStreaming: checked }))}
-                          />
-                        </div>
-
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <FileText className="w-4 h-4 text-green-500" />
-                            <span className="text-sm font-medium">Sources</span>
-                          </div>
-                          <Switch
-                            checked={chatSettings.enableSources}
-                            onCheckedChange={(checked) => setChatSettings(prev => ({ ...prev, enableSources: checked }))}
-                          />
-                        </div>
-
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <Shield className="w-4 h-4 text-indigo-500" />
-                            <span className="text-sm font-medium">Confidence</span>
-                          </div>
-                          <Switch
-                            checked={chatSettings.enableConfidence}
-                            onCheckedChange={(checked) => setChatSettings(prev => ({ ...prev, enableConfidence: checked }))}
-                          />
-                        </div>
-                      </div>
-
-                      <Separator />
-
-                      {/* Search Parameters */}
-                      <div className="space-y-4">
-                        <h4 className="text-sm font-medium">Search Parameters</h4>
-                        
-                        <div className="space-y-3">
-                          <label className="text-sm font-medium">Results: {chatSettings.topK}</label>
-                          <Slider
-                            value={[chatSettings.topK]}
-                            onValueChange={(value) => setChatSettings(prev => ({ ...prev, topK: value[0] }))}
-                            max={20}
-                            min={1}
-                            step={1}
-                            className="w-full"
-                          />
-                        </div>
-
-                        <div className="space-y-3">
-                          <label className="text-sm font-medium">Threshold: {chatSettings.similarityThreshold.toFixed(1)}</label>
-                          <Slider
-                            value={[chatSettings.similarityThreshold]}
-                            onValueChange={(value) => setChatSettings(prev => ({ ...prev, similarityThreshold: value[0] }))}
-                            max={1}
-                            min={0.1}
-                            step={0.1}
-                            className="w-full"
-                          />
-                        </div>
-                      </div>
-                    </TabsContent>
-                  </Tabs>
-                </PopoverContent>
-              </Popover>
-
-              {messages.length > 0 && (
+              {/* Desktop-only actions */}
+              {!isMobile && messages.length > 0 && (
                 <>
                   <Button
                     variant="outline"
@@ -969,94 +944,89 @@ export default function ModernRAGChatPage() {
         {/* Chat Messages Area */}
         <div className="flex-1 flex flex-col min-h-0">
           {/* Messages Area */}
-          <div className="flex-1 overflow-y-auto overscroll-contain p-4 min-h-0">
+          <div className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain p-2 sm:p-4 min-h-0 pb-20 sm:pb-0">
             <div className="max-w-4xl mx-auto">
-              {messages.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-full py-12 w-full overflow-x-hidden">
-                  {/* Welcome Section */}
-                  <div className="text-center mb-8 max-w-2xl px-4 w-full">
-                    <div className="w-20 h-20 bg-gradient-to-br from-primary to-primary/60 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-2xl">
-                      <Bot className="w-10 h-10 text-primary-foreground" />
+              {messages.length === 0 && !(isMobile && isInputFocused) ? (
+                <div className="flex flex-col items-center h-auto py-2 sm:py-3 w-full overflow-x-hidden">
+                  {/* Compact Title/Blurb */}
+                  <div className="w-full max-w-3xl px-4 text-center mb-2 sm:mb-3">
+                    <div className="inline-flex items-center gap-2 text-base sm:text-lg font-semibold text-primary/90">
+                      <Bot className="w-5 h-5" />
+                      <span>RAG Chat</span>
                     </div>
-                    
-                    <h2 className="text-3xl font-bold mb-4 bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent">
-                      Welcome to DataDiver RAG Chat
-                    </h2>
-                    
-                    <p className="text-muted-foreground mb-6 text-lg leading-relaxed">
-                      Ask me anything about your documents. I'll search through your knowledge base, 
-                      analyze the content, and provide detailed answers with citations.
+                    <p className="mt-1 text-sm sm:text-base text-muted-foreground line-clamp-2">
+                      Ask about your documents and get concise, cited answers.
                     </p>
-
-                    {/* Feature Highlights */}
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8 w-full max-w-3xl mx-auto">
-                      <Card className="p-4 hover:shadow-md transition-shadow">
-                        <div className="flex items-center gap-3 mb-2">
-                          <Database className="w-5 h-5 text-blue-500" />
-                          <h3 className="font-semibold text-sm">Smart Search</h3>
-                        </div>
-                        <p className="text-xs text-muted-foreground">Vector, hybrid, and keyword search modes</p>
-                      </Card>
-                      
-                      <Card className="p-4 hover:shadow-md transition-shadow">
-                        <div className="flex items-center gap-3 mb-2">
-                          <Shield className="w-5 h-5 text-green-500" />
-                          <h3 className="font-semibold text-sm">Confidence Scoring</h3>
-                        </div>
-                        <p className="text-xs text-muted-foreground">Quality metrics for every response</p>
-                      </Card>
-                      
-                      <Card className="p-4 hover:shadow-md transition-shadow">
-                        <div className="flex items-center gap-3 mb-2">
-                          <FileText className="w-5 h-5 text-purple-500" />
-                          <h3 className="font-semibold text-sm">Source Citations</h3>
-                        </div>
-                        <p className="text-xs text-muted-foreground">Detailed references and previews</p>
-                      </Card>
-                    </div>
                   </div>
 
                   {/* CRITICAL: Dynamic Questions Section - This must be preserved! */}
-                  <div className="w-full max-w-5xl px-4">
-                    <div className="flex items-center gap-2 justify-center mb-6">
+                  <div className="w-full max-w-3xl px-4">
+                    <div className="flex items-center gap-2 justify-center mb-3 sm:mb-4">
                       <Sparkles className="w-4 h-4 text-primary" />
-                      <h3 className="text-lg font-semibold text-primary">Suggested Questions</h3>
+                      <h3 className="text-sm sm:text-base font-semibold text-primary">Suggested Questions</h3>
                       <Sparkles className="w-4 h-4 text-primary" />
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-1 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-2 gap-3 max-w-4xl mx-auto">
-                      {isLoadingQuestions ? (
-                        Array.from({ length: 8 }).map((_, idx) => (
-                          <Skeleton key={idx} className="h-20 rounded-lg w-full" />
-                        ))
-                      ) : (
-                        suggestedQuestions.slice(0, 8).map((question, idx) => (
-                          <Button
+                    {isLoadingQuestions ? (
+                      <div className="space-y-2">
+                        {Array.from({ length: 6 }).map((_, idx) => (
+                          <Skeleton key={idx} className="h-10 rounded-lg w-full" />
+                        ))}
+                      </div>
+                    ) : (
+                      <Accordion type="single" collapsible className="w-full space-y-2">
+                        {suggestedQuestions.slice(0, 8).map((question, idx) => (
+                          <AccordionItem
                             key={idx}
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                              setInput(question)
-                              setTimeout(() => {
-                                inputRef.current?.focus()
-                                inputRef.current?.setSelectionRange(question.length, question.length)
-                              }, 0)
-                            }}
-                            className="h-auto py-4 px-4 text-left hover:bg-primary/5 hover:border-primary/30 transition-all duration-200 group min-h-[4.5rem] w-full flex items-start justify-start"
+                            value={`q-${idx}`}
+                            className="border rounded-2xl bg-card/60 overflow-hidden hover:bg-muted/40 transition-colors"
                           >
-                            <div className="flex items-start gap-3 w-full">
-                              <Search className="w-4 h-4 mt-0.5 text-primary group-hover:scale-110 transition-transform flex-shrink-0" />
-                              <span className="text-sm leading-relaxed text-left whitespace-normal break-words hyphens-auto flex-1">{question}</span>
-                            </div>
-                          </Button>
-                        ))
-                      )}
-                    </div>
+                            <AccordionTrigger className="px-3 py-2 hover:no-underline w-full min-w-0 overflow-hidden text-left">
+                              <div className="flex items-start gap-2.5 w-full min-w-0 overflow-hidden">
+                                <Search className="w-3.5 h-3.5 text-primary shrink-0 mt-0.5" />
+                                <span className="text-xs sm:text-sm flex-1 min-w-0 block truncate sm:whitespace-normal sm:line-clamp-2 sm:leading-snug">
+                                  {question}
+                                </span>
+                              </div>
+                            </AccordionTrigger>
+                            <AccordionContent className="px-4 pb-4 pt-0">
+                              <div className="text-sm text-muted-foreground mb-3 whitespace-normal break-words">
+                                {question}
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Button
+                                  variant="default"
+                                  size="sm"
+                                  onClick={() => {
+                                    setInput(question)
+                                    setTimeout(() => {
+                                      inputRef.current?.focus()
+                                      inputRef.current?.setSelectionRange(question.length, question.length)
+                                    }, 0)
+                                  }}
+                                >
+                                  Use
+                                </Button>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={async () => {
+                                    try { await navigator.clipboard.writeText(question) } catch {}
+                                  }}
+                                >
+                                  <Copy className="w-3.5 h-3.5 mr-2" /> Copy
+                                </Button>
+                              </div>
+                            </AccordionContent>
+                          </AccordionItem>
+                        ))}
+                      </Accordion>
+                    )}
                   </div>
                 </div>
               ) : (
                 <TooltipProvider>
-                  <div className="space-y-8">
+                  <div className="space-y-6 sm:space-y-8">
                     {messages.map((message, index) => (
                       <div key={message.id} className={cn(
                         "flex gap-6 animate-in slide-in-from-bottom-2 fade-in duration-500",
@@ -1066,21 +1036,21 @@ export default function ModernRAGChatPage() {
                         {message.role === 'assistant' && (
                           <div className="flex-shrink-0 relative">
                             <div className={cn(
-                              "w-12 h-12 bg-gradient-to-br from-indigo-500 via-purple-500 to-blue-600 rounded-2xl flex items-center justify-center shadow-xl border-2 border-white",
+                              "w-10 h-10 sm:w-12 sm:h-12 bg-gradient-to-br from-indigo-500 via-purple-500 to-blue-600 rounded-xl sm:rounded-2xl flex items-center justify-center shadow-xl border-2 border-white",
                               message.isStreaming && "animate-pulse shadow-indigo-200"
                             )}>
-                              <Bot className="w-6 h-6 text-white" />
+                              <Bot className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
                             </div>
                             {/* Status indicator */}
                             {message.isStreaming ? (
-                              <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-yellow-400 rounded-full border-2 border-white animate-pulse" />
+                              <div className="absolute -bottom-1 -right-1 w-3.5 h-3.5 sm:w-4 sm:h-4 bg-yellow-400 rounded-full border-2 border-white animate-pulse" />
                             ) : (
                               <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-green-500 rounded-full border-2 border-white" />
                             )}
                           </div>
                         )}
 
-                        <div className="flex flex-col gap-3 max-w-[85%] min-w-0">
+                        <div className="flex flex-col gap-3 max-w-[92%] sm:max-w-[85%] min-w-0">
                           {/* Enhanced Message Bubble */}
                           <div className={cn(
                             "relative group transition-all duration-300 ease-out",
@@ -1103,7 +1073,7 @@ export default function ModernRAGChatPage() {
                                 {/* Enhanced Message Header for Assistant */}
                                 {message.role === 'assistant' && (
                                   <div className="flex items-center justify-between mb-4 pb-3 border-b border-gray-100">
-                                    <div className="flex items-center gap-3">
+                                    <div className="flex items-center gap-2 sm:gap-3">
                                       <div className="flex items-center gap-2 text-xs text-gray-500">
                                         <Clock className="w-3.5 h-3.5" />
                                         <span className="font-medium">{message.timestamp.toLocaleTimeString()}</span>
@@ -1179,24 +1149,12 @@ export default function ModernRAGChatPage() {
                                     : "prose-gray",
                                   message.isStreaming && "relative"
                                 )}>
-                                  {message.content ? (
+                                  {message.content && (
                                     <div className="whitespace-pre-wrap">
                                       <MarkdownContent 
                                         content={message.content} 
                                         isUser={message.role === 'user'}
                                       />
-                                      {message.isStreaming && (
-                                        <span className="inline-flex items-center ml-1">
-                                          <span className="w-0.5 h-5 bg-indigo-400 animate-pulse rounded-full" />
-                                        </span>
-                                      )}
-                                    </div>
-                                  ) : (
-                                    <div className="flex items-center justify-center py-8 text-gray-400">
-                                      <div className="text-center">
-                                        <AlertTriangle className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                                        <p className="text-sm">No response generated</p>
-                                      </div>
                                     </div>
                                   )}
                                 </div>
@@ -1228,7 +1186,24 @@ export default function ModernRAGChatPage() {
                                             size="sm"
                                             variant="ghost"
                                             className="h-8 px-3 hover:bg-gray-100 text-gray-600 hover:text-gray-800 transition-colors"
-                                            onClick={() => {/* TODO: Regenerate response */}}
+                                            onClick={() => copyConfidenceMetrics(message)}
+                                          >
+                                            <Gauge className="w-3.5 h-3.5 mr-1.5" />
+                                            Copy confidence
+                                          </Button>
+                                        </TooltipTrigger>
+                                        <TooltipContent>
+                                          <p>Copy confidence breakdown</p>
+                                        </TooltipContent>
+                                      </Tooltip>
+                                      
+                                      <Tooltip>
+                                        <TooltipTrigger asChild>
+                                          <Button
+                                            size="sm"
+                                            variant="ghost"
+                                            className="h-8 px-3 hover:bg-gray-100 text-gray-600 hover:text-gray-800 transition-colors"
+                                            onClick={() => regenerateFrom(message.id)}
                                           >
                                             <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
                                             Regenerate
@@ -1414,8 +1389,8 @@ export default function ModernRAGChatPage() {
                         {/* Enhanced User Avatar */}
                         {message.role === 'user' && (
                           <div className="flex-shrink-0 relative">
-                            <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-blue-600 rounded-2xl flex items-center justify-center shadow-xl border-2 border-white">
-                              <User className="w-6 h-6 text-white" />
+                            <div className="w-10 h-10 sm:w-12 sm:h-12 bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl sm:rounded-2xl flex items-center justify-center shadow-xl border-2 border-white">
+                              <User className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
                             </div>
                           </div>
                         )}
@@ -1432,7 +1407,7 @@ export default function ModernRAGChatPage() {
                           <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-yellow-400 rounded-full border-2 border-white animate-pulse" />
                         </div>
                         
-                        <div className="bg-white/80 backdrop-blur-sm border border-gray-200/50 rounded-3xl px-6 py-5 max-w-[85%] shadow-lg">
+                        <div className="bg-white/80 backdrop-blur-sm border border-gray-200/50 rounded-2xl sm:rounded-3xl px-4 sm:px-6 py-4 sm:py-5 max-w-[92%] sm:max-w-[85%] shadow-lg">
                           <div className="absolute inset-0 bg-gradient-to-br from-indigo-50/20 via-purple-50/20 to-blue-50/20 opacity-50 rounded-3xl" />
                           <div className="relative z-10">
                             <div className="flex items-center gap-3 mb-3">
@@ -1475,23 +1450,30 @@ export default function ModernRAGChatPage() {
           </div>
 
           {/* Enhanced Input Area */}
-          <div className="flex-shrink-0 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 p-4 shadow-sm">
-            <div className="max-w-4xl mx-auto">
-              <form onSubmit={handleSubmit} className="space-y-3">
-                <div className="relative">
+          <div className={cn(
+            "fixed sm:sticky bottom-0 left-0 right-0 z-30 flex-shrink-0 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 p-2 sm:p-4 shadow-sm overflow-x-hidden",
+            isMobile && isInputFocused ? "py-1" : ""
+          )}>
+            <div className="max-w-4xl mx-auto w-full min-w-0 pb-[max(env(safe-area-inset-bottom),0px)]">
+              <form onSubmit={handleSubmit} className="space-y-3 w-full min-w-0 overflow-x-hidden">
+                <div className="relative w-full max-w-full min-w-0 overflow-x-hidden">
                   <Textarea
                     ref={inputRef}
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={handleKeyDown}
-                    placeholder="Ask me anything about your documents... I can analyze, summarize, compare, and answer questions with intelligent context and real-time citations."
-                    className="min-h-[60px] max-h-[200px] resize-none rounded-xl border bg-card pr-24 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all"
+                    placeholder={isMobile 
+                      ? "Ask about your documents…"
+                      : "Ask me anything about your documents... I can analyze, summarize, compare, and answer questions with intelligent context and real-time citations."}
+                    onFocus={() => setIsInputFocused(true)}
+                    onBlur={() => setIsInputFocused(false)}
+                    className="w-full max-w-full box-border min-h-[52px] sm:min-h-[60px] max-h-[200px] resize-none rounded-xl border bg-card pr-16 sm:pr-24 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all"
                     disabled={isLoading}
-                    rows={2}
+                    rows={isMobile ? 1 : 2}
                   />
 
                   {/* Input Actions */}
-                  <div className="absolute right-3 top-3 flex items-center gap-2">
+                  <div className="absolute right-3 top-3 flex items-center gap-1 sm:gap-2 pointer-events-auto">
                     {chatSettings.voiceEnabled && (
                       <Button
                         type="button"
@@ -1533,8 +1515,8 @@ export default function ModernRAGChatPage() {
                 </div>
 
                 {/* Input Status Bar */}
-                <div className="flex items-center justify-between text-xs text-muted-foreground">
-                  <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+                  <div className="flex flex-wrap items-center gap-2">
                     {/* Context Indicator */}
                     {chatSettings.contextMode !== 'all' && (chatSettings.selectedCollections.length > 0 || chatSettings.selectedDocuments.length > 0) && (
                       <div className="flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-600 rounded-full">
@@ -1585,7 +1567,7 @@ export default function ModernRAGChatPage() {
                     </div>
 
                     {/* Keyboard Shortcuts */}
-                    <div className="flex items-center gap-1">
+                    <div className="hidden sm:flex items-center gap-1">
                       <kbd className="px-1.5 py-0.5 bg-muted rounded text-xs font-mono">Enter</kbd>
                       <span>send</span>
                       <span>•</span>

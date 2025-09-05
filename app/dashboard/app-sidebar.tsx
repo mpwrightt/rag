@@ -148,7 +148,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           <SidebarMenuItem className="flex items-center gap-2 group-data-[collapsible=icon]:flex-col group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:gap-1">
             <SidebarMenuButton
               asChild
-              className="data-[slot=sidebar-menu-button]:!p-1.5 flex-1 group-data-[collapsible=icon]:hidden"
+              className="data-[slot=sidebar-menu-button]:!p-2 flex-1 group-data-[collapsible=icon]:hidden touch-manipulation min-h-[44px]"
             >
               <Link href="/">
                 <ChatMaxingIconColoured className="!size-6" />
@@ -160,8 +160,8 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             <div className="hidden items-center justify-center shrink-0 overflow-visible group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:p-1">
               <ChatMaxingIconColoured className="!size-5" aria-hidden="true" />
             </div>
-            {/* Always-visible toggle; center when collapsed */}
-            <SidebarTrigger className="size-6" />
+            {/* Always-visible toggle; larger on mobile for better touch targets */}
+            <SidebarTrigger className="size-8 sm:size-6 lg:size-6 touch-manipulation min-h-[44px] min-w-[44px]" />
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>

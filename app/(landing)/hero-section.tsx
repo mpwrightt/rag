@@ -28,53 +28,53 @@ export default function HeroSection() {
                             
                             {/* Hero Content with Orbiting Elements */}
                             <div className="text-center relative">
-                                {/* Floating stats cards */}
-                                <div className="absolute top-5 -left-24 hidden lg:block">
-                                    <MagicCard className="p-4 w-32 h-20">
+                                {/* Floating stats cards - Repositioned for mobile safety */}
+                                <div className="absolute -top-4 -left-16 hidden xl:block">
+                                    <MagicCard className="p-3 w-28 h-16">
                                         <div className="text-center">
-                                            <NumberTicker value={99.9} decimalPlaces={1} className="text-xl font-bold text-purple-400" />
-                                            <p className="text-xs text-gray-400">% Accuracy</p>
+                                            <NumberTicker value={99.9} decimalPlaces={1} className="text-lg font-bold text-purple-400" />
+                                            <p className="text-xs text-gray-400 leading-tight">% Accuracy</p>
                                         </div>
                                     </MagicCard>
                                 </div>
                                 
-                                <div className="absolute top-5 -right-24 hidden lg:block">
-                                    <MagicCard className="p-4 w-36 h-20">
+                                <div className="absolute -top-4 -right-16 hidden xl:block">
+                                    <MagicCard className="p-3 w-28 h-16">
                                         <div className="text-center">
-                                            <NumberTicker value={1200} className="text-xl font-bold text-cyan-400" />
-                                            <p className="text-xs text-gray-400">Docs/sec</p>
+                                            <NumberTicker value={1200} className="text-lg font-bold text-cyan-400" />
+                                            <p className="text-xs text-gray-400 leading-tight">Docs/sec</p>
                                         </div>
                                     </MagicCard>
                                 </div>
                                 
-                                {/* Central orbiting visualization */}
-                                <div className="relative h-[400px] w-[400px] mx-auto mb-8">
+                                {/* Central orbiting visualization - Mobile optimized */}
+                                <div className="relative h-[200px] w-[200px] sm:h-[280px] sm:w-[280px] md:h-[320px] md:w-[320px] lg:h-[400px] lg:w-[400px] mx-auto mb-6 sm:mb-8">
                                     {/* Central AI brain */}
                                     <div className="absolute inset-0 flex items-center justify-center">
-                                        <div className="w-16 h-16 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center animate-pulse">
-                                            <Brain className="w-8 h-8 text-white" />
+                                        <div className="w-12 h-12 sm:w-14 sm:h-14 lg:w-16 lg:h-16 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center animate-pulse">
+                                            <Brain className="w-6 h-6 sm:w-7 sm:h-7 lg:w-8 lg:h-8 text-white" />
                                         </div>
                                     </div>
                                     
-                                    {/* Orbiting icons for RAG pipeline */}
-                                    <OrbitingCircles radius={80} duration={15} delay={0}>
-                                        <FileText className="w-4 h-4" />
+                                    {/* Orbiting icons for RAG pipeline - Responsive radius */}
+                                    <OrbitingCircles radius={50} duration={15} delay={0} className="sm:radius-[60px] lg:radius-[80px]">
+                                        <FileText className="w-3 h-3 sm:w-4 sm:h-4" />
                                     </OrbitingCircles>
-                                    <OrbitingCircles radius={80} duration={15} delay={5}>
-                                        <Search className="w-4 h-4" />
+                                    <OrbitingCircles radius={50} duration={15} delay={5} className="sm:radius-[60px] lg:radius-[80px]">
+                                        <Search className="w-3 h-3 sm:w-4 sm:h-4" />
                                     </OrbitingCircles>
-                                    <OrbitingCircles radius={80} duration={15} delay={10}>
-                                        <MessageSquare className="w-4 h-4" />
+                                    <OrbitingCircles radius={50} duration={15} delay={10} className="sm:radius-[60px] lg:radius-[80px]">
+                                        <MessageSquare className="w-3 h-3 sm:w-4 sm:h-4" />
                                     </OrbitingCircles>
                                     
-                                    <OrbitingCircles radius={140} duration={20} reverse delay={0}>
-                                        <Database className="w-4 h-4" />
+                                    <OrbitingCircles radius={90} duration={20} reverse delay={0} className="sm:radius-[110px] lg:radius-[140px]">
+                                        <Database className="w-3 h-3 sm:w-4 sm:h-4" />
                                     </OrbitingCircles>
-                                    <OrbitingCircles radius={140} duration={20} reverse delay={7}>
-                                        <Bot className="w-4 h-4" />
+                                    <OrbitingCircles radius={90} duration={20} reverse delay={7} className="sm:radius-[110px] lg:radius-[140px]">
+                                        <Bot className="w-3 h-3 sm:w-4 sm:h-4" />
                                     </OrbitingCircles>
-                                    <OrbitingCircles radius={140} duration={20} reverse delay={14}>
-                                        <Cpu className="w-4 h-4" />
+                                    <OrbitingCircles radius={90} duration={20} reverse delay={14} className="sm:radius-[110px] lg:radius-[140px]">
+                                        <Cpu className="w-3 h-3 sm:w-4 sm:h-4" />
                                     </OrbitingCircles>
                                 </div>
 
@@ -92,27 +92,24 @@ export default function HeroSection() {
                                     </Link>
                                 </div>
 
-                                <h1 className="mx-auto mt-8 max-w-4xl text-balance text-5xl font-bold tracking-tight sm:text-6xl md:text-7xl">
-                                    Transform Your
-                                    <br className="block" />
-                                    <span className="inline-block text-transparent bg-gradient-to-r from-purple-400 via-pink-400 to-orange-400 bg-clip-text min-w-[280px] sm:min-w-[320px] md:min-w-[400px] text-center">
-                                        <WordRotate words={ragWords} />
+                                <h1 className="mx-auto mt-6 sm:mt-8 max-w-4xl text-balance text-2xl font-bold tracking-tight sm:text-3xl md:text-4xl lg:text-5xl xl:text-6xl leading-tight">
+                                    <span className="block mb-2">Transform Your</span>
+                                    <span className="block text-transparent bg-gradient-to-r from-purple-400 via-pink-400 to-orange-400 bg-clip-text mb-2">
+                                        <WordRotate words={ragWords} className="inline-block min-h-[1.2em]" />
                                     </span>
-                                    <br />
-                                    into AI-Powered
-                                    <br className="block" />
-                                    <span className="inline-block text-transparent bg-gradient-to-r from-cyan-400 via-blue-400 to-indigo-400 bg-clip-text min-w-[300px] sm:min-w-[360px] md:min-w-[450px] text-center">
-                                        <WordRotate words={aiWords} />
+                                    <span className="block mb-2">into AI-Powered</span>
+                                    <span className="block text-transparent bg-gradient-to-r from-cyan-400 via-blue-400 to-indigo-400 bg-clip-text">
+                                        <WordRotate words={aiWords} className="inline-block min-h-[1.2em]" />
                                     </span>
                                 </h1>
                                 
-                                <p className="text-gray-300 mx-auto my-8 max-w-2xl text-balance text-xl md:text-2xl">
+                                <p className="text-gray-300 mx-auto my-6 sm:my-8 max-w-2xl text-balance text-base sm:text-lg md:text-xl lg:text-2xl leading-relaxed px-4">
                                     The most advanced RAG pipeline that understands context, maintains conversations, and delivers precise answers from your private knowledge base.
                                 </p>
 
-                                <div className="flex items-center justify-center gap-4 mb-12">
-                                    <Link href="#link">
-                                        <PulsatingButton className="h-12 px-8 text-lg font-medium">
+                                <div className="flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-4 mb-8 sm:mb-12 px-4 w-full max-w-md sm:max-w-none mx-auto">
+                                    <Link href="#link" className="w-full sm:w-auto">
+                                        <PulsatingButton className="h-12 px-6 sm:px-8 text-base font-medium min-h-[44px] touch-manipulation w-full sm:w-auto">
                                             <span className="text-nowrap">Start Building →</span>
                                         </PulsatingButton>
                                     </Link>
@@ -120,7 +117,7 @@ export default function HeroSection() {
                                         asChild
                                         size="lg"
                                         variant="outline"
-                                        className="h-12 px-8 text-lg">
+                                        className="h-12 px-6 sm:px-8 text-base min-h-[44px] touch-manipulation w-full sm:w-auto">
                                         <Link href="#link">
                                             <span className="text-nowrap">🎥 Watch Demo</span>
                                         </Link>

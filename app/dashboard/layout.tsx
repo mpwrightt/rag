@@ -23,10 +23,11 @@ export default function DashboardLayout({
       style={
         {
           "--sidebar-width": "calc(var(--spacing) * 72)",
+          "--sidebar-width-mobile-mini": "calc(var(--spacing) * 16)",
           "--header-height": "calc(var(--spacing) * 12)",
         } as React.CSSProperties
       }
-      className="group/layout h-svh overflow-hidden"
+      className="group/layout h-svh overflow-hidden touch-manipulation"
     >
       <AppSidebar variant="inset" />
       <SidebarInset className="min-h-0 overflow-hidden">

@@ -14,7 +14,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
 import uuid
 
-from fastapi import FastAPI, HTTPException, Request, Depends, UploadFile, File
+from fastapi import FastAPI, HTTPException, Request, Depends, UploadFile, File, Form
 from fastapi.responses import StreamingResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -32,7 +32,9 @@ from .db_utils import (
     add_message,
     get_session_messages,
     test_connection,
-    delete_document
+    delete_document,
+    list_documents,
+    get_document,
 )
 from .graph_utils import (
     initialize_graph,
@@ -91,6 +93,7 @@ try:
     from ingestion.embedder import create_embedder
     from ingestion.graph_builder import create_graph_builder
     from .models import IngestionConfig
+    from ingestion.converters import convert_to_markdown
     INGESTION_AVAILABLE = True
 except ImportError as e:
     logger.warning(f"Ingestion pipeline not available: {e}")

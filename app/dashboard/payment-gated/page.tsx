@@ -4,11 +4,11 @@ import CustomClerkPricing from "@/components/custom-clerk-pricing";
 function UpgradeCard() {
   return (
     <>
-      <div className="mx-auto max-w-2xl space-y-4 text-center">
-        <h1 className="text-center text-2xl font-semibold lg:text-3xl">Upgrade to a paid plan</h1>
-        <p>This page is available on paid plans. Choose a plan that fits your needs.</p>
+      <div className="mx-auto max-w-2xl space-y-4 text-center px-4 sm:px-6">
+        <h1 className="text-center text-xl sm:text-2xl lg:text-3xl font-semibold">Upgrade to a paid plan</h1>
+        <p className="text-sm sm:text-base text-muted-foreground">This page is available on paid plans. Choose a plan that fits your needs.</p>
       </div>
-      <div className="px-8 lg:px-12">
+      <div className="px-4 sm:px-8 lg:px-12">
         <CustomClerkPricing />
       </div>
     </>
@@ -18,14 +18,14 @@ function UpgradeCard() {
 
 function FeaturesCard() {
   return (
-    <div className="px-4 lg:px-6">
+    <div className="px-4 sm:px-4 lg:px-6">
       <div className="flex flex-col gap-4">
         <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-bold">Advanced features</h1>
+          <h1 className="text-xl sm:text-2xl font-bold">Advanced features</h1>
         </div>
-        <div className="rounded-lg border bg-card p-6">
-          <h2 className="text-lg font-semibold mb-4">Page with advanced features</h2>
-            <p className="text-muted-foreground">
+        <div className="rounded-lg border bg-card p-4 sm:p-6">
+          <h2 className="text-base sm:text-lg font-semibold mb-2 sm:mb-4">Page with advanced features</h2>
+            <p className="text-muted-foreground text-sm sm:text-base">
               Access to advanced features.
             </p>
           </div>

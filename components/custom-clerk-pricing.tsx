@@ -23,7 +23,38 @@ export default function CustomClerkPricing() {
                             fontWeight: 800,  
                         },
                         pricingTable: {
-                            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                            gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+                            gap: '1.5rem',
+                            padding: '0 1rem',
+                            '@media (max-width: 768px)': {
+                                gridTemplateColumns: '1fr',
+                                gap: '1rem',
+                                padding: '0 0.5rem',
+                            },
+                            '@media (max-width: 480px)': {
+                                gridTemplateColumns: '1fr',
+                                gap: '0.75rem',
+                                padding: '0',
+                            }
+                        },
+                        pricingTableCard: {
+                            minHeight: '400px',
+                            '@media (max-width: 768px)': {
+                                minHeight: '350px',
+                                padding: '1.5rem',
+                            },
+                            '@media (max-width: 480px)': {
+                                minHeight: '320px',
+                                padding: '1rem',
+                            }
+                        },
+                        pricingTableCardButton: {
+                            minHeight: '44px',
+                            fontSize: '16px',
+                            '@media (max-width: 768px)': {
+                                minHeight: '48px',
+                                fontSize: '16px',
+                            }
                         },
                     },
                 }}

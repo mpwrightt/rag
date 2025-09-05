@@ -76,9 +76,9 @@ const testimonials: Testimonial[] = [
 ]
 
 const TestimonialCard = ({ testimonial }: { testimonial: Testimonial }) => (
-    <MagicCard className="w-96 p-6 mx-4">
-        <div className="flex items-start gap-4 mb-4">
-            <Avatar className="size-12">
+    <MagicCard className="w-80 sm:w-96 p-4 sm:p-6 mx-2 sm:mx-4">
+        <div className="flex items-start gap-3 sm:gap-4 mb-3 sm:mb-4">
+            <Avatar className="size-10 sm:size-12 flex-shrink-0">
                 <AvatarImage
                     alt={testimonial.name}
                     src={testimonial.image}
@@ -86,15 +86,15 @@ const TestimonialCard = ({ testimonial }: { testimonial: Testimonial }) => (
                 />
                 <AvatarFallback>{testimonial.name.charAt(0)}</AvatarFallback>
             </Avatar>
-            <div className="flex-1">
-                <div className="flex items-center justify-between">
-                    <div>
-                        <h3 className="font-semibold text-white">{testimonial.name}</h3>
-                        <p className="text-sm text-gray-400">{testimonial.role} at {testimonial.company}</p>
+            <div className="flex-1 min-w-0">
+                <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1 min-w-0">
+                        <h3 className="font-semibold text-white text-sm sm:text-base truncate">{testimonial.name}</h3>
+                        <p className="text-xs sm:text-sm text-gray-400 leading-tight">{testimonial.role} at {testimonial.company}</p>
                     </div>
-                    <div className="flex">
+                    <div className="flex flex-shrink-0">
                         {Array.from({ length: testimonial.rating }, (_, i) => (
-                            <Star key={i} className="w-4 h-4 fill-yellow-400 text-yellow-400" />
+                            <Star key={i} className="w-3 h-3 sm:w-4 sm:h-4 fill-yellow-400 text-yellow-400" />
                         ))}
                     </div>
                 </div>
@@ -102,16 +102,16 @@ const TestimonialCard = ({ testimonial }: { testimonial: Testimonial }) => (
         </div>
         
         <div className="relative">
-            <Quote className="absolute -top-1 -left-1 w-6 h-6 text-purple-400 opacity-50" />
-            <blockquote className="text-gray-300 text-sm leading-relaxed pl-6">
+            <Quote className="absolute -top-1 -left-1 w-4 h-4 sm:w-6 sm:h-6 text-purple-400 opacity-50" />
+            <blockquote className="text-gray-300 text-xs sm:text-sm leading-relaxed pl-4 sm:pl-6">
                 {testimonial.quote}
             </blockquote>
         </div>
 
         {testimonial.metric && (
-            <div className="mt-4 p-3 bg-gradient-to-r from-purple-500/10 to-pink-500/10 rounded-lg border border-purple-500/20">
+            <div className="mt-3 sm:mt-4 p-2 sm:p-3 bg-gradient-to-r from-purple-500/10 to-pink-500/10 rounded-lg border border-purple-500/20">
                 <div className="text-center">
-                    <div className="text-2xl font-bold text-cyan-400">{testimonial.metric.value}</div>
+                    <div className="text-lg sm:text-2xl font-bold text-cyan-400">{testimonial.metric.value}</div>
                     <div className="text-xs text-gray-400">{testimonial.metric.label}</div>
                 </div>
             </div>
@@ -124,20 +124,20 @@ export default function WallOfLoveSection() {
     const secondRow = testimonials.slice(3, 6)
 
     return (
-        <section className="py-12 md:py-20 relative overflow-hidden">
+        <section className="py-8 sm:py-12 md:py-20 relative overflow-hidden">
             {/* Background elements */}
             <div className="absolute inset-0 bg-gradient-to-b from-purple-900/10 to-transparent" />
             
             <div className="relative z-10">
-                <div className="mx-auto max-w-7xl px-6">
-                    <div className="text-center mb-16">
-                        <h2 className="text-5xl font-bold text-white mb-6">
+                <div className="mx-auto max-w-7xl px-4 sm:px-6">
+                    <div className="text-center mb-8 sm:mb-12 md:mb-16">
+                        <h2 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold text-white mb-4 sm:mb-6">
                             Loved by{" "}
                             <span className="text-transparent bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text">
                                 Innovative Teams
                             </span>
                         </h2>
-                        <p className="text-xl text-gray-400 max-w-3xl mx-auto">
+                        <p className="text-base sm:text-lg md:text-xl text-gray-400 max-w-3xl mx-auto px-4">
                             Join thousands of companies transforming their document intelligence with our RAG platform
                         </p>
                     </div>
@@ -159,19 +159,19 @@ export default function WallOfLoveSection() {
                         </Marquee>
                     </div>
 
-                    {/* Trust Indicators */}
-                    <div className="mt-16 text-center">
-                        <p className="text-gray-300 mb-8 text-lg font-medium">Trusted by companies of all sizes</p>
+                    {/* Trust Indicators - Mobile Optimized */}
+                    <div className="mt-12 sm:mt-16 text-center">
+                        <p className="text-gray-300 mb-6 sm:mb-8 text-base sm:text-lg font-medium">Trusted by companies of all sizes</p>
                         <div className="relative">
-                            <MagicCard className="p-8 bg-gradient-to-r from-gray-900/50 to-gray-800/50 border-gray-700/50">
-                                <div className="grid grid-cols-2 md:grid-cols-4 gap-8 items-center">
+                            <MagicCard className="p-4 sm:p-6 md:p-8 bg-gradient-to-r from-gray-900/50 to-gray-800/50 border-gray-700/50">
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 sm:gap-6 md:gap-8 items-center">
                                     {[
                                         { name: 'Innovatech', color: 'text-purple-300' },
                                         { name: 'BioGenetics', color: 'text-emerald-300' },
                                         { name: 'QuantumLeap', color: 'text-cyan-300' },
                                         { name: 'FusionDesk', color: 'text-pink-300' }
                                     ].map((company) => (
-                                        <div key={company.name} className={`${company.color} font-bold text-xl hover:scale-105 transition-transform duration-200 cursor-default`}>
+                                        <div key={company.name} className={`${company.color} font-bold text-sm sm:text-base md:text-lg lg:text-xl hover:scale-105 transition-transform duration-200 cursor-default text-center`}>
                                             {company.name}
                                         </div>
                                     ))}

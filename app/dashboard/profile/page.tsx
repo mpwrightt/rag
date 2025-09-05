@@ -248,19 +248,19 @@ export default function ProfilePage() {
 
   return (
     <div className="flex flex-col h-full bg-background">
-      {/* Header */}
-      <div className="flex-shrink-0 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 p-6">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <Avatar className="w-16 h-16">
-              <div className="w-full h-full bg-gradient-to-br from-primary to-primary/60 flex items-center justify-center text-primary-foreground text-lg font-semibold">
+      {/* Mobile-Optimized Header */}
+      <div className="flex-shrink-0 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 p-4 sm:p-6">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div className="flex items-center gap-3 sm:gap-4">
+            <Avatar className="w-12 h-12 sm:w-16 sm:h-16 flex-shrink-0">
+              <div className="w-full h-full bg-gradient-to-br from-primary to-primary/60 flex items-center justify-center text-primary-foreground text-sm sm:text-lg font-semibold">
                 {profile.name.split(' ').map(n => n[0]).join('')}
               </div>
             </Avatar>
-            <div>
-              <h1 className="text-2xl font-semibold">{profile.name}</h1>
-              <p className="text-muted-foreground">{profile.email}</p>
-              <div className="flex items-center gap-2 mt-1">
+            <div className="min-w-0 flex-1">
+              <h1 className="text-lg sm:text-2xl font-semibold truncate">{profile.name}</h1>
+              <p className="text-muted-foreground text-sm sm:text-base truncate">{profile.email}</p>
+              <div className="flex flex-wrap items-center gap-1 sm:gap-2 mt-1">
                 <Badge variant="secondary" className="text-xs">
                   Pro Plan
                 </Badge>
@@ -270,25 +270,25 @@ export default function ProfilePage() {
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-3">
-            <Button variant="outline" onClick={exportData}>
-              <Download className="w-4 h-4 mr-2" />
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3">
+            <Button variant="outline" onClick={exportData} size="sm" className="text-xs sm:text-sm">
+              <Download className="w-3 h-3 sm:w-4 sm:h-4 mr-1 sm:mr-2" />
               Export Data
             </Button>
             {isEditing ? (
               <div className="flex gap-2">
-                <Button size="sm" onClick={saveProfile}>
-                  <Save className="w-4 h-4 mr-1" />
+                <Button size="sm" onClick={saveProfile} className="flex-1 sm:flex-none text-xs sm:text-sm">
+                  <Save className="w-3 h-3 sm:w-4 sm:h-4 mr-1" />
                   Save
                 </Button>
-                <Button size="sm" variant="outline" onClick={() => setIsEditing(false)}>
-                  <X className="w-4 h-4 mr-1" />
+                <Button size="sm" variant="outline" onClick={() => setIsEditing(false)} className="flex-1 sm:flex-none text-xs sm:text-sm">
+                  <X className="w-3 h-3 sm:w-4 sm:h-4 mr-1" />
                   Cancel
                 </Button>
               </div>
             ) : (
-              <Button onClick={() => setIsEditing(true)}>
-                <Edit3 className="w-4 h-4 mr-2" />
+              <Button onClick={() => setIsEditing(true)} size="sm" className="text-xs sm:text-sm">
+                <Edit3 className="w-3 h-3 sm:w-4 sm:h-4 mr-1 sm:mr-2" />
                 Edit Profile
               </Button>
             )}
@@ -296,81 +296,89 @@ export default function ProfilePage() {
         </div>
       </div>
 
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto p-6">
+      {/* Mobile-Optimized Content */}
+      <div className="flex-1 overflow-y-auto p-4 sm:p-6">
         <div className="max-w-6xl mx-auto">
           <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-            <TabsList className="grid w-full grid-cols-5">
-              <TabsTrigger value="profile">Profile</TabsTrigger>
-              <TabsTrigger value="usage">Usage & Stats</TabsTrigger>
-              <TabsTrigger value="security">Security</TabsTrigger>
-              <TabsTrigger value="privacy">Privacy</TabsTrigger>
-              <TabsTrigger value="billing">Billing</TabsTrigger>
-            </TabsList>
+            {/* Mobile-Scrollable TabsList */}
+            <div className="w-full overflow-x-auto">
+              <TabsList className="grid w-max min-w-full sm:w-full grid-cols-5 gap-1 mx-auto">
+                <TabsTrigger value="profile" className="text-xs sm:text-sm px-2 sm:px-3 py-2 whitespace-nowrap">Profile</TabsTrigger>
+                <TabsTrigger value="usage" className="text-xs sm:text-sm px-2 sm:px-3 py-2 whitespace-nowrap">Usage & Stats</TabsTrigger>
+                <TabsTrigger value="security" className="text-xs sm:text-sm px-2 sm:px-3 py-2 whitespace-nowrap">Security</TabsTrigger>
+                <TabsTrigger value="privacy" className="text-xs sm:text-sm px-2 sm:px-3 py-2 whitespace-nowrap">Privacy</TabsTrigger>
+                <TabsTrigger value="billing" className="text-xs sm:text-sm px-2 sm:px-3 py-2 whitespace-nowrap">Billing</TabsTrigger>
+              </TabsList>
+            </div>
 
-            <TabsContent value="profile" className="mt-6">
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                {/* Profile Information */}
-                <div className="lg:col-span-2 space-y-6">
+            <TabsContent value="profile" className="mt-4 sm:mt-6">
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
+                {/* Mobile-Optimized Profile Information */}
+                <div className="lg:col-span-2 space-y-4 sm:space-y-6">
                   <Card>
-                    <CardHeader>
-                      <CardTitle className="flex items-center gap-2">
-                        <User className="w-5 h-5" />
+                    <CardHeader className="pb-3 sm:pb-6">
+                      <CardTitle className="flex items-center gap-2 text-base sm:text-lg">
+                        <User className="w-4 h-4 sm:w-5 sm:h-5" />
                         Personal Information
                       </CardTitle>
                     </CardHeader>
-                    <CardContent className="space-y-4">
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div>
+                    <CardContent className="space-y-4 p-4 sm:p-6">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div className="sm:col-span-2 md:col-span-1">
                           <label className="text-sm font-medium">Full Name</label>
                           <Input
                             value={profile.name}
                             onChange={(e) => updateProfile('name', e.target.value)}
                             disabled={!isEditing}
-                            className="mt-1"
+                            className="mt-1 h-10 sm:h-10 text-base"
+                            placeholder="Enter your full name"
                           />
                         </div>
-                        <div>
+                        <div className="sm:col-span-2 md:col-span-1">
                           <label className="text-sm font-medium">Email</label>
                           <Input
                             value={profile.email}
                             type="email"
                             disabled={!isEditing}
-                            className="mt-1"
+                            className="mt-1 h-10 sm:h-10 text-base"
+                            placeholder="your.email@example.com"
                           />
                         </div>
-                        <div>
+                        <div className="sm:col-span-2 md:col-span-1">
                           <label className="text-sm font-medium">Job Title</label>
                           <Input
                             value={profile.title || ''}
                             onChange={(e) => updateProfile('title', e.target.value)}
                             disabled={!isEditing}
-                            className="mt-1"
+                            className="mt-1 h-10 sm:h-10 text-base"
+                            placeholder="Your job title"
                           />
                         </div>
-                        <div>
+                        <div className="sm:col-span-2 md:col-span-1">
                           <label className="text-sm font-medium">Company</label>
                           <Input
                             value={profile.company || ''}
                             onChange={(e) => updateProfile('company', e.target.value)}
                             disabled={!isEditing}
-                            className="mt-1"
+                            className="mt-1 h-10 sm:h-10 text-base"
+                            placeholder="Your company"
                           />
                         </div>
-                        <div>
+                        <div className="sm:col-span-2 md:col-span-1">
                           <label className="text-sm font-medium">Location</label>
                           <Input
                             value={profile.location || ''}
                             onChange={(e) => updateProfile('location', e.target.value)}
                             disabled={!isEditing}
-                            className="mt-1"
+                            className="mt-1 h-10 sm:h-10 text-base"
+                            placeholder="City, Country"
                           />
                         </div>
-                        <div>
+                        <div className="sm:col-span-2 md:col-span-1">
                           <label className="text-sm font-medium">Timezone</label>
                           <Select value={profile.timezone} disabled={!isEditing}>
-                            <SelectTrigger className="mt-1">
-                              <SelectValue />
+                            <SelectTrigger className="mt-1 h-10 sm:h-10 text-base">
+                              <SelectValue placeholder="Select timezone" />
                             </SelectTrigger>
                             <SelectContent>
                               <SelectItem value="America/Los_Angeles">Pacific Time</SelectItem>
@@ -381,34 +389,35 @@ export default function ProfilePage() {
                           </Select>
                         </div>
                       </div>
-                      <div>
+                      <div className="sm:col-span-2">
                         <label className="text-sm font-medium">Bio</label>
                         <Textarea
                           value={profile.bio || ''}
                           onChange={(e) => updateProfile('bio', e.target.value)}
                           disabled={!isEditing}
                           rows={3}
-                          className="mt-1"
+                          className="mt-1 text-base resize-none"
+                          placeholder="Tell us about yourself..."
                         />
                       </div>
                     </CardContent>
                   </Card>
 
-                  {/* Preferences */}
+                  {/* Mobile-Optimized Preferences */}
                   <Card>
-                    <CardHeader>
-                      <CardTitle className="flex items-center gap-2">
-                        <Settings className="w-5 h-5" />
+                    <CardHeader className="pb-3 sm:pb-6">
+                      <CardTitle className="flex items-center gap-2 text-base sm:text-lg">
+                        <Settings className="w-4 h-4 sm:w-5 sm:h-5" />
                         Preferences
                       </CardTitle>
                     </CardHeader>
-                    <CardContent className="space-y-4">
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <CardContent className="space-y-4 p-4 sm:p-6">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
                           <label className="text-sm font-medium">Language</label>
                           <Select value={profile.language} disabled={!isEditing}>
-                            <SelectTrigger className="mt-1">
-                              <SelectValue />
+                            <SelectTrigger className="mt-1 h-10 sm:h-10 text-base">
+                              <SelectValue placeholder="Select language" />
                             </SelectTrigger>
                             <SelectContent>
                               <SelectItem value="en-US">English (US)</SelectItem>
@@ -422,8 +431,8 @@ export default function ProfilePage() {
                         <div>
                           <label className="text-sm font-medium">Theme</label>
                           <Select value={profile.theme} disabled={!isEditing}>
-                            <SelectTrigger className="mt-1">
-                              <SelectValue />
+                            <SelectTrigger className="mt-1 h-10 sm:h-10 text-base">
+                              <SelectValue placeholder="Select theme" />
                             </SelectTrigger>
                             <SelectContent>
                               <SelectItem value="light">Light</SelectItem>
@@ -437,38 +446,38 @@ export default function ProfilePage() {
                   </Card>
                 </div>
 
-                {/* Sidebar */}
-                <div className="space-y-6">
-                  {/* Achievements */}
+                {/* Mobile-Optimized Sidebar */}
+                <div className="space-y-4 sm:space-y-6">
+                  {/* Mobile-Optimized Achievements */}
                   <Card>
-                    <CardHeader>
-                      <CardTitle className="flex items-center gap-2">
-                        <Award className="w-5 h-5" />
+                    <CardHeader className="pb-3 sm:pb-6">
+                      <CardTitle className="flex items-center gap-2 text-base sm:text-lg">
+                        <Award className="w-4 h-4 sm:w-5 sm:h-5" />
                         Achievements
                       </CardTitle>
                     </CardHeader>
-                    <CardContent>
-                      <div className="grid grid-cols-1 gap-3">
+                    <CardContent className="p-4 sm:p-6">
+                      <div className="grid grid-cols-1 gap-2 sm:gap-3">
                         {achievements.map((achievement) => {
                           const IconComponent = achievement.icon
                           return (
                             <div
                               key={achievement.id}
                               className={cn(
-                                "flex items-center gap-3 p-3 rounded-lg border",
+                                "flex items-center gap-2 sm:gap-3 p-2 sm:p-3 rounded-lg border",
                                 achievement.earned 
                                   ? "bg-background border-border" 
                                   : "bg-muted/50 border-dashed opacity-50"
                               )}
                             >
-                              <div className={cn("w-8 h-8 rounded-full flex items-center justify-center", achievement.color)}>
-                                <IconComponent className="w-4 h-4" />
+                              <div className={cn("w-6 h-6 sm:w-8 sm:h-8 rounded-full flex items-center justify-center flex-shrink-0", achievement.color)}>
+                                <IconComponent className="w-3 h-3 sm:w-4 sm:h-4" />
                               </div>
                               <div className="flex-1 min-w-0">
-                                <p className="text-sm font-medium">{achievement.name}</p>
+                                <p className="text-xs sm:text-sm font-medium">{achievement.name}</p>
                                 <p className="text-xs text-muted-foreground">{achievement.description}</p>
                               </div>
-                              {achievement.earned && <Check className="w-4 h-4 text-green-600" />}
+                              {achievement.earned && <Check className="w-3 h-3 sm:w-4 sm:h-4 text-green-600 flex-shrink-0" />}
                             </div>
                           )
                         })}
@@ -476,25 +485,25 @@ export default function ProfilePage() {
                     </CardContent>
                   </Card>
 
-                  {/* Recent Activity */}
+                  {/* Mobile-Optimized Recent Activity */}
                   <Card>
-                    <CardHeader>
-                      <CardTitle className="flex items-center gap-2">
-                        <Activity className="w-5 h-5" />
+                    <CardHeader className="pb-3 sm:pb-6">
+                      <CardTitle className="flex items-center gap-2 text-base sm:text-lg">
+                        <Activity className="w-4 h-4 sm:w-5 sm:h-5" />
                         Recent Activity
                       </CardTitle>
                     </CardHeader>
-                    <CardContent>
-                      <div className="space-y-3">
+                    <CardContent className="p-4 sm:p-6">
+                      <div className="space-y-2 sm:space-y-3">
                         {recentActivity.map((activity, idx) => {
                           const IconComponent = activity.icon
                           return (
-                            <div key={idx} className="flex items-start gap-3">
-                              <div className="w-8 h-8 bg-muted rounded-full flex items-center justify-center flex-shrink-0">
-                                <IconComponent className="w-4 h-4" />
+                            <div key={idx} className="flex items-start gap-2 sm:gap-3">
+                              <div className="w-6 h-6 sm:w-8 sm:h-8 bg-muted rounded-full flex items-center justify-center flex-shrink-0">
+                                <IconComponent className="w-3 h-3 sm:w-4 sm:h-4" />
                               </div>
                               <div className="flex-1 min-w-0">
-                                <p className="text-sm">{activity.action}</p>
+                                <p className="text-xs sm:text-sm">{activity.action}</p>
                                 <p className="text-xs text-muted-foreground">{activity.timestamp}</p>
                               </div>
                             </div>
@@ -507,53 +516,53 @@ export default function ProfilePage() {
               </div>
             </TabsContent>
 
-            <TabsContent value="usage" className="mt-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                {/* Usage Statistics Cards */}
+            <TabsContent value="usage" className="mt-4 sm:mt-6">
+              <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6">
+                {/* Mobile-Optimized Usage Statistics Cards */}
                 <Card>
-                  <CardContent className="p-6">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-2xl font-bold">{usageStats.documents_processed.toLocaleString()}</p>
-                        <p className="text-sm text-muted-foreground">Documents Processed</p>
+                  <CardContent className="p-3 sm:p-6">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                      <div className="flex-1">
+                        <p className="text-lg sm:text-2xl font-bold">{usageStats.documents_processed.toLocaleString()}</p>
+                        <p className="text-xs sm:text-sm text-muted-foreground">Documents Processed</p>
                       </div>
-                      <FileText className="w-8 h-8 text-blue-600" />
+                      <FileText className="w-6 h-6 sm:w-8 sm:h-8 text-blue-600 self-start sm:self-center" />
                     </div>
                   </CardContent>
                 </Card>
 
                 <Card>
-                  <CardContent className="p-6">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-2xl font-bold">{usageStats.queries_made.toLocaleString()}</p>
-                        <p className="text-sm text-muted-foreground">Queries Made</p>
+                  <CardContent className="p-3 sm:p-6">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                      <div className="flex-1">
+                        <p className="text-lg sm:text-2xl font-bold">{usageStats.queries_made.toLocaleString()}</p>
+                        <p className="text-xs sm:text-sm text-muted-foreground">Queries Made</p>
                       </div>
-                      <BarChart3 className="w-8 h-8 text-green-600" />
+                      <BarChart3 className="w-6 h-6 sm:w-8 sm:h-8 text-green-600 self-start sm:self-center" />
                     </div>
                   </CardContent>
                 </Card>
 
                 <Card>
-                  <CardContent className="p-6">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-2xl font-bold">{usageStats.ai_enhancements}</p>
-                        <p className="text-sm text-muted-foreground">AI Enhancements</p>
+                  <CardContent className="p-3 sm:p-6">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                      <div className="flex-1">
+                        <p className="text-lg sm:text-2xl font-bold">{usageStats.ai_enhancements}</p>
+                        <p className="text-xs sm:text-sm text-muted-foreground">AI Enhancements</p>
                       </div>
-                      <Brain className="w-8 h-8 text-purple-600" />
+                      <Brain className="w-6 h-6 sm:w-8 sm:h-8 text-purple-600 self-start sm:self-center" />
                     </div>
                   </CardContent>
                 </Card>
 
                 <Card>
-                  <CardContent className="p-6">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-2xl font-bold">{usageStats.integrations_active}</p>
-                        <p className="text-sm text-muted-foreground">Active Integrations</p>
+                  <CardContent className="p-3 sm:p-6">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                      <div className="flex-1">
+                        <p className="text-lg sm:text-2xl font-bold">{usageStats.integrations_active}</p>
+                        <p className="text-xs sm:text-sm text-muted-foreground">Active Integrations</p>
                       </div>
-                      <Zap className="w-8 h-8 text-orange-600" />
+                      <Zap className="w-6 h-6 sm:w-8 sm:h-8 text-orange-600 self-start sm:self-center" />
                     </div>
                   </CardContent>
                 </Card>

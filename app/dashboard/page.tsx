@@ -51,7 +51,7 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import { KnowledgeHealthScore, type HealthMetrics } from '@/components/knowledge-health-score'
-import { AreaChart, Area, LineChart as RechartsLineChart, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer, PieChart as RechartsPieChart, Cell, BarChart as RechartsBarChart, Bar } from 'recharts'
+import { AreaChart, Area, LineChart as RechartsLineChart, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer, PieChart as RechartsPieChart, Pie, Cell, BarChart as RechartsBarChart, Bar } from 'recharts'
 import { cn } from '@/lib/utils'
 
 // Backend API base URL
@@ -404,44 +404,44 @@ export default function DashboardPage() {
 
   return (
     <div className="flex flex-col h-full bg-background">
-      {/* Enhanced Header */}
-      <div className="flex-shrink-0 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 p-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent">
+      {/* Enhanced Header - Mobile Optimized */}
+      <div className="flex-shrink-0 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 p-4 sm:p-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="min-w-0">
+            <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent leading-tight">
               Intelligence Dashboard
             </h1>
-            <p className="text-muted-foreground mt-1">
+            <p className="text-muted-foreground text-sm sm:text-base mt-1">
               Real-time analytics and monitoring for your RAG system
             </p>
           </div>
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2 text-sm">
+          <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+            <div className="flex items-center gap-2 text-xs sm:text-sm">
               <Switch 
                 checked={autoRefresh} 
                 onCheckedChange={setAutoRefresh} 
-                className="scale-75"
+                className="scale-75 sm:scale-100"
               />
-              <span className="text-muted-foreground">Auto-refresh</span>
+              <span className="text-muted-foreground whitespace-nowrap">Auto-refresh</span>
             </div>
             <Badge 
               variant={systemHealth?.status === 'healthy' ? 'default' : 'destructive'}
-              className="flex items-center gap-2 px-3 py-1"
+              className="flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1 text-xs"
             >
               <div className={cn(
                 "w-2 h-2 rounded-full animate-pulse",
                 systemHealth?.status === 'healthy' ? "bg-green-400" : "bg-red-400"
               )} />
-              System {systemHealth?.status || 'Loading...'}
+              <span className="hidden sm:inline">System </span>{systemHealth?.status || 'Loading...'}
             </Badge>
             <Button 
               variant="outline" 
               size="sm"
               onClick={() => window.location.reload()}
-              className="flex items-center gap-2"
+              className="flex items-center gap-1 sm:gap-2 px-2 sm:px-3 text-xs sm:text-sm"
             >
-              <RefreshCw className="w-4 h-4" />
-              Refresh
+              <RefreshCw className="w-3 h-3 sm:w-4 sm:h-4" />
+              <span className="hidden sm:inline">Refresh</span>
             </Button>
           </div>
         </div>
@@ -451,32 +451,41 @@ export default function DashboardPage() {
       <div className="flex-1 overflow-y-auto p-6">
         <div className="max-w-7xl mx-auto space-y-6">
           <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-            <TabsList className="grid w-full grid-cols-4 lg:w-auto lg:grid-cols-6 gap-1">
-              <TabsTrigger value="overview" className="flex items-center gap-2">
-                <BarChart3 className="w-4 h-4" />
-                Overview
-              </TabsTrigger>
-              <TabsTrigger value="analytics" className="flex items-center gap-2">
-                <LineChart className="w-4 h-4" />
-                Analytics
-              </TabsTrigger>
-              <TabsTrigger value="performance" className="flex items-center gap-2">
-                <Gauge className="w-4 h-4" />
-                Performance
-              </TabsTrigger>
-              <TabsTrigger value="system" className="flex items-center gap-2">
-                <Server className="w-4 h-4" />
-                System
-              </TabsTrigger>
-              <TabsTrigger value="activity" className="flex items-center gap-2">
-                <Activity className="w-4 h-4" />
-                Activity
-              </TabsTrigger>
-              <TabsTrigger value="insights" className="flex items-center gap-2">
-                <Brain className="w-4 h-4" />
-                AI Insights
-              </TabsTrigger>
-            </TabsList>
+            {/* Mobile Scrollable TabsList */}
+            <div className="w-full overflow-x-auto">
+              <TabsList className="grid w-max min-w-full md:w-full grid-cols-6 md:grid-cols-6 gap-1 mx-auto">
+                <TabsTrigger value="overview" className="flex items-center gap-1 sm:gap-2 px-2 sm:px-3 text-xs sm:text-sm whitespace-nowrap">
+                  <BarChart3 className="w-3 h-3 sm:w-4 sm:h-4" />
+                  <span className="hidden sm:inline">Overview</span>
+                  <span className="sm:hidden">Home</span>
+                </TabsTrigger>
+                <TabsTrigger value="analytics" className="flex items-center gap-1 sm:gap-2 px-2 sm:px-3 text-xs sm:text-sm whitespace-nowrap">
+                  <LineChart className="w-3 h-3 sm:w-4 sm:h-4" />
+                  <span className="hidden sm:inline">Analytics</span>
+                  <span className="sm:hidden">Stats</span>
+                </TabsTrigger>
+                <TabsTrigger value="performance" className="flex items-center gap-1 sm:gap-2 px-2 sm:px-3 text-xs sm:text-sm whitespace-nowrap">
+                  <Gauge className="w-3 h-3 sm:w-4 sm:h-4" />
+                  <span className="hidden sm:inline">Performance</span>
+                  <span className="sm:hidden">Perf</span>
+                </TabsTrigger>
+                <TabsTrigger value="system" className="flex items-center gap-1 sm:gap-2 px-2 sm:px-3 text-xs sm:text-sm whitespace-nowrap">
+                  <Server className="w-3 h-3 sm:w-4 sm:h-4" />
+                  <span className="hidden sm:inline">System</span>
+                  <span className="sm:hidden">Sys</span>
+                </TabsTrigger>
+                <TabsTrigger value="activity" className="flex items-center gap-1 sm:gap-2 px-2 sm:px-3 text-xs sm:text-sm whitespace-nowrap">
+                  <Activity className="w-3 h-3 sm:w-4 sm:h-4" />
+                  <span className="hidden sm:inline">Activity</span>
+                  <span className="sm:hidden">Act</span>
+                </TabsTrigger>
+                <TabsTrigger value="insights" className="flex items-center gap-1 sm:gap-2 px-2 sm:px-3 text-xs sm:text-sm whitespace-nowrap">
+                  <Brain className="w-3 h-3 sm:w-4 sm:h-4" />
+                  <span className="hidden sm:inline">AI Insights</span>
+                  <span className="sm:hidden">AI</span>
+                </TabsTrigger>
+              </TabsList>
+            </div>
 
             <TabsContent value="overview" className="space-y-6">
               {/* Knowledge Health Score - Featured */}
@@ -486,8 +495,8 @@ export default function DashboardPage() {
                 className="col-span-full"
               />
               
-              {/* Key Performance Metrics */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+              {/* Key Performance Metrics - Mobile Optimized */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
                 <StatCard
                   title="Active Users Today"
                   value={usageMetrics?.active_users || '...'}
@@ -526,8 +535,8 @@ export default function DashboardPage() {
                 />
               </div>
 
-              {/* Storage and Knowledge Base */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+              {/* Storage and Knowledge Base - Mobile Optimized */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
                 <StatCard
                   title="Knowledge Base"
                   value={stats?.total_documents || '...'}
@@ -563,52 +572,52 @@ export default function DashboardPage() {
                 />
               </div>
 
-              {/* Quick Actions Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+              {/* Quick Actions Grid - Mobile Optimized */}
+              <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6">
                 <Link href="/dashboard/chat">
                   <Card className="cursor-pointer hover:shadow-lg transition-all hover:border-primary/50 group">
-                    <CardContent className="p-6 text-center">
-                      <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl flex items-center justify-center mx-auto mb-4 group-hover:scale-110 transition-transform">
-                        <MessageCircle className="w-6 h-6 text-white" />
+                    <CardContent className="p-3 sm:p-6 text-center">
+                      <div className="w-8 h-8 sm:w-12 sm:h-12 bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg sm:rounded-xl flex items-center justify-center mx-auto mb-2 sm:mb-4 group-hover:scale-110 transition-transform">
+                        <MessageCircle className="w-4 h-4 sm:w-6 sm:h-6 text-white" />
                       </div>
-                      <h3 className="font-semibold mb-2">Start Conversation</h3>
-                      <p className="text-sm text-muted-foreground">Interact with your RAG system</p>
+                      <h3 className="font-semibold text-xs sm:text-base mb-1 sm:mb-2">Start Conversation</h3>
+                      <p className="text-xs sm:text-sm text-muted-foreground hidden sm:block">Interact with your RAG system</p>
                     </CardContent>
                   </Card>
                 </Link>
 
                 <Link href="/dashboard/documents">
                   <Card className="cursor-pointer hover:shadow-lg transition-all hover:border-primary/50 group">
-                    <CardContent className="p-6 text-center">
-                      <div className="w-12 h-12 bg-gradient-to-br from-green-500 to-green-600 rounded-xl flex items-center justify-center mx-auto mb-4 group-hover:scale-110 transition-transform">
-                        <Plus className="w-6 h-6 text-white" />
+                    <CardContent className="p-3 sm:p-6 text-center">
+                      <div className="w-8 h-8 sm:w-12 sm:h-12 bg-gradient-to-br from-green-500 to-green-600 rounded-lg sm:rounded-xl flex items-center justify-center mx-auto mb-2 sm:mb-4 group-hover:scale-110 transition-transform">
+                        <Plus className="w-4 h-4 sm:w-6 sm:h-6 text-white" />
                       </div>
-                      <h3 className="font-semibold mb-2">Upload Documents</h3>
-                      <p className="text-sm text-muted-foreground">Expand your knowledge base</p>
+                      <h3 className="font-semibold text-xs sm:text-base mb-1 sm:mb-2">Upload Documents</h3>
+                      <p className="text-xs sm:text-sm text-muted-foreground hidden sm:block">Expand your knowledge base</p>
                     </CardContent>
                   </Card>
                 </Link>
 
                 <Link href="/dashboard/collections">
                   <Card className="cursor-pointer hover:shadow-lg transition-all hover:border-primary/50 group">
-                    <CardContent className="p-6 text-center">
-                      <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-purple-600 rounded-xl flex items-center justify-center mx-auto mb-4 group-hover:scale-110 transition-transform">
-                        <Database className="w-6 h-6 text-white" />
+                    <CardContent className="p-3 sm:p-6 text-center">
+                      <div className="w-8 h-8 sm:w-12 sm:h-12 bg-gradient-to-br from-purple-500 to-purple-600 rounded-lg sm:rounded-xl flex items-center justify-center mx-auto mb-2 sm:mb-4 group-hover:scale-110 transition-transform">
+                        <Database className="w-4 h-4 sm:w-6 sm:h-6 text-white" />
                       </div>
-                      <h3 className="font-semibold mb-2">Manage Collections</h3>
-                      <p className="text-sm text-muted-foreground">Organize your content</p>
+                      <h3 className="font-semibold text-xs sm:text-base mb-1 sm:mb-2">Manage Collections</h3>
+                      <p className="text-xs sm:text-sm text-muted-foreground hidden sm:block">Organize your content</p>
                     </CardContent>
                   </Card>
                 </Link>
 
                 <Link href="/dashboard/settings">
                   <Card className="cursor-pointer hover:shadow-lg transition-all hover:border-primary/50 group">
-                    <CardContent className="p-6 text-center">
-                      <div className="w-12 h-12 bg-gradient-to-br from-orange-500 to-orange-600 rounded-xl flex items-center justify-center mx-auto mb-4 group-hover:scale-110 transition-transform">
-                        <Settings className="w-6 h-6 text-white" />
+                    <CardContent className="p-3 sm:p-6 text-center">
+                      <div className="w-8 h-8 sm:w-12 sm:h-12 bg-gradient-to-br from-orange-500 to-orange-600 rounded-lg sm:rounded-xl flex items-center justify-center mx-auto mb-2 sm:mb-4 group-hover:scale-110 transition-transform">
+                        <Settings className="w-4 h-4 sm:w-6 sm:h-6 text-white" />
                       </div>
-                      <h3 className="font-semibold mb-2">System Settings</h3>
-                      <p className="text-sm text-muted-foreground">Configure your system</p>
+                      <h3 className="font-semibold text-xs sm:text-base mb-1 sm:mb-2">System Settings</h3>
+                      <p className="text-xs sm:text-sm text-muted-foreground hidden sm:block">Configure your system</p>
                     </CardContent>
                   </Card>
                 </Link>
@@ -665,7 +674,7 @@ export default function DashboardPage() {
                     <div className="h-60">
                       <ResponsiveContainer width="100%" height="100%">
                         <RechartsPieChart>
-                          <pie 
+                          <Pie 
                             data={documentCategoryData}
                             cx="50%" 
                             cy="50%" 
@@ -677,7 +686,7 @@ export default function DashboardPage() {
                             {documentCategoryData.map((entry, index) => (
                               <Cell key={`cell-${index}`} fill={entry.color} />
                             ))}
-                          </pie>
+                          </Pie>
                         </RechartsPieChart>
                       </ResponsiveContainer>
                     </div>
@@ -727,8 +736,8 @@ export default function DashboardPage() {
             </TabsContent>
 
             <TabsContent value="performance" className="space-y-6">
-              {/* Performance Metrics */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+              {/* Performance Metrics - Mobile Optimized */}
+              <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6">
                 <MetricGauge title="API Response Time" value={1.8} max={5} unit="s" />
                 <MetricGauge title="Cache Hit Rate" value={84.2} max={100} unit="%" />
                 <MetricGauge title="Success Rate" value={97.8} max={100} unit="%" />
@@ -760,8 +769,8 @@ export default function DashboardPage() {
             </TabsContent>
 
             <TabsContent value="system" className="space-y-6">
-              {/* System Resources */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+              {/* System Resources - Mobile Optimized */}
+              <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6">
                 <MetricGauge title="CPU Usage" value={systemMetrics?.cpu_usage || 0} max={100} unit="%" />
                 <MetricGauge title="Memory Usage" value={systemMetrics?.memory_usage || 0} max={100} unit="%" />
                 <MetricGauge title="Disk Usage" value={systemMetrics?.disk_usage || 0} max={100} unit="%" />

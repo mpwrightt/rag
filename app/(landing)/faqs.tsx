@@ -27,35 +27,35 @@ export default function FAQs() {
     ]
 
     return (
-        <section className="relative scroll-py-8 py-8 md:scroll-py-16 md:py-16 overflow-hidden">
+        <section className="relative scroll-py-6 py-8 sm:py-12 md:scroll-py-16 md:py-16 overflow-hidden">
             
-            <div className="relative z-10 mx-auto max-w-6xl px-6">
-                <div className="text-center mb-16 space-y-6">
-                    <h2 className="mx-auto text-balance text-4xl font-bold md:text-5xl text-white leading-tight">
+            <div className="relative z-10 mx-auto max-w-6xl px-4 sm:px-6">
+                <div className="text-center mb-8 sm:mb-12 md:mb-16 space-y-4 sm:space-y-6">
+                    <h2 className="mx-auto text-balance text-2xl sm:text-3xl font-bold md:text-4xl lg:text-5xl text-white leading-tight">
                         Frequently Asked{" "}
                         <br className="hidden sm:inline" />
-                        <span className="inline-block text-transparent bg-gradient-to-r from-purple-400 via-pink-400 to-cyan-400 bg-clip-text min-w-[200px] sm:min-w-[240px] md:min-w-[300px]">
-                            <WordRotate words={questionWords} />
+                        <span className="inline-block text-transparent bg-gradient-to-r from-purple-400 via-pink-400 to-cyan-400 bg-clip-text">
+                            <WordRotate words={questionWords} className="min-h-[1.2em]" />
                         </span>
                     </h2>
-                    <p className="text-gray-300 text-lg max-w-2xl mx-auto leading-relaxed">
+                    <p className="text-gray-300 text-base sm:text-lg max-w-2xl mx-auto leading-relaxed px-4">
                         Have questions? We have answers. Here are some of the most common questions we get.
                     </p>
                 </div>
 
-                <div className="grid gap-8 md:grid-cols-2">
+                <div className="grid gap-4 sm:gap-6 md:gap-8 md:grid-cols-2">
                     {faqs.map((faq, index) => (
                         <SpotlightCard
                             key={index}
-                            className="p-8 h-full transition-all duration-300 hover:scale-[1.02] group"
+                            className="p-4 sm:p-6 md:p-8 h-full transition-all duration-300 hover:scale-[1.02] group"
                             radius={150}
                             strength={0.3}
                         >
-                            <div className="space-y-4">
-                                <h3 className="font-semibold text-xl text-white group-hover:text-purple-200 transition-colors">
+                            <div className="space-y-3 sm:space-y-4">
+                                <h3 className="font-semibold text-lg sm:text-xl text-white group-hover:text-purple-200 transition-colors leading-tight">
                                     {faq.question}
                                 </h3>
-                                <p className="text-gray-300 leading-relaxed group-hover:text-gray-100 transition-colors">
+                                <p className="text-gray-300 text-sm sm:text-base leading-relaxed group-hover:text-gray-100 transition-colors">
                                     {faq.answer}
                                 </p>
                             </div>

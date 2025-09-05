@@ -1099,83 +1099,54 @@ export default function DocumentsPage() {
 
   const uniqueFileTypes = Object.keys(fileTypeStats)
 
-  const handleFileUpload = (files: FileList | null) => {
-    if (!files) return
+  const handleFileUpload = async (files: FileList | null) => {
+    if (!files || files.length === 0) return
 
-    Array.from(files).forEach(file => {
-      const uploadId = `upload-${Date.now()}-${Math.random()}`
-      const newUpload: UploadProgress = {
-        id: uploadId,
-        name: file.name,
-        progress: 0,
-        status: 'uploading'
+    // Show uploads
+    const localUploads: UploadProgress[] = Array.from(files).map(file => ({
+      id: `upload-${Date.now()}-${Math.random()}`,
+      name: file.name,
+      progress: 10,
+      status: 'uploading'
+    }))
+    setUploadProgress(prev => [...localUploads, ...prev])
+
+    try {
+      const fd = new FormData()
+      Array.from(files).forEach(f => fd.append('files', f))
+
+      // Upload & convert on server -> Markdown -> ingest
+      const res = await fetch(`${API_BASE}/documents/upload`, {
+        method: 'POST',
+        body: fd,
+        headers: { 'bypass-tunnel-reminder': 'true' }
+      })
+
+      if (!res.ok) throw new Error(`Upload failed: ${res.status}`)
+      const data = await res.json().catch(() => ({}))
+
+      // Mark uploads complete
+      setUploadProgress(prev => prev.map(u =>
+        localUploads.find(l => l.id === u.id) ? { ...u, status: 'complete', progress: 100 } : u
+      ))
+
+      // If API returned ids, fetch details and prepend
+      const created = Array.isArray(data?.created) ? data.created : []
+      if (created.length > 0) {
+        try {
+          // Refresh first page to include new docs
+          await fetchDocumentsPage(1)
+        } catch {}
+      } else {
+        // Fallback: refresh anyway
+        await fetchDocumentsPage(1)
       }
-      
-      setUploadProgress(prev => [...prev, newUpload])
-
-      // Simulate upload progress
-      const interval = setInterval(() => {
-        setUploadProgress(prev => prev.map(upload => {
-          if (upload.id === uploadId) {
-            const newProgress = Math.min(upload.progress + Math.random() * 15, 100)
-            if (newProgress >= 100) {
-              clearInterval(interval)
-              return { ...upload, progress: 100, status: 'processing' }
-            }
-            return { ...upload, progress: newProgress }
-          }
-          return upload
-        }))
-      }, 500)
-
-      // Simulate processing completion
-      setTimeout(() => {
-        setUploadProgress(prev => prev.filter(upload => upload.id !== uploadId))
-        
-        // Add new document
-        const newDoc: Document = {
-          id: `doc-${Date.now()}-${Math.random()}`,
-          name: file.name,
-          title: file.name.replace(/\.[^/.]+$/, ''),
-          upload_date: new Date().toISOString(),
-          size: file.size,
-          type: file.name.split('.').pop()?.toLowerCase() || 'unknown',
-          status: 'processing',
-          processing_progress: 0,
-          is_starred: false,
-          tags: [],
-          source: 'upload'
-        }
-        
-        setDocuments(prev => [newDoc, ...prev])
-        
-        // Simulate processing
-        const processingInterval = setInterval(() => {
-          setDocuments(prev => prev.map(doc => {
-            if (doc.id === newDoc.id && doc.status === 'processing') {
-              const newProgress = Math.min((doc.processing_progress || 0) + Math.random() * 10, 100)
-              if (newProgress >= 100) {
-                clearInterval(processingInterval)
-                return {
-                  ...doc,
-                  status: 'ready',
-                  processing_progress: 100,
-                  chunk_count: Math.floor(Math.random() * 200) + 50,
-                  metadata: {
-                    pages: Math.floor(Math.random() * 50) + 10,
-                    language: 'English',
-                    word_count: Math.floor(Math.random() * 10000) + 5000,
-                    read_time: Math.floor(Math.random() * 30) + 10
-                  }
-                }
-              }
-              return { ...doc, processing_progress: newProgress }
-            }
-            return doc
-          }))
-        }, 800)
-      }, 3000)
-    })
+    } catch (e) {
+      console.error('Upload error', e)
+      setUploadProgress(prev => prev.map(u =>
+        localUploads.find(l => l.id === u.id) ? { ...u, status: 'error' as const } : u
+      ))
+    }
   }
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -1303,24 +1274,24 @@ export default function DocumentsPage() {
 
   return (
     <div className="flex flex-col h-full bg-background">
-      {/* Enhanced Header */}
-      <div className="flex-shrink-0 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 p-6">
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="text-3xl font-bold bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent">
+      {/* Mobile-Optimized Header */}
+      <div className="flex-shrink-0 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 p-4 sm:p-6">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4 sm:mb-6">
+          <div className="flex-1 min-w-0">
+            <h1 className="text-2xl sm:text-3xl font-bold bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent">
               Document Library
             </h1>
-            <p className="text-muted-foreground mt-1">
+            <p className="text-muted-foreground mt-1 text-sm sm:text-base">
               Upload, process, and manage your documents with advanced AI-powered features
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3">
             {selectedDocuments.length > 0 && (
               <Popover open={showBulkActions} onOpenChange={setShowBulkActions}>
                 <PopoverTrigger asChild>
-                  <Button variant="outline" className="flex items-center gap-2">
+                  <Button variant="outline" className="flex items-center justify-center gap-2 min-h-[44px] sm:min-h-10">
                     <CheckCircle className="w-4 h-4" />
-                    {selectedDocuments.length} selected
+                    <span className="text-sm">{selectedDocuments.length} selected</span>
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className="w-48 p-1" align="end">
@@ -1328,7 +1299,7 @@ export default function DocumentsPage() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="w-full justify-start"
+                      className="w-full justify-start min-h-[44px] sm:min-h-8"
                       onClick={handleBulkStar}
                     >
                       <Star className="w-4 h-4 mr-2" />
@@ -1337,7 +1308,7 @@ export default function DocumentsPage() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="w-full justify-start"
+                      className="w-full justify-start min-h-[44px] sm:min-h-8"
                     >
                       <Move className="w-4 h-4 mr-2" />
                       Move to Collection
@@ -1345,7 +1316,7 @@ export default function DocumentsPage() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="w-full justify-start"
+                      className="w-full justify-start min-h-[44px] sm:min-h-8"
                     >
                       <Download className="w-4 h-4 mr-2" />
                       Download All
@@ -1354,7 +1325,7 @@ export default function DocumentsPage() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="w-full justify-start text-destructive hover:text-destructive"
+                      className="w-full justify-start text-destructive hover:text-destructive min-h-[44px] sm:min-h-8"
                       onClick={handleBulkDelete}
                     >
                       <Trash2 className="w-4 h-4 mr-2" />
@@ -1366,7 +1337,7 @@ export default function DocumentsPage() {
             )}
             <Button 
               onClick={() => setShowUploadDialog(true)}
-              className="flex items-center gap-2"
+              className="flex items-center justify-center gap-2 min-h-[44px] sm:min-h-10 text-sm sm:text-base"
             >
               <Plus className="w-4 h-4" />
               Add Documents
@@ -1374,114 +1345,204 @@ export default function DocumentsPage() {
           </div>
         </div>
 
-        {/* Enhanced Search and Filters */}
-        <div className="flex flex-col lg:flex-row gap-4">
+        {/* Mobile-Optimized Search and Filters */}
+        <div className="flex flex-col gap-4">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
             <Input
               placeholder="Search documents by name, title, or tags..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10 pr-4"
+              className="pl-10 pr-4 h-11 sm:h-10 text-base sm:text-sm"
             />
           </div>
           
-          <div className="flex items-center gap-3 flex-wrap">
-            <Select value={filterStatus} onValueChange={setFilterStatus}>
-              <SelectTrigger className="w-36">
-                <Filter className="w-4 h-4 mr-2" />
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Status</SelectItem>
-                <SelectItem value="ready">Ready</SelectItem>
-                <SelectItem value="processing">Processing</SelectItem>
-                <SelectItem value="error">Error</SelectItem>
-              </SelectContent>
-            </Select>
+          <div className="flex flex-col sm:flex-row gap-3">
+            {/* Filter Controls Row 1 - Mobile */}
+            <div className="flex gap-2 sm:hidden">
+              <Select value={filterStatus} onValueChange={setFilterStatus}>
+                <SelectTrigger className="flex-1 h-11 text-sm">
+                  <Filter className="w-4 h-4 mr-2" />
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Status</SelectItem>
+                  <SelectItem value="ready">Ready</SelectItem>
+                  <SelectItem value="processing">Processing</SelectItem>
+                  <SelectItem value="error">Error</SelectItem>
+                </SelectContent>
+              </Select>
 
-            <Select value={filterType} onValueChange={setFilterType}>
-              <SelectTrigger className="w-32">
-                <File className="w-4 h-4 mr-2" />
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Types</SelectItem>
-                {uniqueFileTypes.map(type => (
-                  <SelectItem key={type} value={type}>
-                    {type.toUpperCase()} ({fileTypeStats[type]})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              <Select value={filterType} onValueChange={setFilterType}>
+                <SelectTrigger className="flex-1 h-11 text-sm">
+                  <File className="w-4 h-4 mr-2" />
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Types</SelectItem>
+                  {uniqueFileTypes.map(type => (
+                    <SelectItem key={type} value={type}>
+                      {type.toUpperCase()} ({fileTypeStats[type]})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
 
-            <Select value={sortBy} onValueChange={setSortBy}>
-              <SelectTrigger className="w-36">
-                <ArrowUpDown className="w-4 h-4 mr-2" />
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="upload_date">Upload Date</SelectItem>
-                <SelectItem value="name">Name</SelectItem>
-                <SelectItem value="size">File Size</SelectItem>
-                <SelectItem value="chunks">Chunk Count</SelectItem>
-              </SelectContent>
-            </Select>
+            {/* Filter Controls Row 2 - Mobile */}
+            <div className="flex gap-2 sm:hidden">
+              <Select value={sortBy} onValueChange={setSortBy}>
+                <SelectTrigger className="flex-1 h-11 text-sm">
+                  <ArrowUpDown className="w-4 h-4 mr-2" />
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="upload_date">Upload Date</SelectItem>
+                  <SelectItem value="name">Name</SelectItem>
+                  <SelectItem value="size">File Size</SelectItem>
+                  <SelectItem value="chunks">Chunk Count</SelectItem>
+                </SelectContent>
+              </Select>
 
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')}
-            >
-              {sortOrder === 'asc' ? <SortAsc className="w-4 h-4" /> : <SortDesc className="w-4 h-4" />}
-            </Button>
-
-            <div className="flex items-center border rounded-lg">
               <Button
-                variant={viewMode === 'grid' ? 'default' : 'ghost'}
-                size="sm"
-                onClick={() => setViewMode('grid')}
-                className="rounded-r-none"
+                variant="outline"
+                onClick={() => setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')}
+                className="h-11 px-4"
               >
-                <Grid3x3 className="w-4 h-4" />
-              </Button>
-              <Button
-                variant={viewMode === 'list' ? 'default' : 'ghost'}
-                size="sm"
-                onClick={() => setViewMode('list')}
-                className="rounded-l-none border-l"
-              >
-                <List className="w-4 h-4" />
+                {sortOrder === 'asc' ? <SortAsc className="w-4 h-4" /> : <SortDesc className="w-4 h-4" />}
               </Button>
             </div>
 
-            {filteredDocuments.length > 0 && (
+            {/* Filter Controls Row 3 - Mobile */}
+            <div className="flex gap-2 sm:hidden">
+              <div className="flex flex-1 items-center border rounded-lg">
+                <Button
+                  variant={viewMode === 'grid' ? 'default' : 'ghost'}
+                  onClick={() => setViewMode('grid')}
+                  className="flex-1 rounded-r-none h-11"
+                >
+                  <Grid3x3 className="w-4 h-4 mr-2" />
+                  Grid
+                </Button>
+                <Button
+                  variant={viewMode === 'list' ? 'default' : 'ghost'}
+                  onClick={() => setViewMode('list')}
+                  className="flex-1 rounded-l-none border-l h-11"
+                >
+                  <List className="w-4 h-4 mr-2" />
+                  List
+                </Button>
+              </div>
+
+              {filteredDocuments.length > 0 && (
+                <Button
+                  variant="outline"
+                  onClick={handleSelectAll}
+                  className="text-sm h-11 px-3 whitespace-nowrap"
+                >
+                  {selectedDocuments.length === filteredDocuments.length ? 'Deselect All' : 'Select All'}
+                </Button>
+              )}
+            </div>
+          
+            {/* Desktop Filter Controls */}
+            <div className="hidden sm:flex sm:items-center gap-3 flex-wrap">
+              <Select value={filterStatus} onValueChange={setFilterStatus}>
+                <SelectTrigger className="w-36">
+                  <Filter className="w-4 h-4 mr-2" />
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Status</SelectItem>
+                  <SelectItem value="ready">Ready</SelectItem>
+                  <SelectItem value="processing">Processing</SelectItem>
+                  <SelectItem value="error">Error</SelectItem>
+                </SelectContent>
+              </Select>
+
+              <Select value={filterType} onValueChange={setFilterType}>
+                <SelectTrigger className="w-32">
+                  <File className="w-4 h-4 mr-2" />
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Types</SelectItem>
+                  {uniqueFileTypes.map(type => (
+                    <SelectItem key={type} value={type}>
+                      {type.toUpperCase()} ({fileTypeStats[type]})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              <Select value={sortBy} onValueChange={setSortBy}>
+                <SelectTrigger className="w-36">
+                  <ArrowUpDown className="w-4 h-4 mr-2" />
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="upload_date">Upload Date</SelectItem>
+                  <SelectItem value="name">Name</SelectItem>
+                  <SelectItem value="size">File Size</SelectItem>
+                  <SelectItem value="chunks">Chunk Count</SelectItem>
+                </SelectContent>
+              </Select>
+
               <Button
                 variant="outline"
                 size="sm"
-                onClick={handleSelectAll}
-                className="text-xs"
+                onClick={() => setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')}
               >
-                {selectedDocuments.length === filteredDocuments.length ? 'Deselect All' : 'Select All'}
+                {sortOrder === 'asc' ? <SortAsc className="w-4 h-4" /> : <SortDesc className="w-4 h-4" />}
               </Button>
-            )}
+
+              <div className="flex items-center border rounded-lg">
+                <Button
+                  variant={viewMode === 'grid' ? 'default' : 'ghost'}
+                  size="sm"
+                  onClick={() => setViewMode('grid')}
+                  className="rounded-r-none"
+                >
+                  <Grid3x3 className="w-4 h-4" />
+                </Button>
+                <Button
+                  variant={viewMode === 'list' ? 'default' : 'ghost'}
+                  size="sm"
+                  onClick={() => setViewMode('list')}
+                  className="rounded-l-none border-l"
+                >
+                  <List className="w-4 h-4" />
+                </Button>
+              </div>
+
+              {filteredDocuments.length > 0 && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleSelectAll}
+                  className="text-xs"
+                >
+                  {selectedDocuments.length === filteredDocuments.length ? 'Deselect All' : 'Select All'}
+                </Button>
+              )}
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto p-6">
+      {/* Mobile-Optimized Content */}
+      <div className="flex-1 overflow-y-auto p-4 sm:p-6">
         <div className="max-w-7xl mx-auto">
-          {/* Statistics Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-            <Card className="p-4">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg flex items-center justify-center">
-                  <FileText className="w-6 h-6 text-white" />
+          {/* Mobile-Optimized Statistics Cards */}
+          <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6 mb-6 sm:mb-8">
+            <Card className="p-3 sm:p-4">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+                <div className="w-8 h-8 sm:w-12 sm:h-12 bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <FileText className="w-4 h-4 sm:w-6 sm:h-6 text-white" />
                 </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Total Documents</p>
-                  <p className="text-2xl font-bold">{stats.total}</p>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs sm:text-sm text-muted-foreground">Total Documents</p>
+                  <p className="text-lg sm:text-2xl font-bold">{stats.total}</p>
                   <p className="text-xs text-muted-foreground">
                     {stats.ready} ready, {stats.processing} processing
                   </p>
@@ -1489,40 +1550,40 @@ export default function DocumentsPage() {
               </div>
             </Card>
             
-            <Card className="p-4">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 bg-gradient-to-br from-green-500 to-green-600 rounded-lg flex items-center justify-center">
-                  <Database className="w-6 h-6 text-white" />
+            <Card className="p-3 sm:p-4">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+                <div className="w-8 h-8 sm:w-12 sm:h-12 bg-gradient-to-br from-green-500 to-green-600 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <Database className="w-4 h-4 sm:w-6 sm:h-6 text-white" />
                 </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Knowledge Chunks</p>
-                  <p className="text-2xl font-bold">{stats.totalChunks}</p>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs sm:text-sm text-muted-foreground">Knowledge Chunks</p>
+                  <p className="text-lg sm:text-2xl font-bold">{stats.totalChunks}</p>
                   <p className="text-xs text-muted-foreground">AI-processed segments</p>
                 </div>
               </div>
             </Card>
             
-            <Card className="p-4">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-purple-600 rounded-lg flex items-center justify-center">
-                  <HardDrive className="w-6 h-6 text-white" />
+            <Card className="p-3 sm:p-4">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+                <div className="w-8 h-8 sm:w-12 sm:h-12 bg-gradient-to-br from-purple-500 to-purple-600 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <HardDrive className="w-4 h-4 sm:w-6 sm:h-6 text-white" />
                 </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Storage Used</p>
-                  <p className="text-2xl font-bold">{(stats.totalSize / 1024 / 1024).toFixed(1)}MB</p>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs sm:text-sm text-muted-foreground">Storage Used</p>
+                  <p className="text-lg sm:text-2xl font-bold">{(stats.totalSize / 1024 / 1024).toFixed(1)}MB</p>
                   <p className="text-xs text-muted-foreground">Across {uniqueFileTypes.length} file types</p>
                 </div>
               </div>
             </Card>
             
-            <Card className="p-4">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 bg-gradient-to-br from-yellow-500 to-yellow-600 rounded-lg flex items-center justify-center">
-                  <Zap className="w-6 h-6 text-white" />
+            <Card className="p-3 sm:p-4">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+                <div className="w-8 h-8 sm:w-12 sm:h-12 bg-gradient-to-br from-yellow-500 to-yellow-600 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <Zap className="w-4 h-4 sm:w-6 sm:h-6 text-white" />
                 </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Processing Queue</p>
-                  <p className="text-2xl font-bold">{stats.processing}</p>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs sm:text-sm text-muted-foreground">Processing Queue</p>
+                  <p className="text-lg sm:text-2xl font-bold">{stats.processing}</p>
                   <p className="text-xs text-muted-foreground">
                     {stats.error > 0 ? `${stats.error} errors` : 'All systems running'}
                   </p>
@@ -1610,46 +1671,96 @@ export default function DocumentsPage() {
             </div>
           )}
 
-          {/* Pagination Controls */}
+          {/* Mobile-Optimized Pagination Controls */}
           {typeof totalCount === 'number' && totalCount > 0 && (
-            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mt-8">
-              <div className="text-sm text-muted-foreground">
+            <div className="flex flex-col gap-3 mt-6 sm:mt-8">
+              <div className="text-center sm:text-left text-sm text-muted-foreground">
                 Showing {(currentPage - 1) * pageSize + 1}
                 –{Math.min(currentPage * pageSize, totalCount)} of {totalCount}
               </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                  disabled={currentPage === 1 || isPageLoading}
-                >
-                  <ChevronLeft className="w-4 h-4" />
-                </Button>
-                {pageNumbers.map((p, idx) => p === '...'
-                  ? (
-                    <span key={`ellipsis-${idx}`} className="px-2 text-muted-foreground">…</span>
-                    )
-                  : (
+              <div className="flex justify-center sm:justify-end">
+                <div className="flex items-center gap-1 sm:gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                    disabled={currentPage === 1 || isPageLoading}
+                    className="h-9 sm:h-8 px-2 sm:px-3"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </Button>
+                  
+                  {/* Mobile: Show fewer page numbers */}
+                  <div className="flex items-center gap-1 sm:hidden">
+                    {currentPage > 1 && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setCurrentPage(1)}
+                        disabled={isPageLoading}
+                        className="h-9 px-3 text-xs"
+                      >
+                        1
+                      </Button>
+                    )}
+                    
+                    {currentPage > 2 && <span className="px-1 text-muted-foreground text-xs">…</span>}
+                    
                     <Button
-                      key={p as number}
-                      variant={(p as number) === currentPage ? 'default' : 'outline'}
+                      variant="default"
                       size="sm"
-                      onClick={() => setCurrentPage(p as number)}
                       disabled={isPageLoading}
+                      className="h-9 px-3 text-xs"
                     >
-                      {p}
+                      {currentPage}
                     </Button>
-                  )
-                )}
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                  disabled={currentPage === totalPages || isPageLoading}
-                >
-                  <ChevronRight className="w-4 h-4" />
-                </Button>
+                    
+                    {currentPage < totalPages - 1 && <span className="px-1 text-muted-foreground text-xs">…</span>}
+                    
+                    {currentPage < totalPages && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setCurrentPage(totalPages)}
+                        disabled={isPageLoading}
+                        className="h-9 px-3 text-xs"
+                      >
+                        {totalPages}
+                      </Button>
+                    )}
+                  </div>
+                  
+                  {/* Desktop: Show full pagination */}
+                  <div className="hidden sm:flex items-center gap-1">
+                    {pageNumbers.map((p, idx) => p === '...'
+                      ? (
+                        <span key={`ellipsis-${idx}`} className="px-2 text-muted-foreground">…</span>
+                        )
+                      : (
+                        <Button
+                          key={p as number}
+                          variant={(p as number) === currentPage ? 'default' : 'outline'}
+                          size="sm"
+                          onClick={() => setCurrentPage(p as number)}
+                          disabled={isPageLoading}
+                          className="h-8"
+                        >
+                          {p}
+                        </Button>
+                      )
+                    )}
+                  </div>
+                  
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                    disabled={currentPage === totalPages || isPageLoading}
+                    className="h-9 sm:h-8 px-2 sm:px-3"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </Button>
+                </div>
               </div>
             </div>
           )}
@@ -1695,8 +1806,11 @@ export default function DocumentsPage() {
                 multiple
                 className="hidden"
                 onChange={(e) => handleFileUpload(e.target.files)}
-                accept=".pdf,.doc,.docx,.txt,.md,.jpg,.jpeg,.png,.gif"
+                accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.csv,.tsv,.txt,.md,.rtf,.html,.htm,.jpg,.jpeg,.png,.gif,.webp,.svg"
               />
+              <p className="text-xs text-muted-foreground text-center -mt-2">
+                Files are automatically converted to Markdown for consistent RAG ingestion.
+              </p>
               
               <div className="grid grid-cols-3 gap-4 text-center text-sm text-muted-foreground">
                 <div className="flex items-center justify-center gap-2">
