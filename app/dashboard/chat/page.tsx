@@ -435,8 +435,8 @@ export default function ModernRAGChatPage() {
           if (!json) continue
           try {
             const data = JSON.parse(json)
-            if (data.type === 'delta') {
-              const delta: string = data.delta || ''
+            if (data.type === 'delta' || data.type === 'text') {
+              const delta: string = data.delta || data.content || ''
               setMessages(prev => {
                 const newMessages = [...prev]
                 const last = newMessages[newMessages.length - 1]
