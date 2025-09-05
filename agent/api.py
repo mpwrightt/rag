@@ -944,6 +944,17 @@ async def chat_stream(request: ChatRequest):
                     
                     # Extract tools used from the final result
                     result = run.result
+                    
+                    # Fallback: if no token chunks were streamed but we have a final result,
+                    # emit it as a single text event so the client gets an answer.
+                    try:
+                        final_text = getattr(result, "data", None)
+                        if (not full_response.strip()) and isinstance(final_text, str) and final_text.strip():
+                            yield f"data: {json.dumps({'type': 'text', 'content': final_text})}\n\n"
+                            full_response += final_text
+                    except Exception:
+                        pass
+
                     tools_used = extract_tool_calls(result)
 
                 # Final drain of retrieval events after model finished

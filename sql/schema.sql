@@ -150,7 +150,7 @@ BEGIN
         c.id AS chunk_id,
         c.document_id,
         c.content,
-        1 - (c.embedding <=> query_embedding) AS similarity,
+        (1 - (c.embedding <=> query_embedding))::double precision AS similarity,
         c.metadata,
         d.title AS document_title,
         d.source AS document_source
@@ -188,7 +188,7 @@ BEGIN
             c.id AS chunk_id,
             c.document_id,
             c.content,
-            1 - (c.embedding <=> query_embedding) AS vector_sim,
+            (1 - (c.embedding <=> query_embedding))::double precision AS vector_sim,
             c.metadata,
             d.title AS doc_title,
             d.source AS doc_source
@@ -201,7 +201,7 @@ BEGIN
             c.id AS chunk_id,
             c.document_id,
             c.content,
-            ts_rank_cd(to_tsvector('english', c.content), plainto_tsquery('english', query_text)) AS text_sim,
+            ts_rank_cd(to_tsvector('english', c.content), plainto_tsquery('english', query_text))::double precision AS text_sim,
             c.metadata,
             d.title AS doc_title,
             d.source AS doc_source
@@ -213,9 +213,9 @@ BEGIN
         COALESCE(v.chunk_id, t.chunk_id) AS chunk_id,
         COALESCE(v.document_id, t.document_id) AS document_id,
         COALESCE(v.content, t.content) AS content,
-        (COALESCE(v.vector_sim, 0) * (1 - text_weight) + COALESCE(t.text_sim, 0) * text_weight) AS combined_score,
-        COALESCE(v.vector_sim, 0) AS vector_similarity,
-        COALESCE(t.text_sim, 0) AS text_similarity,
+        (COALESCE(v.vector_sim, 0::double precision) * (1 - text_weight) + COALESCE(t.text_sim, 0::double precision) * text_weight) AS combined_score,
+        COALESCE(v.vector_sim, 0::double precision) AS vector_similarity,
+        COALESCE(t.text_sim, 0::double precision) AS text_similarity,
         COALESCE(v.metadata, t.metadata) AS metadata,
         COALESCE(v.doc_title, t.doc_title) AS document_title,
         COALESCE(v.doc_source, t.doc_source) AS document_source
@@ -280,7 +280,7 @@ BEGIN
         f.valid_at,
         f.invalid_at,
         f.confidence,
-        ts_rank_cd(to_tsvector('english', f.content), plainto_tsquery('english', query_text)) AS rank
+        ts_rank_cd(to_tsvector('english', f.content), plainto_tsquery('english', query_text))::double precision AS rank
     FROM facts f
     JOIN nodes n ON f.node_id = n.id
     WHERE
