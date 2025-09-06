@@ -30,6 +30,7 @@ from .tools import (
     EntityTimelineInput
 )
 from .context import capture_search_results, emit_retrieval_event
+from .enhanced_retrieval import EnhancedRetriever
 
 # Load environment variables
 load_dotenv()
@@ -312,138 +313,95 @@ async def guided_retrieval(
     limit: int = 10
 ) -> Dict[str, Any]:
     """
-    Stepwise retrieval that first queries the Knowledge Graph to extract context,
-    then performs Vector Search with an augmented query. Emits granular retrieval
-    events for each stage (KG start/results/end, then Vector start/results/end).
+    Advanced retrieval with full query understanding, entity extraction, multi-stage search,
+    and result fusion. Provides complete visibility into every step of the retrieval process.
 
     Args:
         query: User question to search
-        limit: Maximum number of vector results to return (1-50)
+        limit: Maximum number of results to return (1-50)
 
     Returns:
-        Combined dict including augmented query, graph and vector top results, and counts
+        Comprehensive results including processed query, retrieval steps, and ranked results
     """
     session_id = getattr(getattr(ctx, 'deps', None), 'session_id', None)
-    start_ts = time.perf_counter()
-
-    if session_id:
-        await emit_retrieval_event(session_id, {
-            "type": "retrieval",
-            "event": "start",
-            "tool": "guided_retrieval",
-            "args": {"query": query, "limit": limit}
-        })
-
-    # Stage 1: Knowledge Graph search
-    kg_start = time.perf_counter()
-    if session_id:
-        await emit_retrieval_event(session_id, {
-            "type": "retrieval",
-            "event": "start",
-            "tool": "guided_retrieval",
-            "stage": "graph"
-        })
-    graph_results_models = await graph_search_tool(GraphSearchInput(query=query))
-    simplified_graph = [
-        {
-            "fact": r.fact,
-            "uuid": r.uuid,
-            "valid_at": r.valid_at,
-            "invalid_at": r.invalid_at,
-            "source_node_uuid": r.source_node_uuid
-        }
-        for r in graph_results_models[:12]
-    ]
-    if session_id:
-        try:
-            await emit_retrieval_event(session_id, {
-                "type": "retrieval",
-                "event": "results",
-                "tool": "guided_retrieval",
-                "stage": "graph",
-                "results": simplified_graph
-            })
-        finally:
-            await emit_retrieval_event(session_id, {
-                "type": "retrieval",
-                "event": "end",
-                "tool": "guided_retrieval",
-                "stage": "graph",
-                "count": len(graph_results_models),
-                "elapsed_ms": int((time.perf_counter() - kg_start) * 1000)
-            })
-
-    # Augment query using top KG facts (simple concatenation to bias semantics)
-    top_facts = [g.get("fact") for g in simplified_graph if g.get("fact")]
-    if top_facts:
-        # Keep augmentation concise
-        augmentation = "; ".join(top_facts[:3])
-        augmented_query = f"{query}. Context: {augmentation}"
-    else:
-        augmented_query = query
-
-    # Stage 2: Vector search with augmented query
-    vec_start = time.perf_counter()
-    if session_id:
-        await emit_retrieval_event(session_id, {
-            "type": "retrieval",
-            "event": "start",
-            "tool": "guided_retrieval",
-            "stage": "vector",
-            "args": {"limit": limit}
-        })
-    vector_results_models = await vector_search_tool(VectorSearchInput(query=augmented_query, limit=limit))
-
-    # Capture for source tracking (vector chunks only)
-    capture_search_results(vector_results_models)
-
-    simplified_vector = [
-        {
-            "content": r.content,
-            "score": r.score,
-            "document_title": r.document_title,
-            "document_source": r.document_source,
-            "chunk_id": r.chunk_id
-        }
-        for r in vector_results_models[:8]
-    ]
-
-    if session_id:
-        try:
-            await emit_retrieval_event(session_id, {
-                "type": "retrieval",
-                "event": "results",
-                "tool": "guided_retrieval",
-                "stage": "vector",
-                "results": simplified_vector
-            })
-        finally:
-            await emit_retrieval_event(session_id, {
-                "type": "retrieval",
-                "event": "end",
-                "tool": "guided_retrieval",
-                "stage": "vector",
-                "count": len(vector_results_models),
-                "elapsed_ms": int((time.perf_counter() - vec_start) * 1000)
-            })
-
-    # Final end for the orchestrator
-    if session_id:
-        await emit_retrieval_event(session_id, {
-            "type": "retrieval",
-            "event": "end",
-            "tool": "guided_retrieval",
-            "count": len(vector_results_models) + len(graph_results_models),
-            "elapsed_ms": int((time.perf_counter() - start_ts) * 1000)
-        })
-
+    
+    # Initialize enhanced retriever
+    retriever = EnhancedRetriever()
+    
+    # Configuration for retrieval
+    config = {
+        "use_graph": True,
+        "use_vector": True,
+        "use_query_expansion": True,
+        "vector_limit": limit * 2,  # Get more candidates for reranking
+    }
+    
+    # Execute enhanced retrieval
+    results, context = await retriever.retrieve(
+        query=query,
+        session_id=session_id,
+        config=config
+    )
+    
+    # Capture results for source tracking
+    capture_search_results([{
+        "content": r.get("content", ""),
+        "score": r.get("final_score", r.get("relevance_score", 0)),
+        "document_title": r.get("metadata", {}).get("document_title", ""),
+        "document_source": r.get("metadata", {}).get("document_source", ""),
+        "chunk_id": r.get("metadata", {}).get("chunk_id", "")
+    } for r in results if r.get("type") == "vector_chunk"])
+    
+    # Format comprehensive response
     return {
-        "augmented_query": augmented_query,
-        "graph_top": simplified_graph,
-        "vector_top": simplified_vector,
-        "counts": {
-            "graph": len(graph_results_models),
-            "vector": len(vector_results_models)
+        "query_analysis": {
+            "original": context.query.original,
+            "intent": context.query.intent.value,
+            "entities": context.query.entities,
+            "keywords": context.query.keywords,
+            "temporal_refs": context.query.temporal_refs,
+            "confidence": context.query.confidence_scores
+        },
+        "retrieval_steps": [
+            {
+                "name": step.step_name,
+                "duration_ms": step.duration_ms,
+                "input": step.input_data,
+                "output": step.output_data
+            }
+            for step in context.steps
+        ],
+        "results": {
+            "final": [
+                {
+                    "content": r.get("content"),
+                    "type": r.get("type"),
+                    "score": r.get("final_score"),
+                    "metadata": r.get("metadata", {})
+                }
+                for r in results[:limit]
+            ],
+            "graph_facts": [
+                {
+                    "fact": r.get("content"),
+                    "metadata": r.get("metadata", {})
+                }
+                for r in context.graph_results[:5]
+            ],
+            "vector_chunks": [
+                {
+                    "content": r.get("content"),
+                    "score": r.get("relevance_score"),
+                    "document": r.get("metadata", {}).get("document_title")
+                }
+                for r in context.vector_results[:5]
+            ]
+        },
+        "statistics": {
+            "total_graph_results": len(context.graph_results),
+            "total_vector_results": len(context.vector_results),
+            "final_results": len(results),
+            "total_time_ms": context.metadata.get("total_time_ms", 0)
         }
     }
 

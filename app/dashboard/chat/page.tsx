@@ -1615,6 +1615,129 @@ export default function ModernRAGChatPage() {
                   {liveRetrieval.map((ev: any, idx: number) => {
                     const type = ev?.event || ev?.type || 'event'
                     const tool = ev?.tool || ev?.args?.tool || 'retrieval'
+                    
+                    // Handle enhanced retrieval events
+                    if (type === 'retrieval_step') {
+                      const step = ev?.step || 'unknown'
+                      const status = ev?.status || 'unknown'
+                      const data = ev?.data || {}
+                      
+                      const stepTitles: any = {
+                        query_understanding: 'Query Analysis',
+                        graph_search: 'Knowledge Graph Search',
+                        vector_search: 'Vector Search',
+                        fusion: 'Result Fusion',
+                        diversify: 'Diversification'
+                      }
+                      
+                      const stepIcons: any = {
+                        query_understanding: Brain,
+                        graph_search: Network,
+                        vector_search: Search,
+                        fusion: Zap,
+                        diversify: Sparkles
+                      }
+                      
+                      const Icon = stepIcons[step] || FileText
+                      const title = stepTitles[step] || step
+                      
+                      return (
+                        <div key={idx} className="relative pl-8 mb-4">
+                          <div className="absolute left-0 top-0">
+                            <span className={cn(
+                              "inline-flex items-center justify-center w-6 h-6 rounded-full border bg-background",
+                              status === 'start' ? 'border-blue-200 text-blue-600' :
+                              status === 'complete' ? 'border-green-200 text-green-600' :
+                              'border-purple-200 text-purple-700'
+                            )}>
+                              <Icon className="w-3.5 h-3.5" />
+                            </span>
+                          </div>
+                          <div className="space-y-2">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium text-sm">{title}</span>
+                              <Badge variant="outline" className="px-1.5 py-0 text-[10px]">{status}</Badge>
+                            </div>
+                            {data && (
+                              <Card className="p-3 bg-secondary/20">
+                                <div className="space-y-1 text-xs">
+                                  {step === 'query_understanding' && status === 'complete' && (
+                                    <>
+                                      {data.intent && <div>Intent: <span className="font-medium">{data.intent}</span></div>}
+                                      {data.entities > 0 && <div>Entities found: <span className="font-medium">{data.entities}</span></div>}
+                                      {data.keywords && <div>Keywords: <span className="font-medium">{data.keywords.join(', ')}</span></div>}
+                                    </>
+                                  )}
+                                  {step === 'graph_search' && status === 'complete' && (
+                                    <>
+                                      {data.results !== undefined && <div>Facts found: <span className="font-medium">{data.results}</span></div>}
+                                      {data.sample && data.sample.length > 0 && (
+                                        <div className="mt-2 space-y-1">
+                                          {data.sample.slice(0, 2).map((s: any, sIdx: number) => (
+                                            <div key={sIdx} className="p-2 bg-background rounded text-xs line-clamp-2">
+                                              {s.fact || s.content || 'Fact'}
+                                            </div>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </>
+                                  )}
+                                  {step === 'vector_search' && status === 'complete' && (
+                                    <>
+                                      {data.results !== undefined && <div>Chunks retrieved: <span className="font-medium">{data.results}</span></div>}
+                                      {data.top_score !== undefined && <div>Top score: <span className="font-medium">{Math.round(data.top_score * 100)}%</span></div>}
+                                    </>
+                                  )}
+                                  {step === 'fusion' && status === 'complete' && (
+                                    <>
+                                      {data.fused_count !== undefined && <div>Results fused: <span className="font-medium">{data.fused_count}</span></div>}
+                                    </>
+                                  )}
+                                  {step === 'diversify' && status === 'complete' && (
+                                    <>
+                                      {data.final_count !== undefined && <div>Final results: <span className="font-medium">{data.final_count}</span></div>}
+                                    </>
+                                  )}
+                                </div>
+                              </Card>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    } else if (type === 'retrieval_summary') {
+                      return (
+                        <div key={idx} className="relative pl-8 mb-4">
+                          <div className="absolute left-0 top-0">
+                            <span className="inline-flex items-center justify-center w-6 h-6 rounded-full border bg-green-100 border-green-300 text-green-700">
+                              <Check className="w-3.5 h-3.5" />
+                            </span>
+                          </div>
+                          <Card className="p-4 bg-green-50 border-green-200">
+                            <div className="space-y-2">
+                              <div className="font-medium text-sm text-green-900">Retrieval Complete</div>
+                              {ev.query && (
+                                <div className="space-y-1 text-xs text-green-800">
+                                  <div>Intent: {ev.query.intent}</div>
+                                  <div>Entities: {ev.query.entities} | Keywords: {ev.query.keywords}</div>
+                                </div>
+                              )}
+                              {ev.results && (
+                                <div className="flex gap-3 text-xs">
+                                  <Badge variant="outline" className="bg-white">Graph: {ev.results.graph}</Badge>
+                                  <Badge variant="outline" className="bg-white">Vector: {ev.results.vector}</Badge>
+                                  <Badge variant="outline" className="bg-white">Final: {ev.results.final}</Badge>
+                                </div>
+                              )}
+                              {ev.total_time_ms && (
+                                <div className="text-xs text-green-700">Total time: {ev.total_time_ms}ms</div>
+                              )}
+                            </div>
+                          </Card>
+                        </div>
+                      )
+                    }
+                    
+                    // Fallback to original rendering for other event types
                     const title = type === 'start'
                       ? 'Search started'
                       : type === 'results'
