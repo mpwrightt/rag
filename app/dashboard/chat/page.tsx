@@ -730,7 +730,7 @@ export default function ModernRAGChatPage() {
       condition={(has) => has({ plan: 'pro' })}
       fallback={<UpgradeCard />}
     >
-      <div className="flex flex-1 min-h-0 sm:min-h-0 min-h-[100dvh] flex-col bg-background overflow-hidden overflow-x-hidden relative">
+      <div className="flex flex-1 min-h-0 sm:min-h-0 min-h-[100dvh] flex-col bg-background overflow-hidden overflow-x-hidden relative pt-12 sm:pt-0">
         {/* Top Toolbar */}
         <div className="flex-shrink-0 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 p-2 sm:p-4 shadow-sm">
           <div className="flex items-center justify-between gap-2">
