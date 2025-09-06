@@ -74,6 +74,7 @@ import {
 import { cn } from '@/lib/utils'
 import { Protect } from '@clerk/nextjs'
 import CustomClerkPricing from '@/components/custom-clerk-pricing'
+import { RetrievalTimeline } from '@/components/retrieval-timeline'
 
 // Types
 type MessageRole = 'user' | 'assistant' | 'system'
@@ -377,9 +378,11 @@ export default function ModernRAGChatPage() {
 
   // Core send logic (reused by regenerate)
   const sendPrompt = useCallback(async (prompt: string) => {
-    if (!prompt.trim() || isLoading) return
+    // Clear sources and retrieval events for new message
+    setActiveSources([])
+    setLiveRetrieval([])
 
-    // Append user message
+    // Add user message
     const userMessage: ChatMessage = {
       id: `user-${Date.now()}`,
       role: 'user',
@@ -410,10 +413,12 @@ export default function ModernRAGChatPage() {
     try {
       const controller = new AbortController()
       const startTime = Date.now()
+      // Generate session ID for this request
+      const sessionId = `session-${Date.now()}-${Math.random().toString(36).substring(7)}`
       const res = await fetch(`${API_BASE}/chat/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'bypass-tunnel-reminder': 'true' },
-        body: JSON.stringify({ message: prompt, search_type: chatSettings.searchMode, session_id: undefined }),
+        body: JSON.stringify({ message: prompt, search_type: chatSettings.searchMode, session_id: sessionId }),
         signal: controller.signal
       })
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
@@ -472,6 +477,14 @@ export default function ModernRAGChatPage() {
                 }
                 return newMessages
               })
+            }
+            // Handle retrieval events for the sidebar
+            if (data.type === 'retrieval') {
+              const retrievalData = data.data || data
+              // The actual event is nested in data.data
+              if (retrievalData) {
+                setLiveRetrieval(prev => [...prev, retrievalData])
+              }
             }
           } catch (e) {
             console.error('Error parsing stream data:', e)
@@ -1590,211 +1603,8 @@ export default function ModernRAGChatPage() {
                 Retrieval Path
               </SheetTitle>
             </SheetHeader>
-            <div className="p-4 pt-0 space-y-4">
-              {/* Live status */}
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <div className={cn(
-                  "w-2 h-2 rounded-full",
-                  isLoading ? "bg-yellow-500 animate-pulse" : "bg-green-500"
-                )} />
-                <span>{isLoading ? 'Listening to retrieval events…' : 'Idle'}</span>
-                {liveRetrieval.length > 0 && (
-                  <Badge variant="secondary" className="ml-auto">{liveRetrieval.length} events</Badge>
-                )}
-              </div>
-
-              {/* Timeline */}
-              <div className="relative">
-                <div className="absolute left-3 top-0 bottom-0 w-px bg-border" />
-                <div className="space-y-4">
-                  {liveRetrieval.length === 0 && (
-                    <div className="text-sm text-muted-foreground">
-                      No retrieval activity yet. Ask a question to see the AI's search path.
-                    </div>
-                  )}
-                  {liveRetrieval.map((ev: any, idx: number) => {
-                    const type = ev?.event || ev?.type || 'event'
-                    const tool = ev?.tool || ev?.args?.tool || 'retrieval'
-                    
-                    // Handle enhanced retrieval events
-                    if (type === 'retrieval_step') {
-                      const step = ev?.step || 'unknown'
-                      const status = ev?.status || 'unknown'
-                      const data = ev?.data || {}
-                      
-                      const stepTitles: any = {
-                        query_understanding: 'Query Analysis',
-                        graph_search: 'Knowledge Graph Search',
-                        vector_search: 'Vector Search',
-                        fusion: 'Result Fusion',
-                        diversify: 'Diversification'
-                      }
-                      
-                      const stepIcons: any = {
-                        query_understanding: Brain,
-                        graph_search: Network,
-                        vector_search: Search,
-                        fusion: Zap,
-                        diversify: Sparkles
-                      }
-                      
-                      const Icon = stepIcons[step] || FileText
-                      const title = stepTitles[step] || step
-                      
-                      return (
-                        <div key={idx} className="relative pl-8 mb-4">
-                          <div className="absolute left-0 top-0">
-                            <span className={cn(
-                              "inline-flex items-center justify-center w-6 h-6 rounded-full border bg-background",
-                              status === 'start' ? 'border-blue-200 text-blue-600' :
-                              status === 'complete' ? 'border-green-200 text-green-600' :
-                              'border-purple-200 text-purple-700'
-                            )}>
-                              <Icon className="w-3.5 h-3.5" />
-                            </span>
-                          </div>
-                          <div className="space-y-2">
-                            <div className="flex items-center gap-2">
-                              <span className="font-medium text-sm">{title}</span>
-                              <Badge variant="outline" className="px-1.5 py-0 text-[10px]">{status}</Badge>
-                            </div>
-                            {data && (
-                              <Card className="p-3 bg-secondary/20">
-                                <div className="space-y-1 text-xs">
-                                  {step === 'query_understanding' && status === 'complete' && (
-                                    <>
-                                      {data.intent && <div>Intent: <span className="font-medium">{data.intent}</span></div>}
-                                      {data.entities > 0 && <div>Entities found: <span className="font-medium">{data.entities}</span></div>}
-                                      {data.keywords && <div>Keywords: <span className="font-medium">{data.keywords.join(', ')}</span></div>}
-                                    </>
-                                  )}
-                                  {step === 'graph_search' && status === 'complete' && (
-                                    <>
-                                      {data.results !== undefined && <div>Facts found: <span className="font-medium">{data.results}</span></div>}
-                                      {data.sample && data.sample.length > 0 && (
-                                        <div className="mt-2 space-y-1">
-                                          {data.sample.slice(0, 2).map((s: any, sIdx: number) => (
-                                            <div key={sIdx} className="p-2 bg-background rounded text-xs line-clamp-2">
-                                              {s.fact || s.content || 'Fact'}
-                                            </div>
-                                          ))}
-                                        </div>
-                                      )}
-                                    </>
-                                  )}
-                                  {step === 'vector_search' && status === 'complete' && (
-                                    <>
-                                      {data.results !== undefined && <div>Chunks retrieved: <span className="font-medium">{data.results}</span></div>}
-                                      {data.top_score !== undefined && <div>Top score: <span className="font-medium">{Math.round(data.top_score * 100)}%</span></div>}
-                                    </>
-                                  )}
-                                  {step === 'fusion' && status === 'complete' && (
-                                    <>
-                                      {data.fused_count !== undefined && <div>Results fused: <span className="font-medium">{data.fused_count}</span></div>}
-                                    </>
-                                  )}
-                                  {step === 'diversify' && status === 'complete' && (
-                                    <>
-                                      {data.final_count !== undefined && <div>Final results: <span className="font-medium">{data.final_count}</span></div>}
-                                    </>
-                                  )}
-                                </div>
-                              </Card>
-                            )}
-                          </div>
-                        </div>
-                      )
-                    } else if (type === 'retrieval_summary') {
-                      return (
-                        <div key={idx} className="relative pl-8 mb-4">
-                          <div className="absolute left-0 top-0">
-                            <span className="inline-flex items-center justify-center w-6 h-6 rounded-full border bg-green-100 border-green-300 text-green-700">
-                              <Check className="w-3.5 h-3.5" />
-                            </span>
-                          </div>
-                          <Card className="p-4 bg-green-50 border-green-200">
-                            <div className="space-y-2">
-                              <div className="font-medium text-sm text-green-900">Retrieval Complete</div>
-                              {ev.query && (
-                                <div className="space-y-1 text-xs text-green-800">
-                                  <div>Intent: {ev.query.intent}</div>
-                                  <div>Entities: {ev.query.entities} | Keywords: {ev.query.keywords}</div>
-                                </div>
-                              )}
-                              {ev.results && (
-                                <div className="flex gap-3 text-xs">
-                                  <Badge variant="outline" className="bg-white">Graph: {ev.results.graph}</Badge>
-                                  <Badge variant="outline" className="bg-white">Vector: {ev.results.vector}</Badge>
-                                  <Badge variant="outline" className="bg-white">Final: {ev.results.final}</Badge>
-                                </div>
-                              )}
-                              {ev.total_time_ms && (
-                                <div className="text-xs text-green-700">Total time: {ev.total_time_ms}ms</div>
-                              )}
-                            </div>
-                          </Card>
-                        </div>
-                      )
-                    }
-                    
-                    // Fallback to original rendering for other event types
-                    const title = type === 'start'
-                      ? 'Search started'
-                      : type === 'results'
-                        ? 'Results received'
-                        : type === 'end'
-                          ? 'Search completed'
-                          : String(type).charAt(0).toUpperCase() + String(type).slice(1)
-                    const Icon = type === 'start' ? Search : type === 'end' ? Check : FileText
-                    return (
-                      <div key={idx} className="relative pl-8">
-                        <div className="absolute left-0 top-0">
-                          <span className={cn(
-                            "inline-flex items-center justify-center w-6 h-6 rounded-full border bg-background",
-                            type === 'start' ? 'border-blue-200 text-blue-600' :
-                            type === 'end' ? 'border-green-200 text-green-600' :
-                            'border-purple-200 text-purple-700'
-                          )}>
-                            <Icon className="w-3.5 h-3.5" />
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
-                          <Badge variant="outline" className="px-1.5 py-0 text-[10px] capitalize">{tool}</Badge>
-                          <span className="font-medium text-foreground text-sm">{title}</span>
-                        </div>
-                        {type === 'results' && Array.isArray(ev?.results) && (
-                          <div className="space-y-2">
-                            {ev.results.slice(0, 3).map((r: any, rIdx: number) => (
-                              <Card key={rIdx} className="p-3">
-                                <div className="flex items-start gap-3">
-                                  <div className="w-8 h-8 rounded-md bg-purple-100 flex items-center justify-center flex-shrink-0">
-                                    <FileText className="w-4 h-4 text-purple-600" />
-                                  </div>
-                                  <div className="min-w-0 flex-1">
-                                    <div className="flex items-center justify-between gap-2">
-                                      <div className="truncate text-sm font-medium">
-                                        {r.document_title || r.filename || r.id || 'Result'}
-                                      </div>
-                                      {typeof r.score !== 'undefined' && (
-                                        <Badge variant="secondary" className="text-[10px]">
-                                          {Math.round((r.score || r.relevance_score || 0) * 100)}%
-                                        </Badge>
-                                      )}
-                                    </div>
-                                    {r.preview && (
-                                      <p className="text-xs text-muted-foreground line-clamp-2 mt-1">{r.preview}</p>
-                                    )}
-                                  </div>
-                                </div>
-                              </Card>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
+            <div className="p-4 pt-0">
+              <RetrievalTimeline events={liveRetrieval} isLoading={isLoading} />
             </div>
           </SheetContent>
         </Sheet>

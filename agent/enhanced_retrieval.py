@@ -584,13 +584,19 @@ class EnhancedRetriever:
         data: Dict[str, Any]
     ):
         """Emit detailed step event for frontend visibility."""
-        await emit_retrieval_event(session_id, {
+        if not session_id:
+            logger.warning(f"No session_id for retrieval event: {step} {status}")
+            return
+        
+        event = {
             "type": "retrieval_step",
             "step": step,
             "status": status,
             "data": data,
             "timestamp": datetime.now().isoformat()
-        })
+        }
+        logger.info(f"Emitting retrieval event for session {session_id}: {step} {status}")
+        await emit_retrieval_event(session_id, event)
     
     async def _emit_retrieval_summary(self, session_id: str, context: RetrievalContext):
         """Emit final retrieval summary."""
