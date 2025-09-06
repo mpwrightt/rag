@@ -211,8 +211,10 @@ class EnhancedRetriever:
         
         try:
             # Search for facts using the optimized graph query
+            logger.info(f"Executing graph search with query: {query.graph_query}")
             graph_input = GraphSearchInput(query=query.graph_query)
             raw_results = await graph_search_tool(graph_input)
+            logger.info(f"Graph search returned {len(raw_results)} results")
             
             # Convert to standardized format
             for r in raw_results[:20]:  # Limit to top 20
@@ -229,6 +231,9 @@ class EnhancedRetriever:
                 })
             
             # Also search for specific entities if identified
+            if len(raw_results) == 0:
+                logger.warning("No graph results found - graph may be empty")
+            
             for entity in query.entities[:3]:  # Top 3 entities
                 entity_facts = await self._search_entity_facts(entity["text"])
                 for fact in entity_facts[:5]:  # Top 5 facts per entity
@@ -596,6 +601,7 @@ class EnhancedRetriever:
             "timestamp": datetime.now().isoformat()
         }
         logger.info(f"Emitting retrieval event for session {session_id}: {step} {status}")
+        logger.info(f"Event details: {event}")
         await emit_retrieval_event(session_id, event)
     
     async def _emit_retrieval_summary(self, session_id: str, context: RetrievalContext):

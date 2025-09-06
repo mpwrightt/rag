@@ -62,13 +62,22 @@ async def emit_retrieval_event(session_id: str, event: Dict[str, Any]) -> None:
 
     Event should be a JSON-serializable dict. This function never raises.
     """
+    import logging
+    logger = logging.getLogger(__name__)
+    
     try:
-        for q in list(_retrieval_listeners.get(session_id, [])):
+        listeners = _retrieval_listeners.get(session_id, [])
+        logger.info(f"emit_retrieval_event: session_id={session_id}, num_listeners={len(listeners)}, event_type={event.get('type')}")
+        
+        for q in list(listeners):
             try:
                 q.put_nowait(event)
-            except Exception:
+                logger.info(f"Successfully queued event for session {session_id}")
+            except Exception as e:
                 # Ignore backpressure/errors to avoid disrupting the agent flow
+                logger.warning(f"Failed to queue event: {e}")
                 pass
-    except Exception:
+    except Exception as e:
         # Never let event emission crash callers
+        logger.error(f"Error in emit_retrieval_event: {e}")
         pass

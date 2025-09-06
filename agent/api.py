@@ -788,7 +788,9 @@ async def chat_stream(request: ChatRequest):
                 retrieval_queue = None
                 try:
                     retrieval_queue = register_retrieval_listener(session_id)
-                except Exception:
+                    logger.info(f"Registered retrieval listener for session {session_id}, queue={retrieval_queue}")
+                except Exception as e:
+                    logger.error(f"Failed to register retrieval listener: {e}")
                     retrieval_queue = None
                 
                 # Determine if mock streaming mode is enabled

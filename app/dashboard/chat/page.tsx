@@ -413,8 +413,8 @@ export default function ModernRAGChatPage() {
     try {
       const controller = new AbortController()
       const startTime = Date.now()
-      // Generate session ID for this request
-      const sessionId = `session-${Date.now()}-${Math.random().toString(36).substring(7)}`
+      // Generate a valid UUID v4 for session ID
+      const sessionId = crypto.randomUUID()
       const res = await fetch(`${API_BASE}/chat/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'bypass-tunnel-reminder': 'true' },
@@ -480,11 +480,18 @@ export default function ModernRAGChatPage() {
             }
             // Handle retrieval events for the sidebar
             if (data.type === 'retrieval') {
+              console.log('Received retrieval event:', data)
               const retrievalData = data.data || data
               // The actual event is nested in data.data
               if (retrievalData) {
+                console.log('Adding retrieval data to sidebar:', retrievalData)
                 setLiveRetrieval(prev => [...prev, retrievalData])
               }
+            }
+            // Handle direct retrieval step/summary events
+            if (data.type === 'retrieval_step' || data.type === 'retrieval_summary') {
+              console.log('Received direct retrieval event:', data)
+              setLiveRetrieval(prev => [...prev, data])
             }
           } catch (e) {
             console.error('Error parsing stream data:', e)

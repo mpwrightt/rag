@@ -324,6 +324,7 @@ async def guided_retrieval(
         Comprehensive results including processed query, retrieval steps, and ranked results
     """
     session_id = getattr(getattr(ctx, 'deps', None), 'session_id', None)
+    logger.info(f"guided_retrieval called with session_id: {session_id}, query: {query[:50]}...")
     
     # Initialize enhanced retriever
     retriever = EnhancedRetriever()
