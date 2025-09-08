@@ -88,11 +88,26 @@ logger = logging.getLogger(__name__)
 
 # Global state for WebSocket connections
 class ConnectionManager:
+    """
+    Manages WebSocket connections for real-time communication.
+
+    This class handles connecting, disconnecting, and broadcasting messages to clients
+    in different rooms, facilitating features like real-time chat and collaboration.
+    """
     def __init__(self):
+        """Initializes the ConnectionManager."""
         self.active_connections: Dict[str, WebSocket] = {}
         self.room_connections: Dict[str, Set[str]] = {}
     
     async def connect(self, websocket: WebSocket, client_id: str, room: str = "default"):
+        """
+        Accepts a new WebSocket connection and adds it to a room.
+
+        Args:
+            websocket: The WebSocket connection object.
+            client_id: A unique identifier for the client.
+            room: The room to which the client should be added.
+        """
         await websocket.accept()
         self.active_connections[client_id] = websocket
         
@@ -109,6 +124,13 @@ class ConnectionManager:
         })
     
     def disconnect(self, client_id: str, room: str = "default"):
+        """
+        Removes a WebSocket connection.
+
+        Args:
+            client_id: The ID of the client to disconnect.
+            room: The room from which the client should be removed.
+        """
         if client_id in self.active_connections:
             del self.active_connections[client_id]
         
@@ -118,6 +140,13 @@ class ConnectionManager:
                 del self.room_connections[room]
     
     async def send_personal_message(self, message: dict, client_id: str):
+        """
+        Sends a message to a specific client.
+
+        Args:
+            message: The message to send, as a dictionary.
+            client_id: The ID of the client to send the message to.
+        """
         websocket = self.active_connections.get(client_id)
         if websocket:
             try:
@@ -127,6 +156,13 @@ class ConnectionManager:
                 self.disconnect(client_id)
     
     async def broadcast_to_room(self, message: dict, room: str = "default"):
+        """
+        Broadcasts a message to all clients in a specific room.
+
+        Args:
+            message: The message to broadcast, as a dictionary.
+            room: The room to which the message should be sent.
+        """
         if room in self.room_connections:
             disconnected = []
             for client_id in self.room_connections[room]:
@@ -142,7 +178,12 @@ class ConnectionManager:
                 self.disconnect(client_id, room)
     
     async def broadcast_analytics_update(self, metrics: RealTimeMetrics):
-        """Broadcast real-time analytics to all connected clients."""
+        """
+        Broadcasts real-time analytics updates to the 'analytics' room.
+
+        Args:
+            metrics: A `RealTimeMetrics` object containing the latest data.
+        """
         message = {
             "type": "analytics_update",
             "data": metrics.model_dump(),
@@ -155,7 +196,15 @@ manager = ConnectionManager()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifecycle manager."""
+    """
+    An asynchronous context manager for managing the application's lifecycle.
+
+    This function handles the startup and shutdown procedures for the enhanced API,
+    including database initialization and starting background tasks.
+
+    Args:
+        app: The FastAPI application instance.
+    """
     # Startup
     logger.info("Starting RAG API with enhanced features...")
     
@@ -186,7 +235,12 @@ async def lifespan(app: FastAPI):
 
 
 async def periodic_analytics_broadcast():
-    """Periodically broadcast analytics updates to connected clients."""
+    """
+    A background task that periodically broadcasts analytics updates.
+
+    This function runs in a loop, fetching the latest real-time metrics and
+    broadcasting them to all clients subscribed to the 'analytics' room.
+    """
     while True:
         try:
             # Get real-time metrics
@@ -228,7 +282,19 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # Enhanced utility functions
 async def get_or_create_session(session_id: Optional[str] = None) -> Tuple[str, bool]:
-    """Get existing session or create new one."""
+    """
+    Gets an existing session or creates a new one.
+
+    This enhanced version returns a tuple indicating both the session ID and whether
+    a new session was created.
+
+    Args:
+        session_id: An optional existing session ID.
+
+    Returns:
+        A tuple containing the session ID and a boolean that is True if a new
+        session was created.
+    """
     if session_id:
         session = await get_session(session_id)
         if session:
@@ -242,7 +308,17 @@ async def get_or_create_session(session_id: Optional[str] = None) -> Tuple[str, 
 # WebSocket endpoints
 @app.websocket("/ws/{client_id}")
 async def websocket_endpoint(websocket: WebSocket, client_id: str, room: str = Query(default="default")):
-    """WebSocket endpoint for real-time communication."""
+    """
+    The main WebSocket endpoint for real-time, bidirectional communication.
+
+    This endpoint handles incoming WebSocket connections and routes messages to the
+    appropriate handlers based on their type.
+
+    Args:
+        websocket: The WebSocket connection object.
+        client_id: A unique identifier for the connecting client.
+        room: The room that the client wishes to join.
+    """
     await manager.connect(websocket, client_id, room)
     try:
         while True:
@@ -267,7 +343,17 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str, room: str = Q
 
 
 async def handle_websocket_chat(websocket: WebSocket, client_id: str, data: dict):
-    """Handle real-time chat through WebSocket."""
+    """
+    Handles real-time chat messages received through a WebSocket.
+
+    This function processes a chat message, runs it through the RAG agent, and
+    streams the response back to the client over the WebSocket.
+
+    Args:
+        websocket: The WebSocket connection object.
+        client_id: The ID of the client that sent the message.
+        data: A dictionary containing the message and session information.
+    """
     try:
         message = data.get("message", "")
         session_id = data.get("session_id")
@@ -328,7 +414,17 @@ async def handle_websocket_chat(websocket: WebSocket, client_id: str, data: dict
 
 
 async def handle_collaboration_update(client_id: str, room: str, data: dict):
-    """Handle real-time collaboration updates."""
+    """
+    Handles and broadcasts real-time collaboration updates.
+
+    This function takes a collaboration event from one client and broadcasts it
+    to all other clients in the same room.
+
+    Args:
+        client_id: The ID of the client that initiated the update.
+        room: The collaboration room.
+        data: The payload of the collaboration update.
+    """
     collaboration_data = {
         "type": "collaboration_update",
         "client_id": client_id,
@@ -348,7 +444,18 @@ async def handle_collaboration_update(client_id: str, room: str, data: dict):
 # Analytics Endpoints
 @app.get("/api/analytics/dashboard", response_model=AnalyticsDashboardResponse)
 async def get_analytics_dashboard(days: int = Query(default=7, ge=1, le=90)):
-    """Get comprehensive analytics dashboard data."""
+    """
+    Retrieves a comprehensive set of data for the analytics dashboard.
+
+    This endpoint aggregates real-time metrics, chat statistics, document usage,
+    and user engagement data into a single response.
+
+    Args:
+        days: The number of days to include in the analytics aggregation.
+
+    Returns:
+        An `AnalyticsDashboardResponse` object containing the full dashboard data.
+    """
     try:
         # Get real-time metrics
         real_time_metrics = await analytics_tracker.get_real_time_metrics()
@@ -418,7 +525,12 @@ async def get_analytics_dashboard(days: int = Query(default=7, ge=1, le=90)):
 
 @app.get("/api/analytics/real-time", response_model=RealTimeMetrics)
 async def get_real_time_metrics():
-    """Get current real-time metrics."""
+    """
+    Retrieves the current real-time analytics metrics.
+
+    Returns:
+        A `RealTimeMetrics` object with the latest system metrics.
+    """
     try:
         metrics = await analytics_tracker.get_real_time_metrics()
         if not metrics:
@@ -446,7 +558,19 @@ async def list_prompt_templates(
     is_public: Optional[bool] = Query(default=None),
     search: Optional[str] = Query(default=None)
 ):
-    """List prompt templates with filtering and pagination."""
+    """
+    Lists prompt templates with support for filtering and pagination.
+
+    Args:
+        page: The page number for pagination.
+        per_page: The number of templates to return per page.
+        category: An optional category to filter templates by.
+        is_public: An optional boolean to filter for public templates.
+        search: An optional search term to filter templates by name or content.
+
+    Returns:
+        A `PromptTemplateListResponse` with the list of templates and pagination details.
+    """
     # This is a simplified implementation - you'd implement the full database queries
     return PromptTemplateListResponse(
         templates=[],
@@ -458,7 +582,16 @@ async def list_prompt_templates(
 
 @app.post("/api/prompt-templates")
 async def create_prompt_template(template_request: CreatePromptTemplateRequest):
-    """Create a new prompt template."""
+    """
+    Creates a new prompt template.
+
+    Args:
+        template_request: A `CreatePromptTemplateRequest` object with the details of the
+                          template to be created.
+
+    Returns:
+        A confirmation message upon successful creation.
+    """
     # Implementation would go here
     return {"message": "Prompt template created successfully"}
 
@@ -473,7 +606,20 @@ async def list_collections(
     workspace_id: Optional[str] = Query(default=None),
     is_shared: Optional[bool] = Query(default=None),
 ):
-    """List collections with optional filtering and pagination."""
+    """
+    Lists document collections with support for filtering and pagination.
+
+    Args:
+        page: The page number for pagination.
+        per_page: The number of collections to return per page.
+        search: An optional search term to filter collections by name.
+        created_by: An optional user ID to filter collections by creator.
+        workspace_id: An optional workspace ID to filter collections.
+        is_shared: An optional boolean to filter for shared collections.
+
+    Returns:
+        A `CollectionListResponse` with the list of collections and pagination details.
+    """
     try:
         # Log incoming request parameters for diagnostics
         logger.info(
@@ -507,7 +653,16 @@ async def list_collections(
 
 @app.post("/api/collections", response_model=Collection, status_code=201)
 async def create_collection(collection_request: CreateCollectionRequest, request: Request):
-    """Create a new collection."""
+    """
+    Creates a new document collection.
+
+    Args:
+        collection_request: A `CreateCollectionRequest` with the details of the new collection.
+        request: The FastAPI request object, used to access headers.
+
+    Returns:
+        The newly created `Collection` object.
+    """
     try:
         # Pull optional creator/workspace from headers if provided
         created_by = request.headers.get("x-user-id")
@@ -539,27 +694,57 @@ async def create_collection(collection_request: CreateCollectionRequest, request
 
 @app.post("/api/collections/{collection_id}/documents")
 async def add_documents_to_collection(collection_id: str, request: AddToCollectionRequest):
-    """Add documents to a collection."""
+    """
+    Adds a list of documents to a specific collection.
+
+    Args:
+        collection_id: The ID of the collection to add documents to.
+        request: An `AddToCollectionRequest` containing the list of document IDs.
+
+    Returns:
+        A confirmation message.
+    """
     return {"message": f"Added {len(request.document_ids)} documents to collection"}
 
 
 # Workflows Endpoints
 @app.get("/api/workflows")
 async def list_workflows():
-    """List all workflows."""
+    """
+    Lists all available workflows.
+
+    Returns:
+        A list of workflows.
+    """
     return {"workflows": []}
 
 
 @app.post("/api/workflows")
 async def create_workflow(workflow_request: CreateWorkflowRequest):
-    """Create a new workflow."""
+    """
+    Creates a new workflow.
+
+    Args:
+        workflow_request: A `CreateWorkflowRequest` with the details of the new workflow.
+
+    Returns:
+        A confirmation message.
+    """
     return {"message": "Workflow created successfully"}
 
 
 # Enhanced existing endpoints with analytics tracking
 @app.post("/api/chat/stream")
 async def chat_stream(chat_request: ChatRequest):
-    """Enhanced streaming chat with analytics tracking."""
+    """
+    Handles an enhanced streaming chat request with analytics tracking.
+
+    Args:
+        chat_request: A `ChatRequest` object containing the user's message.
+
+    Returns:
+        A `StreamingResponse` that sends events to the client.
+    """
     session_id, is_new_session = await get_or_create_session(chat_request.session_id)
     
     start_time = datetime.now()
@@ -611,7 +796,12 @@ async def chat_stream(chat_request: ChatRequest):
 
 @app.get("/health", response_model=HealthStatus)
 async def health_check():
-    """Enhanced health check with more comprehensive status."""
+    """
+    Performs an enhanced health check of the application and its dependencies.
+
+    Returns:
+        A `HealthStatus` object indicating the overall health of the system.
+    """
     try:
         # Test database
         db_healthy = await test_connection()

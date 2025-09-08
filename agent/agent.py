@@ -40,7 +40,18 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class AgentDependencies:
-    """Dependencies for the agent."""
+    """
+    Manages dependencies required by the agent during a conversation.
+
+    This class holds session-specific information and user preferences that the agent
+    needs to access during its operation. It ensures that each agent run is properly
+    contextualized.
+
+    Attributes:
+        session_id: A unique identifier for the current user session.
+        user_id: An optional identifier for the authenticated user.
+        search_preferences: A dictionary of user-defined search settings.
+    """
     session_id: str
     user_id: Optional[str] = None
     search_preferences: Dict[str, Any] = None

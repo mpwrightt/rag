@@ -38,11 +38,17 @@ class KnowledgeGraphClient:
     """
 
     def __init__(self):
-        """Initialize the knowledge graph client."""
+        """
+        Initializes the KnowledgeGraphClient.
+        """
         self._initialized = False
     
     async def initialize(self):
-        """Initialize the knowledge graph client."""
+        """
+        Initializes the connection to the knowledge graph.
+
+        This method should be called before any other operations are performed.
+        """
         if self._initialized:
             return
 
@@ -71,7 +77,9 @@ class KnowledgeGraphClient:
             raise
     
     async def close(self):
-        """Close the knowledge graph connection."""
+        """
+        Closes the connection to the knowledge graph.
+        """
         self._initialized = False
         logger.info("Knowledge graph client closed")
     
@@ -84,14 +92,14 @@ class KnowledgeGraphClient:
         metadata: Optional[Dict[str, Any]] = None
     ):
         """
-        Add an episode to the knowledge graph.
+        Adds an 'episode' of content to the knowledge graph.
 
         Args:
-            episode_id: Unique episode identifier
-            content: Episode content
-            source: Source of the content
-            timestamp: Episode timestamp
-            metadata: Additional metadata
+            episode_id: A unique identifier for the episode.
+            content: The content of the episode.
+            source: The source of the content.
+            timestamp: An optional timestamp for the episode.
+            metadata: An optional dictionary of additional metadata.
         """
         if not self._initialized:
             await self.initialize()
@@ -129,15 +137,19 @@ class KnowledgeGraphClient:
         use_hybrid_search: bool = True
     ) -> List[Dict[str, Any]]:
         """
-        Search the knowledge graph using full-text search on facts.
+        Searches the knowledge graph for a given query.
+
+        This method uses full-text search on the facts stored in the graph.
 
         Args:
-            query: Search query
-            center_node_distance: Not used in PostgreSQL implementation
-            use_hybrid_search: Not used in PostgreSQL implementation
+            query: The search query string.
+            center_node_distance: This parameter is not used in the PostgreSQL
+                                  implementation but is kept for compatibility.
+            use_hybrid_search: This parameter is not used in the PostgreSQL
+                               implementation.
 
         Returns:
-            Search results
+            A list of search results.
         """
         if not self._initialized:
             await self.initialize()
@@ -180,15 +192,16 @@ class KnowledgeGraphClient:
         depth: int = 1
     ) -> Dict[str, Any]:
         """
-        Get entities related to a given entity.
+        Gets entities and relationships related to a specific entity.
 
         Args:
-            entity_name: Name of the entity
-            relationship_types: Not used in PostgreSQL implementation
-            depth: Maximum traversal depth
+            entity_name: The name of the entity to find relations for.
+            relationship_types: This parameter is not used in the PostgreSQL
+                                  implementation.
+            depth: The maximum depth to traverse for relationships.
 
         Returns:
-            Related entities and relationships
+            A dictionary containing the related entities and relationships.
         """
         if not self._initialized:
             await self.initialize()
@@ -230,15 +243,15 @@ class KnowledgeGraphClient:
         end_date: Optional[datetime] = None
     ) -> List[Dict[str, Any]]:
         """
-        Get timeline of facts for an entity.
+        Gets a chronological timeline of facts for a specific entity.
 
         Args:
-            entity_name: Name of the entity
-            start_date: Start of time range
-            end_date: End of time range
+            entity_name: The name of the entity.
+            start_date: An optional start date for the timeline.
+            end_date: An optional end date for the timeline.
 
         Returns:
-            Timeline of facts
+            A list of facts, ordered chronologically.
         """
         if not self._initialized:
             await self.initialize()
@@ -265,10 +278,11 @@ class KnowledgeGraphClient:
     
     async def get_graph_statistics(self) -> Dict[str, Any]:
         """
-        Get basic statistics about the knowledge graph.
+        Gets basic statistics about the knowledge graph.
 
         Returns:
-            Graph statistics
+            A dictionary containing statistics about the graph, such as the
+            number of nodes and edges.
         """
         if not self._initialized:
             await self.initialize()
@@ -297,7 +311,11 @@ class KnowledgeGraphClient:
             }
     
     async def clear_graph(self):
-        """Clear all data from the graph (USE WITH CAUTION)."""
+        """
+        Clears all data from the knowledge graph.
+
+        This is a destructive operation and should be used with caution.
+        """
         if not self._initialized:
             await self.initialize()
 
@@ -325,16 +343,16 @@ class KnowledgeGraphClient:
         metadata: Optional[Dict[str, Any]] = None
     ) -> str:
         """
-        Insert or update a knowledge graph node.
+        Inserts or updates a node in the knowledge graph.
 
         Args:
-            name: Node name
-            node_type: Node type
-            description: Optional description
-            metadata: Optional metadata
+            name: The name of the node.
+            node_type: The type of the node.
+            description: An optional description for the node.
+            metadata: An optional dictionary of metadata for the node.
 
         Returns:
-            Node ID
+            The UUID of the upserted node as a string.
         """
         if not self._initialized:
             await self.initialize()
@@ -364,17 +382,17 @@ class KnowledgeGraphClient:
         metadata: Optional[Dict[str, Any]] = None
     ) -> str:
         """
-        Create a relationship between two nodes.
+        Creates a relationship (an edge) between two nodes.
 
         Args:
-            source_node_id: Source node ID
-            target_node_id: Target node ID
-            relationship_type: Type of relationship
-            description: Optional description
-            metadata: Optional metadata
+            source_node_id: The UUID of the source node.
+            target_node_id: The UUID of the target node.
+            relationship_type: The type of the relationship.
+            description: An optional description for the relationship.
+            metadata: An optional dictionary of metadata for the relationship.
 
         Returns:
-            Relationship ID
+            The UUID of the created relationship as a string.
         """
         if not self._initialized:
             await self.initialize()
@@ -406,19 +424,19 @@ class KnowledgeGraphClient:
         metadata: Optional[Dict[str, Any]] = None
     ) -> str:
         """
-        Add a fact to a node.
+        Adds a fact to a specific node in the knowledge graph.
 
         Args:
-            node_id: Node ID
-            content: Fact content
-            source: Source of the fact
-            valid_at: When the fact became valid
-            invalid_at: When the fact became invalid
-            confidence: Confidence score
-            metadata: Optional metadata
+            node_id: The UUID of the node to add the fact to.
+            content: The content of the fact.
+            source: The source of the fact.
+            valid_at: An optional timestamp for when the fact became valid.
+            invalid_at: An optional timestamp for when the fact became invalid.
+            confidence: A confidence score for the fact.
+            metadata: An optional dictionary of metadata for the fact.
 
         Returns:
-            Fact ID
+            The UUID of the added fact as a string.
         """
         if not self._initialized:
             await self.initialize()
@@ -444,7 +462,14 @@ class KnowledgeGraphClient:
 _graph_client_instance: Optional[KnowledgeGraphClient] = None
 
 def get_graph_client() -> KnowledgeGraphClient:
-    """Get the global knowledge graph client instance (lazy initialization)."""
+    """
+    Gets the global instance of the KnowledgeGraphClient, initializing it if necessary.
+
+    This function implements a singleton pattern for the graph client.
+
+    Returns:
+        The singleton `KnowledgeGraphClient` instance.
+    """
     global _graph_client_instance
     if _graph_client_instance is None:
         _graph_client_instance = KnowledgeGraphClient()
@@ -459,12 +484,20 @@ graph_client = _GraphClientProxy()
 
 
 async def initialize_graph():
-    """Initialize graph client."""
+    """
+    Initializes the global knowledge graph client.
+
+    This is a convenience function to be called at application startup.
+    """
     await graph_client.initialize()
 
 
 async def close_graph():
-    """Close graph client."""
+    """
+    Closes the global knowledge graph client.
+
+    This is a convenience function to be called at application shutdown.
+    """
     await graph_client.close()
 
 
@@ -476,16 +509,17 @@ async def add_to_knowledge_graph(
     metadata: Optional[Dict[str, Any]] = None
 ) -> str:
     """
-    Add content to the knowledge graph.
-    
+    A convenience function to add content to the knowledge graph as an episode.
+
     Args:
-        content: Content to add
-        source: Source of the content
-        episode_id: Optional episode ID
-        metadata: Optional metadata
-    
+        content: The content to be added.
+        source: The source of the content.
+        episode_id: An optional, unique ID for the episode. If not provided, one
+                    will be generated.
+        metadata: An optional dictionary of metadata.
+
     Returns:
-        Episode ID
+        The ID of the episode.
     """
     if not episode_id:
         episode_id = f"episode_{datetime.now(timezone.utc).isoformat()}"
@@ -504,13 +538,13 @@ async def search_knowledge_graph(
     query: str
 ) -> List[Dict[str, Any]]:
     """
-    Search the knowledge graph.
-    
+    A convenience function to search the knowledge graph.
+
     Args:
-        query: Search query
-    
+        query: The search query string.
+
     Returns:
-        Search results
+        A list of search results.
     """
     return await graph_client.search(query)
 
@@ -520,24 +554,24 @@ async def get_entity_relationships(
     depth: int = 2
 ) -> Dict[str, Any]:
     """
-    Get relationships for an entity.
-    
+    A convenience function to get relationships for a specific entity.
+
     Args:
-        entity: Entity name
-        depth: Maximum traversal depth
-    
+        entity: The name of the entity.
+        depth: The maximum depth to traverse for relationships.
+
     Returns:
-        Entity relationships
+        A dictionary containing the entity's relationships.
     """
     return await graph_client.get_related_entities(entity, depth=depth)
 
 
 async def test_graph_connection() -> bool:
     """
-    Test graph database connection.
-    
+    Tests the connection to the knowledge graph.
+
     Returns:
-        True if connection successful
+        True if the connection is successful, False otherwise.
     """
     try:
         await graph_client.initialize()

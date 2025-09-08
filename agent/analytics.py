@@ -17,9 +17,16 @@ logger = logging.getLogger(__name__)
 
 
 class AnalyticsTracker:
-    """Handles real-time analytics and metrics tracking."""
+    """
+    Handles real-time analytics and metrics tracking for the RAG system.
+
+    This class provides methods to track various user and system activities,
+    such as chat messages, search queries, and document usage. It interacts
+    with the database to store and retrieve analytics data.
+    """
     
     def __init__(self):
+        """Initializes the AnalyticsTracker."""
         self.active_sessions = set()
         self.message_buffer = []
         self.buffer_size = 100
@@ -34,7 +41,21 @@ class AnalyticsTracker:
         documents_referenced: int = 0,
         response_time_ms: Optional[int] = None
     ) -> bool:
-        """Track chat activity for analytics."""
+        """
+        Tracks chat activity and stores it in the database.
+
+        Args:
+            session_id: The ID of the chat session.
+            user_id: The ID of the user.
+            message_count: The number of messages in the activity.
+            tool_calls_count: The number of tool calls made.
+            search_queries_count: The number of search queries performed.
+            documents_referenced: The number of documents referenced.
+            response_time_ms: The response time in milliseconds.
+
+        Returns:
+            True if the activity was tracked successfully, False otherwise.
+        """
         try:
             async with db_pool.acquire() as conn:
                 await conn.execute("""
@@ -66,7 +87,21 @@ class AnalyticsTracker:
         response_time_ms: Optional[int] = None,
         relevance_scores: Optional[List[float]] = None
     ) -> bool:
-        """Track search analytics."""
+        """
+        Tracks a search query and stores it in the database.
+
+        Args:
+            session_id: The ID of the chat session.
+            user_id: The ID of the user.
+            query: The search query string.
+            search_type: The type of search performed (e.g., 'vector', 'graph').
+            results_count: The number of results returned.
+            response_time_ms: The response time in milliseconds.
+            relevance_scores: A list of relevance scores for the results.
+
+        Returns:
+            True if the query was tracked successfully, False otherwise.
+        """
         try:
             async with db_pool.acquire() as conn:
                 await conn.execute("""
@@ -82,7 +117,17 @@ class AnalyticsTracker:
             return False
     
     async def update_daily_metrics(self, date: Optional[datetime] = None) -> bool:
-        """Update daily metrics aggregation."""
+        """
+        Updates the aggregated daily metrics for a specific date.
+
+        If no date is provided, it updates the metrics for the current day.
+
+        Args:
+            date: The date for which to update the metrics.
+
+        Returns:
+            True if the metrics were updated successfully, False otherwise.
+        """
         target_date = date or datetime.now().date()
         
         try:
@@ -130,7 +175,12 @@ class AnalyticsTracker:
             return False
     
     async def get_real_time_metrics(self) -> Optional[RealTimeMetrics]:
-        """Get current real-time metrics."""
+        """
+        Retrieves real-time metrics from the database.
+
+        Returns:
+            A RealTimeMetrics object containing the current metrics, or None if an error occurs.
+        """
         try:
             async with db_pool.acquire() as conn:
                 result = await conn.fetchrow("""
@@ -164,7 +214,15 @@ class AnalyticsTracker:
         self,
         days: int = 7
     ) -> Optional[ChatMetrics]:
-        """Get chat activity metrics for specified time period."""
+        """
+        Retrieves chat activity metrics over a specified number of days.
+
+        Args:
+            days: The number of days to look back for chat activity.
+
+        Returns:
+            A ChatMetrics object containing the activity metrics, or None if an error occurs.
+        """
         try:
             async with db_pool.acquire() as conn:
                 start_date = datetime.now() - timedelta(days=days)
@@ -187,7 +245,12 @@ class AnalyticsTracker:
             return None
     
     async def get_document_usage_stats(self) -> Optional[DocumentUsageStats]:
-        """Get document usage statistics."""
+        """
+        Retrieves statistics about document usage.
+
+        Returns:
+            A DocumentUsageStats object containing the usage statistics, or None if an error occurs.
+        """
         try:
             async with db_pool.acquire() as conn:
                 result = await conn.fetchrow("""
@@ -217,7 +280,21 @@ class AnalyticsTracker:
         success: bool = True,
         error_message: Optional[str] = None
     ) -> bool:
-        """Track prompt template usage."""
+        """
+        Tracks the usage of a prompt template.
+
+        Args:
+            template_id: The ID of the prompt template.
+            session_id: The ID of the chat session.
+            user_id: The ID of the user.
+            variables: The variables used to fill the prompt template.
+            execution_time_ms: The execution time in milliseconds.
+            success: A boolean indicating if the prompt execution was successful.
+            error_message: Any error message that occurred during execution.
+
+        Returns:
+            True if the usage was tracked successfully, False otherwise.
+        """
         try:
             async with db_pool.acquire() as conn:
                 # Log usage
@@ -247,7 +324,16 @@ class AnalyticsTracker:
         collection_id: str,
         user_id: Optional[str] = None
     ) -> bool:
-        """Track collection access for analytics."""
+        """
+        Tracks when a collection is accessed.
+
+        Args:
+            collection_id: The ID of the collection.
+            user_id: The ID of the user accessing the collection.
+
+        Returns:
+            True if the access was tracked successfully, False otherwise.
+        """
         try:
             async with db_pool.acquire() as conn:
                 await conn.execute("""
@@ -265,7 +351,16 @@ class AnalyticsTracker:
         days: int = 7,
         limit: int = 10
     ) -> List[Dict[str, Any]]:
-        """Get trending search queries."""
+        """
+        Retrieves a list of trending search queries.
+
+        Args:
+            days: The number of days to look back for trending searches.
+            limit: The maximum number of trending searches to return.
+
+        Returns:
+            A list of dictionaries, each representing a trending search query.
+        """
         try:
             async with db_pool.acquire() as conn:
                 start_date = datetime.now() - timedelta(days=days)
@@ -295,7 +390,19 @@ class AnalyticsTracker:
         user_id: Optional[str] = None,
         days: int = 30
     ) -> Dict[str, Any]:
-        """Get user engagement metrics."""
+        """
+        Retrieves user engagement metrics.
+
+        If a user_id is provided, it retrieves metrics for that specific user.
+        Otherwise, it retrieves system-wide engagement metrics.
+
+        Args:
+            user_id: The ID of the user to get metrics for.
+            days: The number of days to look back for engagement data.
+
+        Returns:
+            A dictionary containing user engagement metrics.
+        """
         try:
             async with db_pool.acquire() as conn:
                 start_date = datetime.now() - timedelta(days=days)
@@ -339,7 +446,17 @@ async def track_message(
     tool_calls: int = 0,
     response_time_ms: Optional[int] = None
 ):
-    """Quick function to track a message."""
+    """
+    A utility function to quickly track a chat message.
+
+    This is a convenience wrapper around `AnalyticsTracker.track_chat_activity`.
+
+    Args:
+        session_id: The ID of the chat session.
+        user_id: The ID of the user.
+        tool_calls: The number of tool calls made in the message.
+        response_time_ms: The response time in milliseconds.
+    """
     await analytics_tracker.track_chat_activity(
         session_id=session_id,
         user_id=user_id,
@@ -357,7 +474,19 @@ async def track_search(
     user_id: Optional[str] = None,
     response_time_ms: Optional[int] = None
 ):
-    """Quick function to track a search."""
+    """
+    A utility function to quickly track a search query.
+
+    This is a convenience wrapper around `AnalyticsTracker.track_search_query`.
+
+    Args:
+        query: The search query string.
+        search_type: The type of search performed.
+        results_count: The number of results returned.
+        session_id: The ID of the chat session.
+        user_id: The ID of the user.
+        response_time_ms: The response time in milliseconds.
+    """
     await analytics_tracker.track_search_query(
         session_id=session_id,
         user_id=user_id,

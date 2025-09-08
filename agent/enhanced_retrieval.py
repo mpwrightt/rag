@@ -23,7 +23,20 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class RetrievalStep:
-    """Represents a single step in the retrieval process."""
+    """
+    Represents a single, atomic step within the enhanced retrieval process.
+
+    This class captures detailed information about each stage of the retrieval,
+    including its name, duration, inputs, and outputs, for full transparency.
+
+    Attributes:
+        step_name: The name of the retrieval step (e.g., 'query_understanding').
+        timestamp: The time when the step started.
+        duration_ms: The duration of the step in milliseconds.
+        input_data: A dictionary of the data that was input to the step.
+        output_data: A dictionary of the data that was produced by the step.
+        metadata: An optional dictionary for any additional metadata.
+    """
     step_name: str
     timestamp: datetime
     duration_ms: int
@@ -34,7 +47,22 @@ class RetrievalStep:
 
 @dataclass
 class RetrievalContext:
-    """Complete context for a retrieval operation."""
+    """
+    Holds the complete context and all artifacts of a single retrieval operation.
+
+    This class aggregates all the steps, intermediate results, and metadata for a
+    retrieval, providing a full picture of the process from start to finish.
+
+    Attributes:
+        session_id: The ID of the session this retrieval belongs to.
+        query: The `ProcessedQuery` object representing the user's query.
+        steps: A list of `RetrievalStep` objects detailing each stage.
+        graph_results: The results from the knowledge graph search.
+        vector_results: The results from the vector search.
+        reranked_results: The results after fusion and reranking.
+        final_results: The final, diversified list of results.
+        metadata: A dictionary for any other metadata about the retrieval.
+    """
     session_id: str
     query: ProcessedQuery
     steps: List[RetrievalStep] = field(default_factory=list)
@@ -46,9 +74,15 @@ class RetrievalContext:
 
 
 class EnhancedRetriever:
-    """Advanced retrieval system with full transparency."""
+    """
+    An advanced retrieval system that provides full transparency into its operations.
+
+    This class orchestrates a multi-stage retrieval process that includes query
+    understanding, multi-source search, result fusion, and diversification.
+    """
     
     def __init__(self):
+        """Initializes the EnhancedRetriever."""
         self.query_processor = QueryProcessor()
         self.retrieval_history = []
         
@@ -59,15 +93,17 @@ class EnhancedRetriever:
         config: Optional[Dict[str, Any]] = None
     ) -> Tuple[List[Dict], RetrievalContext]:
         """
-        Execute comprehensive retrieval with full visibility.
-        
+        Executes the full, multi-stage retrieval process.
+
         Args:
-            query: User query
-            session_id: Session ID for tracking
-            config: Optional configuration parameters
-            
+            query: The user's query string.
+            session_id: The ID of the current session, for tracking and eventing.
+            config: An optional dictionary of configuration parameters to control
+                    the retrieval process.
+
         Returns:
-            Tuple of (final results, retrieval context with all steps)
+            A tuple containing the final list of results and the `RetrievalContext`
+            with a detailed log of the entire operation.
         """
         config = config or {}
         start_time = datetime.now()
@@ -172,7 +208,20 @@ class EnhancedRetriever:
             return [], context
     
     async def _process_query(self, query: str, context: RetrievalContext) -> ProcessedQuery:
-        """Process and understand the query."""
+        """
+        Processes and understands the user's query.
+
+        This method uses the `QueryProcessor` to analyze the query's intent,
+        extract entities, and generate different versions of the query for
+        downstream tasks.
+
+        Args:
+            query: The user's query string.
+            context: The current `RetrievalContext`.
+
+        Returns:
+            A `ProcessedQuery` object with the results of the analysis.
+        """
         step_start = datetime.now()
         
         # Process query
@@ -205,7 +254,19 @@ class EnhancedRetriever:
         query: ProcessedQuery,
         context: RetrievalContext
     ) -> List[Dict]:
-        """Execute knowledge graph search."""
+        """
+        Executes a search against the knowledge graph.
+
+        This method queries the graph for both general facts and specific facts
+        related to entities found in the query.
+
+        Args:
+            query: The `ProcessedQuery` object.
+            context: The current `RetrievalContext`.
+
+        Returns:
+            A list of results from the knowledge graph.
+        """
         step_start = datetime.now()
         results = []
         
@@ -275,7 +336,20 @@ class EnhancedRetriever:
         context: RetrievalContext,
         config: Dict[str, Any]
     ) -> List[Dict]:
-        """Execute vector similarity search with enhancements."""
+        """
+        Executes a vector similarity search.
+
+        This method performs a vector search and can also use query expansion
+        to improve recall.
+
+        Args:
+            query: The `ProcessedQuery` object.
+            context: The current `RetrievalContext`.
+            config: The configuration dictionary for the retrieval.
+
+        Returns:
+            A list of results from the vector search.
+        """
         step_start = datetime.now()
         results = []
         
@@ -345,7 +419,18 @@ class EnhancedRetriever:
         return results
     
     async def _fuse_results(self, context: RetrievalContext) -> List[Dict]:
-        """Fuse and rerank results from different sources."""
+        """
+        Fuses and reranks the results from different retrieval sources.
+
+        This method combines the results from the graph and vector searches and
+        calculates a new, more holistic relevance score for each result.
+
+        Args:
+            context: The current `RetrievalContext`.
+
+        Returns:
+            A single, reranked list of results.
+        """
         step_start = datetime.now()
         
         # Combine all results
@@ -401,7 +486,19 @@ class EnhancedRetriever:
         results: List[Dict],
         context: RetrievalContext
     ) -> List[Dict]:
-        """Apply diversity to avoid redundancy (MMR-like approach)."""
+        """
+        Diversifies the result set to avoid redundancy.
+
+        This method uses a Maximal Marginal Relevance (MMR)-like approach to select
+        a set of results that is both relevant and diverse.
+
+        Args:
+            results: The list of results to diversify.
+            context: The current `RetrievalContext`.
+
+        Returns:
+            A diversified list of results.
+        """
         step_start = datetime.now()
         
         if not results:
@@ -467,7 +564,16 @@ class EnhancedRetriever:
     # Helper methods
     
     def _calculate_graph_relevance(self, result: Any, query: ProcessedQuery) -> float:
-        """Calculate relevance score for graph results."""
+        """
+        Calculates a relevance score for a result from the knowledge graph.
+
+        Args:
+            result: The graph result to score.
+            query: The `ProcessedQuery` object.
+
+        Returns:
+            A relevance score between 0.0 and 1.0.
+        """
         score = 0.5  # Base score
         
         # Check for entity matches
@@ -484,7 +590,15 @@ class EnhancedRetriever:
         return min(1.0, score)
     
     async def _search_entity_facts(self, entity_name: str) -> List[Dict]:
-        """Search for facts about a specific entity."""
+        """
+        Searches for facts related to a specific entity.
+
+        Args:
+            entity_name: The name of the entity to search for.
+
+        Returns:
+            A list of facts related to the entity.
+        """
         try:
             # Use graph search for entity
             input_data = GraphSearchInput(query=entity_name)
@@ -505,7 +619,15 @@ class EnhancedRetriever:
             return []
     
     def _expand_query(self, query: ProcessedQuery) -> List[str]:
-        """Generate query expansions for better recall."""
+        """
+        Generates expanded versions of the query to improve recall.
+
+        Args:
+            query: The `ProcessedQuery` object.
+
+        Returns:
+            A list of expanded query strings.
+        """
         expansions = []
         
         # Add entity-focused expansion
@@ -526,7 +648,16 @@ class EnhancedRetriever:
         return expansions
     
     def _get_intent_boost(self, result: Dict, intent: QueryIntent) -> float:
-        """Get relevance boost based on query intent."""
+        """
+        Calculates a relevance boost for a result based on the query's intent.
+
+        Args:
+            result: The result to be scored.
+            intent: The `QueryIntent` of the user's query.
+
+        Returns:
+            A boost factor as a float.
+        """
         content_lower = result.get("content", "").lower()
         
         if intent == QueryIntent.FACTUAL:
@@ -546,7 +677,16 @@ class EnhancedRetriever:
         return 1.0
     
     def _calculate_entity_boost(self, result: Dict, entities: List[Dict]) -> float:
-        """Calculate boost based on entity presence."""
+        """
+        Calculates a relevance boost based on the presence of entities in the result.
+
+        Args:
+            result: The result to be scored.
+            entities: A list of entities extracted from the query.
+
+        Returns:
+            A boost factor as a float.
+        """
         if not entities:
             return 1.0
         
@@ -560,7 +700,18 @@ class EnhancedRetriever:
         return min(1.5, boost)
     
     def _calculate_content_similarity(self, content1: str, content2: str) -> float:
-        """Calculate similarity between two pieces of content."""
+        """
+        Calculates the similarity between two pieces of text content.
+
+        This method uses a simple Jaccard similarity score.
+
+        Args:
+            content1: The first piece of content.
+            content2: The second piece of content.
+
+        Returns:
+            A similarity score between 0.0 and 1.0.
+        """
         # Simple Jaccard similarity for now
         words1 = set(content1.lower().split())
         words2 = set(content2.lower().split())
@@ -574,7 +725,15 @@ class EnhancedRetriever:
         return len(intersection) / len(union) if union else 0.0
     
     def _count_result_types(self, results: List[Dict]) -> Dict[str, int]:
-        """Count results by type."""
+        """
+        Counts the number of results of each type in a list of results.
+
+        Args:
+            results: A list of result dictionaries.
+
+        Returns:
+            A dictionary mapping result types to their counts.
+        """
         counts = {}
         for r in results:
             r_type = r.get("type", "unknown")
@@ -588,7 +747,18 @@ class EnhancedRetriever:
         status: str,
         data: Dict[str, Any]
     ):
-        """Emit detailed step event for frontend visibility."""
+        """
+        Emits a detailed event for a specific step in the retrieval process.
+
+        This is used for providing real-time visibility into the retrieval process
+        on the frontend.
+
+        Args:
+            session_id: The ID of the session.
+            step: The name of the step.
+            status: The status of the step (e.g., 'start', 'complete').
+            data: A dictionary of data associated with the event.
+        """
         if not session_id:
             logger.warning(f"No session_id for retrieval event: {step} {status}")
             return
@@ -605,7 +775,13 @@ class EnhancedRetriever:
         await emit_retrieval_event(session_id, event)
     
     async def _emit_retrieval_summary(self, session_id: str, context: RetrievalContext):
-        """Emit final retrieval summary."""
+        """
+        Emits a final summary of the entire retrieval operation.
+
+        Args:
+            session_id: The ID of the session.
+            context: The `RetrievalContext` containing all the retrieval data.
+        """
         summary = {
             "type": "retrieval_summary",
             "query": {

@@ -23,14 +23,21 @@ logger = logging.getLogger(__name__)
 
 
 class DatabasePool:
-    """Manages PostgreSQL connection pool."""
+    """
+    Manages the connection pool to the PostgreSQL database.
+
+    This class handles the initialization, acquisition, and closing of database
+    connections, ensuring efficient and reliable database access.
+    """
     
     def __init__(self, database_url: Optional[str] = None):
         """
-        Initialize database pool.
-        
+        Initializes the DatabasePool.
+
         Args:
-            database_url: PostgreSQL connection URL
+            database_url: The connection URL for the PostgreSQL database. If not
+                          provided, it will be read from the DATABASE_URL
+                          environment variable.
         """
         self.database_url = database_url or os.getenv("DATABASE_URL")
         if not self.database_url:
@@ -42,7 +49,12 @@ class DatabasePool:
         self.pool: Optional[Pool] = None
     
     async def initialize(self):
-        """Create connection pool."""
+        """
+        Creates and initializes the database connection pool.
+
+        This method should be called at application startup to establish the
+        database connections.
+        """
         if not self.pool:
             # Ensure we don't hang indefinitely on unreachable DBs
             # Configure via POSTGRES_CONNECT_TIMEOUT (seconds), default 10s
@@ -74,7 +86,12 @@ class DatabasePool:
                 raise
     
     async def close(self):
-        """Close connection pool."""
+        """
+        Closes the database connection pool.
+
+        This method should be called at application shutdown to gracefully
+        terminate all database connections.
+        """
         if self.pool:
             await self.pool.close()
             self.pool = None
@@ -82,7 +99,12 @@ class DatabasePool:
     
     @asynccontextmanager
     async def acquire(self):
-        """Acquire a connection from the pool."""
+        """
+        An asynchronous context manager to acquire a database connection from the pool.
+
+        Yields:
+            An `asyncpg.Connection` object.
+        """
         if not self.pool:
             await self.initialize()
         
@@ -111,7 +133,15 @@ class DatabasePool:
 _db_pool_instance: Optional[DatabasePool] = None
 
 def get_db_pool() -> DatabasePool:
-    """Get the global database pool instance (lazy initialization)."""
+    """
+    Gets the global instance of the DatabasePool, initializing it if necessary.
+
+    This function implements a singleton pattern for the database pool to ensure
+    that only one pool is created per application instance.
+
+    Returns:
+        The singleton `DatabasePool` instance.
+    """
     global _db_pool_instance
     if _db_pool_instance is None:
         _db_pool_instance = DatabasePool()
@@ -132,12 +162,20 @@ db_pool = _DBPoolProxy()
 
 
 async def initialize_database():
-    """Initialize database connection pool."""
+    """
+    Initializes the global database connection pool.
+
+    This is a convenience function to be called at application startup.
+    """
     await db_pool.initialize()
 
 
 async def close_database():
-    """Close database connection pool."""
+    """
+    Closes the global database connection pool.
+
+    This is a convenience function to be called at application shutdown.
+    """
     await db_pool.close()
 
 
@@ -148,15 +186,15 @@ async def create_session(
     timeout_minutes: int = 60
 ) -> str:
     """
-    Create a new session.
-    
+    Creates a new session in the database.
+
     Args:
-        user_id: Optional user identifier
-        metadata: Optional session metadata
-        timeout_minutes: Session timeout in minutes
-    
+        user_id: An optional identifier for the user creating the session.
+        metadata: An optional dictionary of metadata to associate with the session.
+        timeout_minutes: The duration in minutes before the session expires.
+
     Returns:
-        Session ID
+        The UUID of the newly created session as a string.
     """
     async with db_pool.acquire() as conn:
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=timeout_minutes)
@@ -177,13 +215,14 @@ async def create_session(
 
 async def get_session(session_id: str) -> Optional[Dict[str, Any]]:
     """
-    Get session by ID.
-    
+    Retrieves a session from the database by its ID.
+
     Args:
-        session_id: Session UUID
-    
+        session_id: The UUID of the session to retrieve.
+
     Returns:
-        Session data or None if not found/expired
+        A dictionary containing the session data if found and not expired,
+        otherwise None.
     """
     async with db_pool.acquire() as conn:
         result = await conn.fetchrow(
@@ -217,14 +256,16 @@ async def get_session(session_id: str) -> Optional[Dict[str, Any]]:
 
 async def update_session(session_id: str, metadata: Dict[str, Any]) -> bool:
     """
-    Update session metadata.
-    
+    Updates the metadata of an existing session.
+
+    The new metadata is merged with the existing metadata.
+
     Args:
-        session_id: Session UUID
-        metadata: New metadata to merge
-    
+        session_id: The UUID of the session to update.
+        metadata: A dictionary of metadata to merge into the session's metadata.
+
     Returns:
-        True if updated, False if not found
+        True if the session was updated successfully, False otherwise.
     """
     async with db_pool.acquire() as conn:
         result = await conn.execute(
@@ -249,16 +290,16 @@ async def add_message(
     metadata: Optional[Dict[str, Any]] = None
 ) -> str:
     """
-    Add a message to a session.
-    
+    Adds a new message to a session's conversation history.
+
     Args:
-        session_id: Session UUID
-        role: Message role (user/assistant/system)
-        content: Message content
-        metadata: Optional message metadata
-    
+        session_id: The UUID of the session to add the message to.
+        role: The role of the message sender (e.g., 'user', 'assistant').
+        content: The text content of the message.
+        metadata: An optional dictionary of metadata for the message.
+
     Returns:
-        Message ID
+        The UUID of the newly created message as a string.
     """
     async with db_pool.acquire() as conn:
         result = await conn.fetchrow(
@@ -281,14 +322,14 @@ async def get_session_messages(
     limit: Optional[int] = None
 ) -> List[Dict[str, Any]]:
     """
-    Get messages for a session.
-    
+    Retrieves the messages from a specific session.
+
     Args:
-        session_id: Session UUID
-        limit: Maximum number of messages to return
-    
+        session_id: The UUID of the session to get messages from.
+        limit: An optional maximum number of messages to return.
+
     Returns:
-        List of messages ordered by creation time
+        A list of messages, ordered by their creation time.
     """
     async with db_pool.acquire() as conn:
         query = """
@@ -323,13 +364,13 @@ async def get_session_messages(
 # Document Management Functions
 async def get_document(document_id: str) -> Optional[Dict[str, Any]]:
     """
-    Get document by ID.
-    
+    Retrieves a document from the database by its ID.
+
     Args:
-        document_id: Document UUID
-    
+        document_id: The UUID of the document to retrieve.
+
     Returns:
-        Document data or None if not found
+        A dictionary containing the document's data, or None if not found.
     """
     async with db_pool.acquire() as conn:
         result = await conn.fetchrow(
@@ -368,15 +409,15 @@ async def list_documents(
     metadata_filter: Optional[Dict[str, Any]] = None
 ) -> List[Dict[str, Any]]:
     """
-    List documents with optional filtering.
-    
+    Lists documents from the database with optional filtering and pagination.
+
     Args:
-        limit: Maximum number of documents to return
-        offset: Number of documents to skip
-        metadata_filter: Optional metadata filter
-    
+        limit: The maximum number of documents to return.
+        offset: The number of documents to skip for pagination.
+        metadata_filter: An optional dictionary to filter documents by their metadata.
+
     Returns:
-        List of documents
+        A list of documents, each as a dictionary.
     """
     async with db_pool.acquire() as conn:
         query = """
@@ -431,18 +472,19 @@ async def list_collections_db(
     is_shared: Optional[bool] = None
 ) -> Tuple[List[Dict[str, Any]], int]:
     """
-    List collections with optional filtering and pagination.
+    Lists collections from the database with filtering and pagination.
 
     Args:
-        limit: Max number of collections to return
-        offset: Number of collections to skip
-        search: Optional ILIKE search over name/description
-        created_by: Filter by creator
-        workspace_id: Filter by workspace UUID
-        is_shared: Filter by shared status
+        limit: The maximum number of collections to return.
+        offset: The number of collections to skip for pagination.
+        search: An optional search term to filter collections by name or description.
+        created_by: An optional user ID to filter collections by their creator.
+        workspace_id: An optional workspace ID to filter collections.
+        is_shared: An optional boolean to filter for shared collections.
 
     Returns:
-        (collections, total_count)
+        A tuple containing a list of collections and the total count of collections
+        that match the filter criteria.
     """
     async with db_pool.acquire() as conn:
         base_where = []
@@ -550,13 +592,13 @@ async def list_collections_db(
 
 async def delete_document(document_id: str) -> bool:
     """
-    Delete document by ID. This will cascade delete all associated chunks.
-    
+    Deletes a document and its associated chunks from the database.
+
     Args:
-        document_id: Document UUID
-        
+        document_id: The UUID of the document to delete.
+
     Returns:
-        True if document was deleted, False if not found
+        True if the document was deleted successfully, False otherwise.
     """
     async with db_pool.acquire() as conn:
         result = await conn.execute(
@@ -584,20 +626,20 @@ async def create_collection_db(
     metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
-    Create a new collection.
+    Creates a new collection in the database.
 
     Args:
-        name: Collection name
-        description: Optional description
-        color: Hex color string
-        icon: Icon name
-        is_shared: Whether the collection is shared
-        created_by: Creator identifier (email/user id)
-        workspace_id: Workspace UUID as string
-        metadata: Optional metadata dict
+        name: The name of the collection.
+        description: An optional description for the collection.
+        color: A hex color string for the collection's icon.
+        icon: The name of the icon for the collection.
+        is_shared: A boolean indicating if the collection is shared.
+        created_by: An optional identifier for the user who created the collection.
+        workspace_id: An optional UUID for the workspace the collection belongs to.
+        metadata: An optional dictionary of metadata for the collection.
 
     Returns:
-        Created collection as a dict with fields matching list_collections_db
+        A dictionary representing the newly created collection.
     """
     async with db_pool.acquire() as conn:
         # Validate workspace_id format early if provided
@@ -674,14 +716,14 @@ async def vector_search(
     limit: int = 10
 ) -> List[Dict[str, Any]]:
     """
-    Perform vector similarity search.
-    
+    Performs a vector similarity search in the database.
+
     Args:
-        embedding: Query embedding vector
-        limit: Maximum number of results
-    
+        embedding: The query vector to search for.
+        limit: The maximum number of results to return.
+
     Returns:
-        List of matching chunks ordered by similarity (best first)
+        A list of matching chunks, ordered by similarity.
     """
     async with db_pool.acquire() as conn:
         # Convert embedding to PostgreSQL vector string format
@@ -715,16 +757,17 @@ async def hybrid_search(
     text_weight: float = 0.3
 ) -> List[Dict[str, Any]]:
     """
-    Perform hybrid search (vector + keyword).
-    
+    Performs a hybrid search, combining vector and full-text search.
+
     Args:
-        embedding: Query embedding vector
-        query_text: Query text for keyword search
-        limit: Maximum number of results
-        text_weight: Weight for text similarity (0-1)
-    
+        embedding: The query vector for the similarity search.
+        query_text: The text query for the full-text search.
+        limit: The maximum number of results to return.
+        text_weight: The weight to give to the text search score in the
+                     final ranking, between 0.0 and 1.0.
+
     Returns:
-        List of matching chunks ordered by combined score (best first)
+        A list of matching chunks, ordered by a combined score.
     """
     async with db_pool.acquire() as conn:
         # Convert embedding to PostgreSQL vector string format
@@ -758,13 +801,13 @@ async def hybrid_search(
 # Chunk Management Functions
 async def get_document_chunks(document_id: str) -> List[Dict[str, Any]]:
     """
-    Get all chunks for a document.
-    
+    Retrieves all chunks associated with a specific document.
+
     Args:
-        document_id: Document UUID
-    
+        document_id: The UUID of the document to retrieve chunks for.
+
     Returns:
-        List of chunks ordered by chunk index
+        A list of chunks, ordered by their index within the document.
     """
     async with db_pool.acquire() as conn:
         results = await conn.fetch(
@@ -786,14 +829,17 @@ async def get_document_chunks(document_id: str) -> List[Dict[str, Any]]:
 # Utility Functions
 async def execute_query(query: str, *params) -> List[Dict[str, Any]]:
     """
-    Execute a custom query.
-    
+    Executes a custom SQL query against the database.
+
+    This function provides a way to run arbitrary SQL queries, but should be used
+    with caution to avoid SQL injection vulnerabilities.
+
     Args:
-        query: SQL query
-        *params: Query parameters
-    
+        query: The SQL query string to execute.
+        *params: A variable number of parameters to be used in the query.
+
     Returns:
-        Query results
+        A list of dictionaries representing the query results.
     """
     async with db_pool.acquire() as conn:
         results = await conn.fetch(query, *params)
@@ -802,10 +848,10 @@ async def execute_query(query: str, *params) -> List[Dict[str, Any]]:
 
 async def test_connection() -> bool:
     """
-    Test database connection.
+    Tests the connection to the database.
 
     Returns:
-        True if connection successful
+        True if the connection is successful, False otherwise.
     """
     try:
         async with db_pool.acquire() as conn:
@@ -825,16 +871,16 @@ async def upsert_node(
     metadata: Optional[Dict[str, Any]] = None
 ) -> str:
     """
-    Insert or update a knowledge graph node.
+    Inserts a new node into the knowledge graph, or updates it if it already exists.
 
     Args:
-        name: Node name
-        node_type: Node type (person, company, technology, event, location, other)
-        description: Optional node description
-        metadata: Optional metadata
+        name: The name of the node.
+        node_type: The type of the node (e.g., 'person', 'company').
+        description: An optional description for the node.
+        metadata: An optional dictionary of metadata for the node.
 
     Returns:
-        Node ID
+        The UUID of the upserted node as a string.
     """
     async with db_pool.acquire() as conn:
         # Server-side timeouts
@@ -887,17 +933,17 @@ async def create_relationship(
     metadata: Optional[Dict[str, Any]] = None
 ) -> str:
     """
-    Create a relationship between two nodes.
+    Creates a new relationship (an edge) between two nodes in the knowledge graph.
 
     Args:
-        source_node_id: Source node UUID
-        target_node_id: Target node UUID
-        relationship_type: Type of relationship
-        description: Optional relationship description
-        metadata: Optional metadata
+        source_node_id: The UUID of the source node.
+        target_node_id: The UUID of the target node.
+        relationship_type: The type of the relationship.
+        description: An optional description for the relationship.
+        metadata: An optional dictionary of metadata for the relationship.
 
     Returns:
-        Relationship ID
+        The UUID of the newly created relationship as a string.
     """
     async with db_pool.acquire() as conn:
         # Server-side timeouts
@@ -952,19 +998,19 @@ async def add_fact(
     metadata: Optional[Dict[str, Any]] = None
 ) -> str:
     """
-    Add a fact to a node.
+    Adds a new fact to a node in the knowledge graph.
 
     Args:
-        node_id: Node UUID
-        content: Fact content
-        source: Source of the fact
-        valid_at: When the fact became valid
-        invalid_at: When the fact became invalid
-        confidence: Confidence score (0-1)
-        metadata: Optional metadata
+        node_id: The UUID of the node to which the fact belongs.
+        content: The textual content of the fact.
+        source: The source from which the fact was derived.
+        valid_at: An optional timestamp for when the fact became valid.
+        invalid_at: An optional timestamp for when the fact became invalid.
+        confidence: A confidence score for the fact, between 0.0 and 1.0.
+        metadata: An optional dictionary of metadata for the fact.
 
     Returns:
-        Fact ID
+        The UUID of the newly created fact as a string.
     """
     async with db_pool.acquire() as conn:
         # Server-side timeouts
@@ -1012,14 +1058,14 @@ async def search_facts(
     limit: int = 20
 ) -> List[Dict[str, Any]]:
     """
-    Search facts using full-text search.
+    Searches for facts using full-text search.
 
     Args:
-        query: Search query
-        limit: Maximum number of results
+        query: The search query string.
+        limit: The maximum number of results to return.
 
     Returns:
-        List of matching facts with node information
+        A list of matching facts, including information about their associated nodes.
     """
     async with db_pool.acquire() as conn:
         results = await conn.fetch(
@@ -1050,14 +1096,14 @@ async def get_entity_relationships(
     depth: int = 2
 ) -> Dict[str, Any]:
     """
-    Get relationships for an entity.
+    Retrieves the relationships of a specific entity from the knowledge graph.
 
     Args:
-        entity_name: Name of the entity
-        depth: Maximum traversal depth
+        entity_name: The name of the entity to get relationships for.
+        depth: The maximum depth to traverse for relationships.
 
     Returns:
-        Entity relationships
+        A dictionary containing the entity's relationships.
     """
     async with db_pool.acquire() as conn:
         results = await conn.fetch(
@@ -1092,15 +1138,15 @@ async def get_entity_timeline(
     end_date: Optional[datetime] = None
 ) -> List[Dict[str, Any]]:
     """
-    Get timeline of facts for an entity.
+    Retrieves a chronological timeline of facts for a specific entity.
 
     Args:
-        entity_name: Name of the entity
-        start_date: Start of time range
-        end_date: End of time range
+        entity_name: The name of the entity to get the timeline for.
+        start_date: An optional start date for the timeline.
+        end_date: An optional end date for the timeline.
 
     Returns:
-        Timeline of facts
+        A list of facts, ordered chronologically.
     """
     async with db_pool.acquire() as conn:
         results = await conn.fetch(
@@ -1125,10 +1171,12 @@ async def get_entity_timeline(
 
 async def get_graph_statistics() -> Dict[str, Any]:
     """
-    Get basic statistics about the knowledge graph.
+    Retrieves basic statistics about the knowledge graph.
+
+    This function provides a high-level overview of the graph's size and composition.
 
     Returns:
-        Graph statistics
+        A dictionary containing graph statistics, such as the number of nodes and edges.
     """
     async with db_pool.acquire() as conn:
         # Server-side timeouts
@@ -1187,14 +1235,14 @@ async def get_graph_statistics() -> Dict[str, Any]:
 
 async def get_node_by_name(name: str, node_type: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
-    Get a node by name and optionally type.
+    Retrieves a node from the knowledge graph by its name.
 
     Args:
-        name: Node name
-        node_type: Optional node type filter
+        name: The name of the node to retrieve.
+        node_type: An optional type to filter the node by.
 
     Returns:
-        Node data or None if not found
+        A dictionary containing the node's data, or None if not found.
     """
     async with db_pool.acquire() as conn:
         # Server-side timeouts
@@ -1262,17 +1310,19 @@ async def add_episode_to_graph(
     metadata: Optional[Dict[str, Any]] = None
 ) -> str:
     """
-    Add content as an episode to the knowledge graph.
-    This will extract entities and create relationships.
+    Adds content as an 'episode' to the knowledge graph.
+
+    In a more advanced implementation, this function would also extract entities
+    and relationships from the content.
 
     Args:
-        episode_id: Unique episode identifier
-        content: Episode content
-        source: Source of the content
-        metadata: Optional metadata
+        episode_id: A unique identifier for the episode.
+        content: The content of the episode.
+        source: The source of the episode's content.
+        metadata: An optional dictionary of metadata for the episode.
 
     Returns:
-        Episode ID
+        The ID of the episode that was added.
     """
     # For now, we'll create a simple episode node
     # In a more advanced implementation, you'd use LLM to extract entities
@@ -1297,10 +1347,12 @@ async def add_episode_to_graph(
 
 async def clear_graph() -> bool:
     """
-    Clear all data from the knowledge graph (USE WITH CAUTION).
+    Clears all data from the knowledge graph.
+
+    This is a destructive operation and should be used with caution.
 
     Returns:
-        True if successful
+        True if the graph was cleared successfully, False otherwise.
     """
     try:
         async with db_pool.acquire() as conn:
