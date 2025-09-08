@@ -11,19 +11,40 @@ _current_search_results: List[ChunkResult] = []
 
 
 def capture_search_results(results: List[ChunkResult]) -> List[ChunkResult]:
-    """Capture search results for later use in creating sources."""
+    """
+    Captures and stores search results in a global context.
+
+    This function allows different parts of the agent to access the results of
+    search operations performed during a conversation turn.
+
+    Args:
+        results: A list of `ChunkResult` objects from a search operation.
+
+    Returns:
+        The same list of results that was passed in.
+    """
     global _current_search_results
     _current_search_results.extend(results)
     return results
 
 
 def get_current_search_results() -> List[ChunkResult]:
-    """Get the current search results."""
+    """
+    Retrieves the search results that have been captured in the current context.
+
+    Returns:
+        A copy of the list of `ChunkResult` objects.
+    """
     return _current_search_results.copy()
 
 
 def clear_search_results():
-    """Clear the current search results."""
+    """
+    Clears the globally stored search results.
+
+    This should be called at the beginning of each new agent execution to ensure
+    that results from previous turns do not leak into the current one.
+    """
     global _current_search_results
     _current_search_results = []
 
@@ -34,9 +55,14 @@ _retrieval_listeners: Dict[str, List[asyncio.Queue]] = {}
 
 
 def register_retrieval_listener(session_id: str) -> asyncio.Queue:
-    """Register a listener queue for retrieval events for a session.
+    """
+    Registers a listener queue for real-time retrieval events for a specific session.
 
-    Returns an asyncio.Queue that will receive event dicts.
+    Args:
+        session_id: The ID of the session to listen to.
+
+    Returns:
+        An `asyncio.Queue` that will receive retrieval event dictionaries.
     """
     q: asyncio.Queue = asyncio.Queue()
     listeners = _retrieval_listeners.setdefault(session_id, [])
@@ -45,7 +71,13 @@ def register_retrieval_listener(session_id: str) -> asyncio.Queue:
 
 
 def unregister_retrieval_listener(session_id: str, q: asyncio.Queue) -> None:
-    """Unregister a previously registered retrieval listener queue."""
+    """
+    Unregisters a previously registered retrieval listener queue.
+
+    Args:
+        session_id: The ID of the session from which to unregister.
+        q: The `asyncio.Queue` object to be removed.
+    """
     listeners = _retrieval_listeners.get(session_id)
     if not listeners:
         return
@@ -58,9 +90,15 @@ def unregister_retrieval_listener(session_id: str, q: asyncio.Queue) -> None:
 
 
 async def emit_retrieval_event(session_id: str, event: Dict[str, Any]) -> None:
-    """Emit a retrieval event to all listeners for the given session.
+    """
+    Emits a retrieval event to all registered listeners for a given session.
 
-    Event should be a JSON-serializable dict. This function never raises.
+    This function is designed to be non-blocking and to fail silently to avoid
+    disrupting the main agent flow.
+
+    Args:
+        session_id: The ID of the session to which the event belongs.
+        event: A JSON-serializable dictionary representing the event.
     """
     import logging
     logger = logging.getLogger(__name__)
