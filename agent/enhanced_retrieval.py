@@ -104,7 +104,7 @@ class EnhancedRetriever:
                     session_id,
                     "graph_search",
                     "start",
-                    {"query": processed_query.graph_query}
+                    {"query": processed_query.graph_query or processed_query.original}
                 )
                 graph_results = await self._execute_graph_search(processed_query, context)
                 context.graph_results = graph_results
@@ -211,8 +211,9 @@ class EnhancedRetriever:
         
         try:
             # Search for facts using the optimized graph query
-            logger.info(f"Executing graph search with query: {query.graph_query}")
-            graph_input = GraphSearchInput(query=query.graph_query)
+            effective_graph_query = query.graph_query or query.original
+            logger.info(f"Executing graph search with query: {effective_graph_query}")
+            graph_input = GraphSearchInput(query=effective_graph_query)
             raw_results = await graph_search_tool(graph_input)
             logger.info(f"Graph search returned {len(raw_results)} results")
             
@@ -257,7 +258,7 @@ class EnhancedRetriever:
             timestamp=step_start,
             duration_ms=int((datetime.now() - step_start).total_seconds() * 1000),
             input_data={
-                "graph_query": query.graph_query,
+                "graph_query": query.graph_query or query.original,
                 "entities": query.entities
             },
             output_data={

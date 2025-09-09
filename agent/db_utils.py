@@ -15,6 +15,7 @@ import asyncpg
 from asyncpg.pool import Pool
 from dotenv import load_dotenv
 import time
+import ssl
 
 # Load environment variables
 load_dotenv()
@@ -38,6 +39,11 @@ class DatabasePool:
         # Whether to require SSL when connecting (for providers like Neon/Supabase)
         # Accepts: 1/true/yes/on/require (case-insensitive)
         self.ssl_required = os.getenv("POSTGRES_SSL", "").lower() in ("1", "true", "yes", "on", "require")
+        # SSL behavior: disable | require (encrypt without verify) | verify-full (default)
+        # In some hosts (e.g., minimal containers), root CAs may be missing which can cause
+        # CERTIFICATE_VERIFY_FAILED. Use POSTGRES_SSL_MODE=require to skip verification but keep TLS.
+        self.ssl_mode = os.getenv("POSTGRES_SSL_MODE", "verify-full").lower() if self.ssl_required else os.getenv("POSTGRES_SSL_MODE", "disable").lower()
+        self.ssl_root_cert = os.getenv("POSTGRES_SSL_ROOT_CERT")  # Optional path to CA bundle
 
         self.pool: Optional[Pool] = None
     
@@ -52,6 +58,31 @@ class DatabasePool:
                 connect_timeout = 10.0
             start = time.perf_counter()
             try:
+                # Build SSL parameter for asyncpg
+                ssl_param: Optional[ssl.SSLContext | bool] = False
+                if self.ssl_mode != "disable":
+                    if self.ssl_mode in ("require", "allow", "prefer"):
+                        # Encrypt traffic but skip certificate verification (similar to libpq sslmode=require)
+                        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                        ctx.check_hostname = False
+                        ctx.verify_mode = ssl.CERT_NONE
+                        ssl_param = ctx
+                    elif self.ssl_mode in ("verify-full", "verify_ca"):
+                        if self.ssl_root_cert:
+                            ctx = ssl.create_default_context(cafile=self.ssl_root_cert)
+                        else:
+                            ctx = ssl.create_default_context()
+                        # Default context verifies hostname and certificate
+                        ssl_param = ctx
+                    else:
+                        # Backwards-compat: if unknown mode but ssl_required flag set, use default verification
+                        if self.ssl_required:
+                            ssl_param = True
+                        else:
+                            ssl_param = False
+                else:
+                    ssl_param = False
+
                 self.pool = await asyncpg.create_pool(
                     self.database_url,
                     min_size=5,
@@ -59,17 +90,17 @@ class DatabasePool:
                     max_inactive_connection_lifetime=300,
                     command_timeout=60,
                     statement_cache_size=0,
-                    ssl=self.ssl_required,
+                    ssl=ssl_param,
                     timeout=connect_timeout
                 )
                 elapsed = time.perf_counter() - start
                 logger.info(
-                    f"Database connection pool initialized (ssl={self.ssl_required}) in {elapsed:.3f}s"
+                    f"Database connection pool initialized (ssl_mode={self.ssl_mode}) in {elapsed:.3f}s"
                 )
             except Exception as e:
                 elapsed = time.perf_counter() - start
                 logger.error(
-                    f"Failed to initialize DB connection pool after {elapsed:.3f}s (timeout={connect_timeout}s): {e}"
+                    f"Failed to initialize DB connection pool after {elapsed:.3f}s (timeout={connect_timeout}s, ssl_mode={self.ssl_mode}): {e}"
                 )
                 raise
     
@@ -1040,6 +1071,63 @@ async def search_facts(
                 "invalid_at": row["invalid_at"].isoformat() if row["invalid_at"] else None,
                 "confidence": row["confidence"],
                 "rank": row["rank"]
+            }
+            for row in results
+        ]
+
+
+async def search_facts_websearch(
+    query: str,
+    limit: int = 20
+) -> List[Dict[str, Any]]:
+    """
+    Broader full-text search using websearch_to_tsquery which supports user-like queries (OR/phrases).
+
+    Args:
+        query: Search query
+        limit: Maximum number of results
+
+    Returns:
+        List of matching facts with node information
+    """
+    async with db_pool.acquire() as conn:
+        results = await conn.fetch(
+            """
+            SELECT
+                f.id AS fact_id,
+                f.node_id,
+                n.name AS node_name,
+                n.type AS node_type,
+                f.content,
+                f.source,
+                f.valid_at,
+                f.invalid_at,
+                f.confidence,
+                ts_rank_cd(to_tsvector('english', f.content), websearch_to_tsquery('english', $1))::double precision AS rank
+            FROM facts f
+            JOIN nodes n ON f.node_id = n.id
+            WHERE
+                to_tsvector('english', f.content) @@ websearch_to_tsquery('english', $1)
+                AND (f.invalid_at IS NULL OR f.invalid_at > CURRENT_TIMESTAMP)
+            ORDER BY rank DESC
+            LIMIT $2
+            """,
+            query,
+            limit,
+        )
+
+        return [
+            {
+                "fact_id": row["fact_id"],
+                "node_id": row["node_id"],
+                "node_name": row["node_name"],
+                "node_type": row["node_type"],
+                "content": row["content"],
+                "source": row["source"],
+                "valid_at": row["valid_at"].isoformat() if row["valid_at"] else None,
+                "invalid_at": row["invalid_at"].isoformat() if row["invalid_at"] else None,
+                "confidence": row["confidence"],
+                "rank": row["rank"],
             }
             for row in results
         ]

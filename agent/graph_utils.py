@@ -14,6 +14,7 @@ import time
 from dotenv import load_dotenv
 from .db_utils import (
     search_facts,
+    search_facts_websearch,
     get_entity_relationships as db_get_entity_relationships,
     get_entity_timeline as db_get_entity_timeline,
     get_graph_statistics,
@@ -151,6 +152,10 @@ class KnowledgeGraphClient:
         try:
             start = time.perf_counter()
             results = await asyncio.wait_for(search_facts(query, limit=20), timeout=query_timeout)
+            # Fallback to websearch_to_tsquery for broader recall if strict search returns nothing
+            if not results:
+                logger.info("KG strict search returned 0; falling back to websearch_to_tsquery")
+                results = await asyncio.wait_for(search_facts_websearch(query, limit=20), timeout=query_timeout)
 
             # Convert to Graphiti-compatible format for backward compatibility
             return [
