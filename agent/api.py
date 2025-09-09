@@ -1605,7 +1605,7 @@ async def upload_document(file: UploadFile = File(...)):
     
     try:
         # Validate file type
-        allowed_extensions = {'.txt', '.md', '.pdf', '.doc', '.docx', '.xls', '.xlsx'}
+        allowed_extensions = {'.txt', '.md', '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.csv', '.tsv'}
         file_extension = os.path.splitext(file.filename)[1].lower() if file.filename else ''
         
         if file_extension not in allowed_extensions:
@@ -1739,7 +1739,7 @@ async def convert_only(file: UploadFile = File(...)):
 
     try:
         # Validate extension (same as /upload)
-        allowed_extensions = {'.txt', '.md', '.pdf', '.doc', '.docx', '.xls', '.xlsx'}
+        allowed_extensions = {'.txt', '.md', '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.csv', '.tsv'}
         ext = os.path.splitext(file.filename)[1].lower()
         if ext not in allowed_extensions:
             raise HTTPException(status_code=400, detail=f"Unsupported extension {ext}")

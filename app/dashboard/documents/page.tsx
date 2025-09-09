@@ -518,7 +518,8 @@ function DocumentCard({
   onToggleStar, 
   onPreview,
   isSelected,
-  onToggleSelect 
+  onToggleSelect,
+  onMoveToCollection,
 }: {
   document: Document
   onEdit: (id: string) => void
@@ -527,6 +528,7 @@ function DocumentCard({
   onPreview: (id: string) => void
   isSelected: boolean
   onToggleSelect: (id: string) => void
+  onMoveToCollection: (id: string) => void
 }) {
   const IconComponent = FILE_TYPE_ICONS[document.type] || File
   const colorClasses = FILE_TYPE_COLORS[document.type] || 'text-gray-600 bg-gray-100'
@@ -652,6 +654,7 @@ function DocumentCard({
                   variant="ghost"
                   size="sm"
                   className="w-full justify-start"
+                  onClick={() => onMoveToCollection(document.id)}
                 >
                   <Move className="w-4 h-4 mr-2" />
                   Move to Collection
@@ -852,6 +855,59 @@ export default function DocumentsPage() {
   const [currentPage, setCurrentPage] = useState<number>(1)
   const [totalCount, setTotalCount] = useState<number | null>(null)
   const [isPageLoading, setIsPageLoading] = useState(false)
+  // Move to collection state
+  const [moveDialogOpen, setMoveDialogOpen] = useState(false)
+  const [movingDocId, setMovingDocId] = useState<string | null>(null)
+  const [targetCollectionId, setTargetCollectionId] = useState<string | null>(null)
+  const [collections, setCollections] = useState<{ id: string; name: string }[]>([])
+  
+  // Lazily load collections for move dialog
+  const ensureCollectionsLoaded = async () => {
+    if (collections.length > 0) return
+    try {
+      const res = await fetch(`${API_BASE}/collections`, {
+        headers: { 'bypass-tunnel-reminder': 'true' }
+      })
+      if (res.ok) {
+        const data = await res.json()
+        const cols = (data.collections || []).map((c: any) => ({ id: c.id, name: c.name }))
+        setCollections(cols)
+      }
+    } catch (e) {
+      console.error('Failed to load collections', e)
+    }
+  }
+
+  const handleOpenMoveDialog = async (docId: string) => {
+    setMovingDocId(docId)
+    setTargetCollectionId(null)
+    await ensureCollectionsLoaded()
+    setMoveDialogOpen(true)
+  }
+
+  const handleConfirmMove = async () => {
+    if (!movingDocId || !targetCollectionId) return
+    try {
+      const res = await fetch(`${API_BASE}/collections/${encodeURIComponent(targetCollectionId)}/documents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'bypass-tunnel-reminder': 'true' },
+        body: JSON.stringify({ document_ids: [movingDocId] })
+      })
+      if (!res.ok) {
+        const txt = await res.text()
+        throw new Error(`Move failed: ${res.status} ${txt}`)
+      }
+      // Update UI state: attach collection to document
+      const colName = collections.find(c => c.id === targetCollectionId)?.name
+      setDocuments(prev => prev.map(d => d.id === movingDocId ? { ...d, collection_id: targetCollectionId, collection_name: colName } as any : d))
+      setMoveDialogOpen(false)
+      setMovingDocId(null)
+      setTargetCollectionId(null)
+    } catch (e) {
+      console.error(e)
+      alert('Failed to move document to collection. Please try again.')
+    }
+  }
   
   // Pagination helpers
   const totalPages = useMemo(() => {
@@ -1646,6 +1702,7 @@ export default function DocumentsPage() {
                 onPreview={handlePreview}
                 isSelected={selectedDocuments.includes(document.id)}
                 onToggleSelect={handleToggleSelect}
+                onMoveToCollection={handleOpenMoveDialog}
               />
             ))}
           </div>
@@ -2319,6 +2376,43 @@ export default function DocumentsPage() {
               </div>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Move to Collection Dialog */}
+      <Dialog open={moveDialogOpen} onOpenChange={setMoveDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Move className="w-5 h-5" />
+              Move to Collection
+            </DialogTitle>
+            <DialogDescription>
+              Select a collection to move this document into.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <Label>Select Collection</Label>
+            <Select value={targetCollectionId || ''} onValueChange={(val) => setTargetCollectionId(val)}>
+              <SelectTrigger>
+                <SelectValue placeholder="Choose a collection" />
+              </SelectTrigger>
+              <SelectContent>
+                {collections.length === 0 && (
+                  <SelectItem value="" disabled>No collections available</SelectItem>
+                )}
+                {collections.map(col => (
+                  <SelectItem key={col.id} value={col.id}>{col.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => setMoveDialogOpen(false)}>Cancel</Button>
+            <Button onClick={handleConfirmMove} disabled={!targetCollectionId}>Confirm Move</Button>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

@@ -169,8 +169,29 @@ def convert_to_markdown(file_path: str) -> Tuple[str, Dict[str, Any]]:
                     md_parts.append(df.to_markdown(index=False))
                 return "".join(md_parts), meta
             except Exception as e:
-                logger.warning("Excel conversion failed: %s", e)
-                return _read_text(str(p)), {**meta, "warning": "excel to md failed"}
+                logger.warning("Excel conversion via pandas failed: %s", e)
+                # Fallback: openpyxl direct parsing (no pandas)
+                try:
+                    from openpyxl import load_workbook
+                    wb = load_workbook(filename=str(p), data_only=True)
+                    md_parts = []
+                    for ws in wb.worksheets:
+                        md_parts.append(f"\n\n## {ws.title}\n\n")
+                        # Collect rows
+                        rows = []
+                        for row in ws.iter_rows(values_only=True):
+                            rows.append(["" if v is None else str(v) for v in row])
+                        if rows:
+                            # Build simple Markdown table
+                            headers = rows[0]
+                            md_parts.append("| " + " | ".join(headers) + " |\n")
+                            md_parts.append("|" + "|".join([" --- "] * len(headers)) + "|\n")
+                            for r in rows[1:]:
+                                md_parts.append("| " + " | ".join(r) + " |\n")
+                    return "".join(md_parts), {**meta, "note": "excel parsed via openpyxl fallback"}
+                except Exception as e2:
+                    logger.warning("Excel conversion via openpyxl failed: %s", e2)
+                    return _read_text(str(p)), {**meta, "warning": "excel to md failed"}
 
         # Images and others: best-effort (no OCR by default)
         if ext in {"png", "jpg", "jpeg", "gif", "webp", "svg"}:
