@@ -295,6 +295,18 @@ async def handle_websocket_chat(websocket: WebSocket, client_id: str, data: dict
         if selected_documents:
             search_preferences['document_ids'] = selected_documents
             
+        # Load previous conversation history for context
+        from .db_utils import get_session_messages, add_message
+        previous_messages = await get_session_messages(session_id, limit=20)  # Last 20 messages
+        
+        # Save user message to database
+        await add_message(
+            session_id=session_id,
+            role="user", 
+            content=message,
+            metadata=metadata
+        )
+            
         deps = AgentDependencies(
             session_id=session_id,
             search_preferences=search_preferences if search_preferences else None
@@ -309,7 +321,18 @@ async def handle_websocket_chat(websocket: WebSocket, client_id: str, data: dict
         response_text = ""
         tools_used = []
         
-        async for chunk in rag_agent.run_stream(message, deps=deps):
+        # Build conversation context with previous messages
+        conversation_context = ""
+        if previous_messages:
+            for msg in previous_messages[-10:]:  # Last 10 messages for context
+                role = msg['role']
+                content = msg['content'][:500]  # Truncate long messages
+                conversation_context += f"\n{role.upper()}: {content}"
+            conversation_context += f"\nUSER: {message}"
+        else:
+            conversation_context = message
+        
+        async for chunk in rag_agent.run_stream(conversation_context, deps=deps):
             if hasattr(chunk, 'content') and chunk.content:
                 response_text += chunk.content
                 await websocket.send_json({
@@ -319,6 +342,19 @@ async def handle_websocket_chat(websocket: WebSocket, client_id: str, data: dict
         
         # Calculate response time
         response_time = int((datetime.now() - start_time).total_seconds() * 1000)
+        
+        # Save assistant response to database
+        await add_message(
+            session_id=session_id,
+            role="assistant",
+            content=response_text,
+            metadata={
+                "response_time_ms": response_time,
+                "tools_used": len(tools_used),
+                "selected_collections": selected_collections,
+                "selected_documents": selected_documents
+            }
+        )
         
         # Track analytics
         await track_message(
@@ -594,6 +630,18 @@ async def chat_stream(chat_request: ChatRequest):
             if selected_documents:
                 search_preferences['document_ids'] = selected_documents
             
+            # Load previous conversation history for context
+            from .db_utils import get_session_messages, add_message
+            previous_messages = await get_session_messages(session_id, limit=20)  # Last 20 messages
+            
+            # Save user message to database
+            await add_message(
+                session_id=session_id,
+                role="user", 
+                content=chat_request.message,
+                metadata=metadata
+            )
+            
             deps = AgentDependencies(
                 session_id=session_id,
                 search_preferences=search_preferences if search_preferences else None
@@ -602,14 +650,38 @@ async def chat_stream(chat_request: ChatRequest):
             tools_used = []
             response_text = ""
             
+            # Build conversation context with previous messages
+            conversation_context = ""
+            if previous_messages:
+                for msg in previous_messages[-10:]:  # Last 10 messages for context
+                    role = msg['role']
+                    content = msg['content'][:500]  # Truncate long messages
+                    conversation_context += f"\n{role.upper()}: {content}"
+                conversation_context += f"\nUSER: {chat_request.message}"
+            else:
+                conversation_context = chat_request.message
+            
             # Stream the response
-            async for chunk in rag_agent.run_stream(chat_request.message, deps=deps):
+            async for chunk in rag_agent.run_stream(conversation_context, deps=deps):
                 if hasattr(chunk, 'content') and chunk.content:
                     response_text += chunk.content
                     yield f"data: {json.dumps({'content': chunk.content, 'type': 'text'})}\n\n"
             
             # Calculate response time and track analytics
             response_time = int((datetime.now() - start_time).total_seconds() * 1000)
+            
+            # Save assistant response to database
+            await add_message(
+                session_id=session_id,
+                role="assistant",
+                content=response_text,
+                metadata={
+                    "response_time_ms": response_time,
+                    "tools_used": len(tools_used),
+                    "selected_collections": selected_collections,
+                    "selected_documents": selected_documents
+                }
+            )
             
             # Track the message
             await track_message(

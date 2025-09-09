@@ -169,6 +169,13 @@ async def graph_search(
     Returns:
         List of facts with associated episodes and temporal data
     """
+    # Ensure graph client is initialized
+    from .graph_utils import graph_client
+    try:
+        await graph_client.initialize()
+    except Exception as init_error:
+        logger.warning(f"Graph client initialization warning: {init_error}")
+    
     input_data = GraphSearchInput(query=query)
 
     # Emit retrieval start
@@ -452,6 +459,50 @@ async def get_document(
         }
     
     return None
+
+
+@rag_agent.tool
+async def find_document_by_name(
+    ctx: RunContext[AgentDependencies],
+    document_name: str
+) -> List[Dict[str, Any]]:
+    """
+    Find specific documents by exact or partial name/title match.
+    
+    Use this tool when the user mentions a specific document name, ID, or filename.
+    This tool searches document titles and filenames for matches and returns
+    the documents with their content previews.
+    
+    Args:
+        document_name: Name, title, or filename of the document to find
+    
+    Returns:
+        List of matching documents with content previews
+    """
+    from .tools import search_by_title
+    
+    # Include optional scoping filters from dependencies
+    filters = getattr(getattr(ctx, 'deps', None), 'search_preferences', {}) or {}
+    
+    # Search for documents by title/filename
+    results = await search_by_title(
+        query=document_name,
+        collection_ids=filters.get('collection_ids'),
+        document_ids=filters.get('document_ids'),
+        limit=10
+    )
+    
+    # Convert to simple format for agent
+    return [
+        {
+            "document_id": r["document_id"],
+            "document_title": r["document_title"],
+            "document_source": r["document_source"],
+            "content_preview": r["content"][:500] + "..." if len(r["content"]) > 500 else r["content"],
+            "match_type": "title_filename_match"
+        }
+        for r in results
+    ]
 
 
 @rag_agent.tool

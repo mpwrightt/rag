@@ -106,10 +106,81 @@ class EntityTimelineInput(BaseModel):
     end_date: Optional[str] = Field(None, description="End date (ISO format)")
 
 
+# Helper Functions
+async def search_by_title(
+    query: str,
+    collection_ids: Optional[List[str]] = None,
+    document_ids: Optional[List[str]] = None,
+    limit: int = 10
+) -> List[Dict[str, Any]]:
+    """
+    Search for documents by title or filename, returning their first chunks.
+    
+    Args:
+        query: Search query (document title/filename)
+        collection_ids: Optional collection filter
+        document_ids: Optional document filter
+        limit: Maximum results
+    
+    Returns:
+        List of chunk results from matching documents
+    """
+    from .db_utils import db_pool
+    
+    try:
+        async with db_pool.acquire() as conn:
+            # Build dynamic query with filters
+            params = [f"%{query}%", f"%{query}%"]  # For ILIKE matching
+            where_clauses = ["(d.title ILIKE $1 OR d.source ILIKE $2)"]
+            
+            if collection_ids:
+                params.append(collection_ids)
+                where_clauses.append(f"dc.collection_id = ANY(${len(params)}::uuid[])")
+            
+            if document_ids:
+                params.append(document_ids)
+                where_clauses.append(f"d.id = ANY(${len(params)}::uuid[])")
+            
+            # Query to find documents with title/filename matches and return their first chunk
+            base_query = """
+                SELECT 
+                    c.id::text as chunk_id,
+                    d.id::text as document_id,
+                    c.content,
+                    d.title as document_title,
+                    d.source as document_source,
+                    c.metadata,
+                    0.95 as similarity,
+                    ROW_NUMBER() OVER (PARTITION BY d.id ORDER BY c.chunk_index) as rn
+                FROM documents d
+                LEFT JOIN document_collections dc ON d.id = dc.document_id
+                JOIN chunks c ON d.id = c.document_id
+                WHERE {where}
+            """.format(where=" AND ".join(where_clauses))
+            
+            final_query = f"""
+                SELECT 
+                    chunk_id, document_id, content, document_title, 
+                    document_source, metadata, similarity
+                FROM ({base_query}) ranked
+                WHERE rn = 1
+                ORDER BY similarity DESC
+                LIMIT {limit}
+            """
+            
+            results = await conn.fetch(final_query, *params)
+            
+            return [dict(r) for r in results]
+            
+    except Exception as e:
+        logger.error(f"Title search failed: {e}")
+        return []
+
+
 # Tool Implementation Functions
 async def vector_search_tool(input_data: VectorSearchInput) -> List[ChunkResult]:
     """
-    Perform vector similarity search.
+    Perform vector similarity search with enhanced title matching.
     
     Args:
         input_data: Search parameters
@@ -118,30 +189,60 @@ async def vector_search_tool(input_data: VectorSearchInput) -> List[ChunkResult]
         List of matching chunks
     """
     try:
+        # First, try to find exact or fuzzy title matches
+        title_results = await search_by_title(
+            query=input_data.query,
+            collection_ids=input_data.collection_ids,
+            document_ids=input_data.document_ids
+        )
+        
         # Generate embedding for the query
         embedding = await generate_embedding(input_data.query)
         
         # Perform vector search
-        results = await vector_search(
+        vector_results = await vector_search(
             embedding=embedding,
             limit=input_data.limit,
             collection_ids=input_data.collection_ids,
             document_ids=input_data.document_ids,
         )
 
-        # Convert to ChunkResult models
-        return [
-            ChunkResult(
-                chunk_id=str(r["chunk_id"]),
-                document_id=str(r["document_id"]),
-                content=r["content"],
-                score=r["similarity"],
-                metadata=r["metadata"],
-                document_title=r["document_title"],
-                document_source=r["document_source"]
+        # Combine results, prioritizing title matches
+        combined_results = []
+        
+        # Add title matches first (boost their scores)
+        for r in title_results[:5]:  # Top 5 title matches
+            combined_results.append(
+                ChunkResult(
+                    chunk_id=str(r["chunk_id"]),
+                    document_id=str(r["document_id"]),
+                    content=r["content"],
+                    score=min(0.98, r.get("similarity", 0.9) + 0.3),  # Boost title matches
+                    metadata={**r["metadata"], "match_type": "title_match"},
+                    document_title=r["document_title"],
+                    document_source=r["document_source"]
+                )
             )
-            for r in results
-        ]
+        
+        # Add vector results, avoiding duplicates
+        title_chunk_ids = {r["chunk_id"] for r in title_results}
+        for r in vector_results:
+            if r["chunk_id"] not in title_chunk_ids:
+                combined_results.append(
+                    ChunkResult(
+                        chunk_id=str(r["chunk_id"]),
+                        document_id=str(r["document_id"]),
+                        content=r["content"],
+                        score=r["similarity"],
+                        metadata={**r["metadata"], "match_type": "semantic"},
+                        document_title=r["document_title"],
+                        document_source=r["document_source"]
+                    )
+                )
+        
+        # Sort by score and return top results
+        combined_results.sort(key=lambda x: x.score, reverse=True)
+        return combined_results[:input_data.limit]
         
     except Exception as e:
         logger.error(f"Vector search failed: {e}")
@@ -150,7 +251,7 @@ async def vector_search_tool(input_data: VectorSearchInput) -> List[ChunkResult]
 
 async def graph_search_tool(input_data: GraphSearchInput) -> List[GraphSearchResult]:
     """
-    Search the knowledge graph.
+    Search the knowledge graph with enhanced error handling and fallbacks.
     
     Args:
         input_data: Search parameters
@@ -159,30 +260,97 @@ async def graph_search_tool(input_data: GraphSearchInput) -> List[GraphSearchRes
         List of graph search results
     """
     try:
+        logger.info(f"Executing graph search for query: {input_data.query}")
+        
+        # Try primary graph search
         results = await search_knowledge_graph(
             query=input_data.query
         )
         
+        logger.info(f"Graph search returned {len(results)} results")
+        
         # Convert to GraphSearchResult models
-        return [
-            GraphSearchResult(
-                fact=r["fact"],
-                uuid=r["uuid"],
-                valid_at=r.get("valid_at"),
-                invalid_at=r.get("invalid_at"),
-                source_node_uuid=r.get("source_node_uuid")
-            )
-            for r in results
-        ]
+        graph_results = []
+        for r in results:
+            try:
+                graph_results.append(
+                    GraphSearchResult(
+                        fact=r.get("fact", ""),
+                        uuid=r.get("uuid", ""),
+                        valid_at=r.get("valid_at"),
+                        invalid_at=r.get("invalid_at"),
+                        source_node_uuid=r.get("source_node_uuid")
+                    )
+                )
+            except Exception as conversion_error:
+                logger.warning(f"Failed to convert graph result: {conversion_error}, result: {r}")
+                continue
+        
+        # If no results, try fallback search strategies
+        if not graph_results:
+            logger.info("No graph results found, trying fallback strategies")
+            graph_results = await _fallback_graph_search(input_data.query)
+        
+        return graph_results
         
     except Exception as e:
-        logger.error(f"Graph search failed: {e}")
+        logger.error(f"Graph search failed with error: {e}", exc_info=True)
+        # Return fallback results instead of empty list
+        return await _fallback_graph_search(input_data.query)
+
+
+async def _fallback_graph_search(query: str) -> List[GraphSearchResult]:
+    """
+    Fallback graph search using simpler methods when main graph search fails.
+    
+    Args:
+        query: Search query
+        
+    Returns:
+        List of fallback graph search results
+    """
+    try:
+        from .db_utils import db_pool
+        
+        # Simple fallback: search for any facts containing query terms
+        async with db_pool.acquire() as conn:
+            # Check if facts table exists and search it directly
+            results = await conn.fetch("""
+                SELECT 
+                    f.id::text as fact_id,
+                    f.content,
+                    f.source,
+                    f.valid_at,
+                    f.invalid_at,
+                    n.id::text as node_id,
+                    n.name as node_name
+                FROM facts f
+                LEFT JOIN nodes n ON f.node_id = n.id
+                WHERE f.content ILIKE $1
+                ORDER BY f.created_at DESC
+                LIMIT 10
+            """, f"%{query}%")
+            
+            return [
+                GraphSearchResult(
+                    fact=r["content"] or "",
+                    uuid=r["fact_id"] or "",
+                    valid_at=r["valid_at"].isoformat() if r["valid_at"] else None,
+                    invalid_at=r["invalid_at"].isoformat() if r["invalid_at"] else None,
+                    source_node_uuid=r["node_id"] or ""
+                )
+                for r in results
+            ]
+            
+    except Exception as e:
+        logger.warning(f"Fallback graph search also failed: {e}")
+        # Return empty list as final fallback
         return []
 
 
 async def hybrid_search_tool(input_data: HybridSearchInput) -> List[ChunkResult]:
     """
-    Perform hybrid search (vector + keyword).
+    Perform hybrid search (vector + keyword + title matching).
     
     Args:
         input_data: Search parameters
@@ -191,11 +359,18 @@ async def hybrid_search_tool(input_data: HybridSearchInput) -> List[ChunkResult]
         List of matching chunks
     """
     try:
+        # First, try to find exact or fuzzy title matches
+        title_results = await search_by_title(
+            query=input_data.query,
+            collection_ids=input_data.collection_ids,
+            document_ids=input_data.document_ids
+        )
+        
         # Generate embedding for the query
         embedding = await generate_embedding(input_data.query)
         
         # Perform hybrid search
-        results = await hybrid_search(
+        hybrid_results = await hybrid_search(
             embedding=embedding,
             query_text=input_data.query,
             limit=input_data.limit,
@@ -204,19 +379,42 @@ async def hybrid_search_tool(input_data: HybridSearchInput) -> List[ChunkResult]
             document_ids=input_data.document_ids,
         )
         
-        # Convert to ChunkResult models
-        return [
-            ChunkResult(
-                chunk_id=str(r["chunk_id"]),
-                document_id=str(r["document_id"]),
-                content=r["content"],
-                score=r["combined_score"],
-                metadata=r["metadata"],
-                document_title=r["document_title"],
-                document_source=r["document_source"]
+        # Combine results, prioritizing title matches
+        combined_results = []
+        
+        # Add title matches first (boost their scores)
+        for r in title_results[:5]:  # Top 5 title matches
+            combined_results.append(
+                ChunkResult(
+                    chunk_id=str(r["chunk_id"]),
+                    document_id=str(r["document_id"]),
+                    content=r["content"],
+                    score=min(0.98, r.get("similarity", 0.9) + 0.3),  # Boost title matches
+                    metadata={**r["metadata"], "match_type": "title_match"},
+                    document_title=r["document_title"],
+                    document_source=r["document_source"]
+                )
             )
-            for r in results
-        ]
+        
+        # Add hybrid results, avoiding duplicates
+        title_chunk_ids = {r["chunk_id"] for r in title_results}
+        for r in hybrid_results:
+            if r["chunk_id"] not in title_chunk_ids:
+                combined_results.append(
+                    ChunkResult(
+                        chunk_id=str(r["chunk_id"]),
+                        document_id=str(r["document_id"]),
+                        content=r["content"],
+                        score=r["combined_score"],
+                        metadata={**r["metadata"], "match_type": "hybrid"},
+                        document_title=r["document_title"],
+                        document_source=r["document_source"]
+                    )
+                )
+        
+        # Sort by score and return top results
+        combined_results.sort(key=lambda x: x.score, reverse=True)
+        return combined_results[:input_data.limit]
         
     except Exception as e:
         logger.error(f"Hybrid search failed: {e}")

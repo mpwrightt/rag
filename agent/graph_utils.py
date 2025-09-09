@@ -43,7 +43,7 @@ class KnowledgeGraphClient:
         self._initialized = False
     
     async def initialize(self):
-        """Initialize the knowledge graph client."""
+        """Initialize the knowledge graph client with enhanced error handling."""
         if self._initialized:
             return
 
@@ -56,20 +56,34 @@ class KnowledgeGraphClient:
         try:
             # Test database connection and graph statistics with timeout
             start = time.perf_counter()
-            stats = await asyncio.wait_for(get_graph_statistics(), timeout=init_timeout)
-            elapsed = time.perf_counter() - start
-            self._initialized = True
-            logger.info(
-                f"Knowledge graph client initialized in {elapsed:.3f}s. Stats: {stats}"
-            )
+            
+            # Try to get graph statistics, but don't fail if it doesn't exist
+            try:
+                stats = await asyncio.wait_for(get_graph_statistics(), timeout=init_timeout)
+                elapsed = time.perf_counter() - start
+                self._initialized = True
+                logger.info(
+                    f"Knowledge graph client initialized in {elapsed:.3f}s. Stats: {stats}"
+                )
+            except Exception as stats_error:
+                logger.warning(f"Could not get graph statistics: {stats_error}, but continuing with initialization")
+                # Still mark as initialized - the graph search functions will handle missing tables
+                self._initialized = True
+                elapsed = time.perf_counter() - start
+                logger.info(f"Knowledge graph client initialized in {elapsed:.3f}s (without stats)")
+                
         except asyncio.TimeoutError:
             logger.error(
-                f"Knowledge graph initialization timed out after {init_timeout}s during get_graph_statistics()"
+                f"Knowledge graph initialization timed out after {init_timeout}s"
             )
-            raise
+            # Don't raise - mark as initialized and let individual operations handle failures
+            self._initialized = True
+            logger.info("Knowledge graph client marked as initialized despite timeout")
         except Exception as e:
             logger.error(f"Failed to initialize knowledge graph: {e}")
-            raise
+            # Don't raise - mark as initialized and let individual operations handle failures  
+            self._initialized = True
+            logger.info("Knowledge graph client marked as initialized despite errors")
     
     async def close(self):
         """Close the knowledge graph connection."""
@@ -151,31 +165,93 @@ class KnowledgeGraphClient:
 
         try:
             start = time.perf_counter()
-            results = await asyncio.wait_for(search_facts(query, limit=20), timeout=query_timeout)
+            
+            # Try primary search function
+            results = []
+            try:
+                results = await asyncio.wait_for(search_facts(query, limit=20), timeout=query_timeout)
+            except Exception as primary_error:
+                logger.warning(f"Primary search_facts failed: {primary_error}")
+            
             # Fallback to websearch_to_tsquery for broader recall if strict search returns nothing
             if not results:
                 logger.info("KG strict search returned 0; falling back to websearch_to_tsquery")
-                results = await asyncio.wait_for(search_facts_websearch(query, limit=20), timeout=query_timeout)
+                try:
+                    results = await asyncio.wait_for(search_facts_websearch(query, limit=20), timeout=query_timeout)
+                except Exception as websearch_error:
+                    logger.warning(f"Websearch fallback also failed: {websearch_error}")
+
+            # Final fallback - direct database query if functions don't exist
+            if not results:
+                logger.info("All KG search functions failed; trying direct database fallback")
+                results = await self._direct_fact_search(query, limit=20)
 
             # Convert to Graphiti-compatible format for backward compatibility
-            return [
-                {
-                    "fact": result["content"],
-                    "uuid": result["fact_id"],
-                    "valid_at": result["valid_at"],
-                    "invalid_at": result["invalid_at"],
-                    "source_node_uuid": result["node_id"],
-                    "node_name": result["node_name"],
-                    "node_type": result["node_type"]
-                }
-                for result in results
-            ]
+            converted_results = []
+            for result in results:
+                try:
+                    converted_results.append({
+                        "fact": result.get("content", ""),
+                        "uuid": result.get("fact_id", ""),
+                        "valid_at": result.get("valid_at"),
+                        "invalid_at": result.get("invalid_at"),
+                        "source_node_uuid": result.get("node_id", ""),
+                        "node_name": result.get("node_name", ""),
+                        "node_type": result.get("node_type", "")
+                    })
+                except Exception as conversion_error:
+                    logger.warning(f"Failed to convert result: {conversion_error}, result: {result}")
+                    continue
+                    
+            elapsed = time.perf_counter() - start
+            logger.info(f"Graph search completed in {elapsed:.3f}s, returned {len(converted_results)} results")
+            return converted_results
 
         except asyncio.TimeoutError:
             logger.error(f"Graph search timed out after {query_timeout}s for query: {query!r}")
             return []
         except Exception as e:
-            logger.error(f"Graph search failed: {e}")
+            logger.error(f"Graph search failed: {e}", exc_info=True)
+            return []
+    
+    async def _direct_fact_search(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """
+        Direct database search as final fallback when search functions don't exist.
+        
+        Args:
+            query: Search query
+            limit: Maximum results
+            
+        Returns:
+            List of fact results
+        """
+        try:
+            from .db_utils import db_pool
+            
+            async with db_pool.acquire() as conn:
+                # Try to search facts table directly
+                results = await conn.fetch("""
+                    SELECT 
+                        f.id::text as fact_id,
+                        f.content,
+                        f.source,
+                        f.valid_at,
+                        f.invalid_at,
+                        f.confidence,
+                        n.id::text as node_id,
+                        n.name as node_name,
+                        n.type as node_type
+                    FROM facts f
+                    LEFT JOIN nodes n ON f.node_id = n.id
+                    WHERE f.content ILIKE $1
+                    ORDER BY f.created_at DESC
+                    LIMIT $2
+                """, f"%{query}%", limit)
+                
+                return [dict(r) for r in results]
+                
+        except Exception as e:
+            logger.warning(f"Direct fact search failed: {e}")
             return []
     
     async def get_related_entities(
