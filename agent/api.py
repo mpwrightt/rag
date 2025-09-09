@@ -10,6 +10,7 @@ import tempfile
 import shutil
 from pathlib import Path
 import re
+import glob
 from contextlib import asynccontextmanager
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
@@ -1655,6 +1656,9 @@ async def upload_document(file: UploadFile = File(...)):
             with open(md_path, 'w', encoding='utf-8') as f_md:
                 f_md.write(md_text)
             
+            # Pre-ingestion diagnostics: list markdown files in staging
+            found_md = sorted(glob.glob(str(Path(temp_dir) / "**/*.md"), recursive=True))
+
             # Create ingestion configuration
             config = IngestionConfig(
                 chunk_size=int(os.getenv("CHUNK_SIZE", 800)),
@@ -1676,26 +1680,21 @@ async def upload_document(file: UploadFile = File(...)):
             
             # Process the document
             results = await pipeline.ingest_documents()
-            
-            if not results or len(results) == 0:
-                raise HTTPException(
-                    status_code=500,
-                    detail="Document processing failed: No results returned"
-                )
-            
+
             # Check if results were successful (successful if document_id is not empty and no errors)
             successful_results = [r for r in results if r.document_id and len(r.errors) == 0]
             failed_results = [r for r in results if not r.document_id or len(r.errors) > 0]
-            
-            if len(successful_results) == 0:
-                error_messages = []
-                for r in failed_results:
-                    if r.errors:
-                        error_messages.extend(r.errors)
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Document processing failed: {'; '.join(error_messages) if error_messages else 'Unknown error'}"
-                )
+
+            if not successful_results:
+                # Return diagnostics to help identify conversion/ingestion issues
+                diag = {
+                    "message": "Document processing failed: No results returned",
+                    "converted_markdown_chars": len(md_text or ""),
+                    "found_markdown_files": found_md,
+                    "ingestion_errors": [err for r in failed_results for err in (r.errors or [])],
+                }
+                logger.warning("Upload diagnostics: %s", diag)
+                raise HTTPException(status_code=500, detail=diag)
             
             # Aggregate statistics from all successful results
             total_chunks = sum(r.chunks_created for r in successful_results)
@@ -1710,6 +1709,8 @@ async def upload_document(file: UploadFile = File(...)):
                 "message": f"File {file.filename} uploaded and processed successfully",
                 "filename": file.filename,
                 "size": size_bytes,
+                "converted_markdown_chars": len(md_text or ""),
+                "found_markdown_files": found_md,
                 "documents_processed": len(successful_results),
                 "chunks_created": total_chunks,
                 "embeddings_created": total_chunks,  # Each chunk gets an embedding
@@ -1724,6 +1725,66 @@ async def upload_document(file: UploadFile = File(...)):
     except Exception as e:
         logger.error(f"File upload and ingestion failed: {e}")
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+
+
+@app.post("/convert")
+async def convert_only(file: UploadFile = File(...)):
+    """Server-side conversion to Markdown without ingestion.
+
+    Returns JSON with diagnostics: original ext, markdown length, and preview.
+    Useful on Replit to verify converters (python-docx, openpyxl, pdfminer/ocr) work.
+    """
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Filename is required")
+
+    try:
+        # Validate extension (same as /upload)
+        allowed_extensions = {'.txt', '.md', '.pdf', '.doc', '.docx', '.xls', '.xlsx'}
+        ext = os.path.splitext(file.filename)[1].lower()
+        if ext not in allowed_extensions:
+            raise HTTPException(status_code=400, detail=f"Unsupported extension {ext}")
+
+        # Size limit
+        try:
+            max_mb = int(os.getenv("MAX_UPLOAD_MB", "200"))
+        except Exception:
+            max_mb = 200
+        max_size = max_mb * 1024 * 1024
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_file_path = Path(temp_dir) / file.filename
+            size_bytes = 0
+            with open(temp_file_path, 'wb') as temp_file:
+                chunk_size = 8 * 1024 * 1024
+                while True:
+                    chunk = await file.read(chunk_size)
+                    if not chunk:
+                        break
+                    size_bytes += len(chunk)
+                    if size_bytes > max_size:
+                        raise HTTPException(status_code=413, detail=f"File too large (> {max_mb}MB)")
+                    temp_file.write(chunk)
+
+            # Convert to markdown
+            md_text, meta = convert_to_markdown(str(temp_file_path))
+            md_text = md_text or ""
+            preview = md_text[:1000]
+            ocr_enabled = os.getenv("OCR_PDF", "0").lower() in {"1", "true", "yes", "on"}
+            return {
+                "success": True,
+                "filename": file.filename,
+                "original_ext": ext,
+                "size": size_bytes,
+                "converted_markdown_chars": len(md_text),
+                "preview": preview,
+                "ocr_enabled": ocr_enabled,
+                "meta": meta,
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Conversion failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/ingest/folder")
