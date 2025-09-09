@@ -418,7 +418,7 @@ export default function ModernRAGChatPage() {
       const res = await fetch(`${API_BASE}/chat/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'bypass-tunnel-reminder': 'true' },
-        body: JSON.stringify({ message: prompt, search_type: chatSettings.searchMode, session_id: sessionId }),
+        body: JSON.stringify({ message: prompt, search_type: chatSettings.searchMode, session_id: sessionId, metadata: { force_guided: true } }),
         signal: controller.signal
       })
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
@@ -485,12 +485,47 @@ export default function ModernRAGChatPage() {
               // The actual event is nested in data.data
               if (retrievalData) {
                 console.log('Adding retrieval data to sidebar:', retrievalData)
-                setLiveRetrieval(prev => [...prev, retrievalData])
+                const tool = retrievalData.tool
+                const event = retrievalData.event
+                const isBasicToolEvent =
+                  retrievalData.type === 'retrieval' &&
+                  (tool === 'graph_search' || tool === 'vector_search' || tool === 'hybrid_search')
+
+                if (isBasicToolEvent) {
+                  const step = tool === 'graph_search' ? 'graph_search' : 'vector_search'
+                  const status =
+                    event === 'start' ? 'start' :
+                    event === 'end' ? 'complete' :
+                    'update'
+                  const dataPayload =
+                    event === 'results'
+                      ? {
+                          results: Array.isArray(retrievalData.results) ? retrievalData.results.length : 0,
+                          sample: Array.isArray(retrievalData.results) ? retrievalData.results.slice(0, 2) : []
+                        }
+                      : event === 'end'
+                        ? {
+                            results: typeof retrievalData.count === 'number' ? retrievalData.count : undefined,
+                            elapsed_ms: typeof retrievalData.elapsed_ms === 'number' ? retrievalData.elapsed_ms : undefined
+                          }
+                        : (retrievalData.args || {})
+
+                  setLiveRetrieval(prev => [
+                    ...prev,
+                    {
+                      type: 'retrieval_step',
+                      step,
+                      status,
+                      data: dataPayload,
+                      timestamp: new Date().toISOString()
+                    }
+                  ])
+                } else {
+                  // Already in retrieval_step form from EnhancedRetriever or other custom events
+                  setLiveRetrieval(prev => [...prev, retrievalData])
+                }
               }
-            }
-            // Handle direct retrieval step/summary events
-            if (data.type === 'retrieval_step' || data.type === 'retrieval_summary') {
-              console.log('Received direct retrieval event:', data)
+            } else if (data.type === 'retrieval_step' || data.type === 'retrieval_summary') {
               setLiveRetrieval(prev => [...prev, data])
             }
           } catch (e) {

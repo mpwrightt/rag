@@ -22,6 +22,7 @@ import uvicorn
 from dotenv import load_dotenv
 
 from .agent import rag_agent, AgentDependencies
+from .enhanced_retrieval import EnhancedRetriever
 
 from .context import get_current_search_results, clear_search_results, register_retrieval_listener, unregister_retrieval_listener, emit_retrieval_event
 from .db_utils import (
@@ -803,6 +804,40 @@ async def chat_stream(request: ChatRequest):
                     )
                 except Exception:
                     use_mock = False
+
+                # Optionally force Enhanced Graph → Vector retrieval to run and emit retrieval_step events
+                force_guided = False
+                try:
+                    force_guided = bool(
+                        ((getattr(request, "metadata", {}) or {}).get("force_guided"))
+                        or os.getenv("FORCE_GUIDED_RETRIEVAL") == "1"
+                    )
+                except Exception:
+                    force_guided = os.getenv("FORCE_GUIDED_RETRIEVAL") == "1"
+
+                if force_guided and not use_mock:
+                    async def _run_enhanced_retrieval():
+                        try:
+                            retriever = EnhancedRetriever()
+                            config = {
+                                "use_graph": True,
+                                "use_vector": True,
+                                "use_query_expansion": True,
+                                "vector_limit": 20,
+                            }
+                            # This will emit granular retrieval_step events via emit_retrieval_event
+                            await retriever.retrieve(
+                                query=request.message,
+                                session_id=session_id,
+                                config=config,
+                            )
+                        except Exception as e:
+                            logger.warning(f"Forced guided retrieval failed: {e}")
+
+                    try:
+                        asyncio.create_task(_run_enhanced_retrieval())
+                    except Exception:
+                        pass
 
                 if use_mock:
                     # Emit mock staged retrieval events (guided_retrieval: graph -> vector)
