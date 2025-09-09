@@ -9,6 +9,7 @@ import logging
 import tempfile
 import shutil
 from pathlib import Path
+import re
 from contextlib import asynccontextmanager
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
@@ -1638,6 +1639,21 @@ async def upload_document(file: UploadFile = File(...)):
                             detail=f"File too large. Maximum size is {max_mb}MB, got {size_bytes / 1024 / 1024:.1f}MB"
                         )
                     temp_file.write(chunk)
+
+            # Convert to Markdown using converter (handles pdf/docx/xlsx/etc.)
+            try:
+                md_text, conv_meta = convert_to_markdown(str(temp_file_path))
+            except Exception as e:
+                logger.exception("Conversion to markdown failed: %s", e)
+                raise HTTPException(status_code=500, detail="Failed to convert file to markdown")
+            if not md_text or not md_text.strip():
+                raise HTTPException(status_code=400, detail="No extractable text content found in the uploaded file")
+
+            # Write markdown to a file that the ingestion pipeline will pick up
+            md_name = f"{Path(file.filename).stem}.md"
+            md_path = Path(temp_dir) / md_name
+            with open(md_path, 'w', encoding='utf-8') as f_md:
+                f_md.write(md_text)
             
             # Create ingestion configuration
             config = IngestionConfig(
@@ -1708,6 +1724,178 @@ async def upload_document(file: UploadFile = File(...)):
     except Exception as e:
         logger.error(f"File upload and ingestion failed: {e}")
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+
+
+@app.post("/ingest/folder")
+async def ingest_folder(request: Request):
+    """Bulk-ingest a local folder. Converts supported files to Markdown first, then ingests.
+
+    Body JSON:
+      - path: absolute path to a folder containing source files
+      - collection_id (optional): add ingested documents to this collection
+    """
+    if not INGESTION_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Document ingestion pipeline is not available")
+
+    try:
+        body = await request.json()
+        folder_path = body.get("path")
+        collection_id = body.get("collection_id")
+        if not folder_path or not isinstance(folder_path, str):
+            raise HTTPException(status_code=400, detail="'path' is required")
+        src = Path(folder_path)
+        if not src.exists() or not src.is_dir():
+            raise HTTPException(status_code=400, detail="Provided path does not exist or is not a directory")
+
+        allowed_exts = {".txt", ".md", ".markdown", ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".tsv", ".html", ".htm", ".pptx"}
+
+        with tempfile.TemporaryDirectory() as staging_dir:
+            staging = Path(staging_dir)
+            converted_count = 0
+            errors: List[str] = []
+
+            # Walk and convert
+            for path in src.rglob("*"):
+                if not path.is_file():
+                    continue
+                if path.suffix.lower() not in allowed_exts:
+                    continue
+                try:
+                    text, meta = convert_to_markdown(str(path))
+                    if not text or not text.strip():
+                        errors.append(f"No text extracted: {path.name}")
+                        continue
+                    # write .md preserving relative structure
+                    rel = path.relative_to(src)
+                    out_path = staging / rel.with_suffix(".md")
+                    out_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(out_path, 'w', encoding='utf-8') as f:
+                        f.write(text)
+                    converted_count += 1
+                except Exception as e:
+                    logger.warning("Failed to convert %s: %s", path, e)
+                    errors.append(f"{path.name}: {e}")
+
+            if converted_count == 0:
+                return {"success": False, "message": "No convertible files found", "errors": errors}
+
+            # Build ingestion config
+            config = IngestionConfig(
+                chunk_size=int(os.getenv("CHUNK_SIZE", 800)),
+                chunk_overlap=int(os.getenv("CHUNK_OVERLAP", 150)),
+                max_chunk_size=int(os.getenv("MAX_CHUNK_SIZE", 1500)),
+                embedding_model=os.getenv("EMBEDDING_MODEL", "text-embedding-004"),
+                vector_dimension=int(os.getenv("VECTOR_DIMENSION", 768)),
+                llm_choice=os.getenv("INGESTION_LLM_CHOICE", os.getenv("LLM_CHOICE", "gemini-1.5-flash")),
+                enable_graph=True,
+                clean_before_ingest=False
+            )
+
+            pipeline = DocumentIngestionPipeline(
+                config=config,
+                documents_folder=str(staging),
+                clean_before_ingest=False
+            )
+
+            results = await pipeline.ingest_documents()
+            successful = [r for r in results if r.document_id and len(r.errors) == 0]
+
+            # Optionally add to collection
+            added_to_collection = 0
+            if collection_id and successful:
+                try:
+                    ids = [r.document_id for r in successful]
+                    _ = await add_documents_to_collection_db(collection_id, ids, added_by=request.headers.get("x-user-id"))
+                    added_to_collection = len(ids)
+                except Exception as e:
+                    logger.warning("Failed to add docs to collection %s: %s", collection_id, e)
+
+            return {
+                "success": True,
+                "converted_files": converted_count,
+                "documents_processed": len(successful),
+                "errors": errors,
+                "added_to_collection": added_to_collection,
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Bulk ingest failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _extract_section4(text: str) -> Optional[str]:
+    """Heuristic extraction of Section 4 from a document's text."""
+    if not text:
+        return None
+    # Normalize line endings
+    t = text
+    # Try to find a 'Section 4' header and capture until the next 'Section 5'
+    patterns = [
+        r"(?is)\bsection\s*4\b.*?(?=\n\s*section\s*5\b|\n\s*5\.|\n\s*section\s*V|\Z)",
+        r"(?is)\n\s*4\.?\s+[A-Z].*?(?=\n\s*5\.|\n\s*section\s*5\b|\Z)",
+    ]
+    for pat in patterns:
+        m = re.search(pat, t)
+        if m:
+            return m.group(0).strip()
+    return None
+
+
+@app.post("/reports/generate")
+async def reports_generate(request: Request):
+    """Generate a minimal report focusing on Section 4 (post-maps) for documents in a collection.
+
+    Body JSON:
+      - collection_id: required
+      - limit (optional): limit number of docs processed
+    """
+    try:
+        body = await request.json()
+        collection_id = body.get("collection_id")
+        limit = int(body.get("limit", 50))
+        if not collection_id:
+            raise HTTPException(status_code=400, detail="collection_id is required")
+
+        # List documents in the collection
+        docs, total = await list_collection_documents_db(collection_id, limit=limit, offset=0)
+        from .tools import DocumentInput
+        extracted = []
+        for d in docs:
+            doc_id = d.get("id") or d.get("document_id") or d.get("doc_id")
+            title = d.get("title") or d.get("name") or "Untitled"
+            if not doc_id:
+                continue
+            try:
+                di = DocumentInput(document_id=str(doc_id))
+                doc = await get_document_tool(di)
+                text = _extract_text_from_document(doc) or ""
+                section4 = _extract_section4(text) or ""
+                if section4:
+                    extracted.append({
+                        "document_id": str(doc_id),
+                        "title": title,
+                        "section4": section4[:10000],  # cap
+                        "citation": {
+                            "document_title": title,
+                            "match_index": max(text.lower().find(section4[:50].lower()), 0)
+                        }
+                    })
+            except Exception as e:
+                logger.warning("Failed to extract Section 4 for %s: %s", title, e)
+
+        return {
+            "collection_id": collection_id,
+            "total_documents": total,
+            "processed": len(docs),
+            "extracted_count": len(extracted),
+            "results": extracted,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Report generation failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/sessions/{session_id}")
