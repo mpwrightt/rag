@@ -72,8 +72,6 @@ import {
   Check
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { Protect } from '@clerk/nextjs'
-import CustomClerkPricing from '@/components/custom-clerk-pricing'
 import { RetrievalTimeline } from '@/components/retrieval-timeline'
 
 // Types
@@ -294,28 +292,7 @@ function MarkdownContent({ content, isUser = false }: { content: string, isUser?
   );
 }
 
-// Upgrade card for non-pro users
-function UpgradeCard() {
-  return (
-    <div className="flex flex-col items-center justify-center min-h-screen p-8">
-      <div className="mx-auto max-w-2xl space-y-4 text-center">
-        <div className="w-24 h-24 bg-gradient-to-br from-primary to-primary/60 rounded-3xl flex items-center justify-center mx-auto mb-6">
-          <Brain className="w-12 h-12 text-primary-foreground" />
-        </div>
-        <h1 className="text-3xl font-bold lg:text-4xl bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent">
-          Upgrade to DataDiver Pro
-        </h1>
-        <p className="text-lg text-muted-foreground max-w-lg mx-auto">
-          Experience the most advanced RAG chat interface with AI-powered document analysis, 
-          real-time streaming, and intelligent context management.
-        </p>
-      </div>
-      <div className="px-8 lg:px-12 mt-8 w-full max-w-4xl">
-        <CustomClerkPricing />
-      </div>
-    </div>
-  )
-}
+// Demo mode: paywall removed
 
 // Main chat component
 export default function ModernRAGChatPage() {
@@ -761,10 +738,6 @@ export default function ModernRAGChatPage() {
   }, [input])
 
   return (
-    <Protect
-      condition={(has) => has({ plan: 'pro' })}
-      fallback={<UpgradeCard />}
-    >
       <div className="flex flex-1 min-h-0 sm:min-h-0 min-h-[100dvh] flex-col bg-background overflow-hidden overflow-x-hidden relative pt-12 sm:pt-0">
         {/* Top Toolbar */}
         <div className="flex-shrink-0 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 p-2 sm:p-4 shadow-sm">
@@ -1754,6 +1727,5 @@ export default function ModernRAGChatPage() {
           </div>
         )}
       </div>
-    </Protect>
   )
 }

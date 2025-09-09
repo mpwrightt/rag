@@ -13,26 +13,11 @@ import {
   TrendingUp,
   AlertCircle
 } from 'lucide-react'
-import { Protect } from '@clerk/nextjs'
-import CustomClerkPricing from '@/components/custom-clerk-pricing'
 
-function UpgradeCard() {
-  return (
-    <>
-      <div className="mx-auto max-w-2xl space-y-4 text-center">
-        <h1 className="text-center text-2xl font-semibold lg:text-3xl">Upgrade to a paid plan</h1>
-        <p>This page is available on paid plans. Choose a plan that fits your needs.</p>
-      </div>
-      <div className="px-8 lg:px-12">
-        <CustomClerkPricing />
-      </div>
-    </>
-  )
-}
+// Demo mode: paywall removed
 
 export default function WorkflowsPage() {
   return (
-    <Protect condition={(has) => has({ plan: 'pro' })} fallback={<UpgradeCard />}> 
     <div className="flex flex-col h-full bg-background">
       {/* Header */}
       <div className="flex-shrink-0 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 p-6">
@@ -87,8 +72,8 @@ export default function WorkflowsPage() {
                       $5.99 
                       <span className="text-sm font-normal">/month</span>
                     </div>
-                    <Badge variant="secondary" className="mb-4">Billed annually</Badge>
-                    <Button className="w-full mb-4">Subscribe</Button>
+                    <Badge variant="secondary" className="mb-4">Demo</Badge>
+                    <Button className="w-full mb-4" disabled>Subscribe</Button>
                     <ul className="text-sm space-y-1 text-left">
                       <li>• Advanced workflows</li>
                       <li>• 1,000 executions/month</li>
@@ -110,8 +95,8 @@ export default function WorkflowsPage() {
                       $8.99
                       <span className="text-sm font-normal">/month</span>
                     </div>
-                    <Badge variant="secondary" className="mb-4">Billed annually</Badge>
-                    <Button className="w-full mb-4">Subscribe</Button>
+                    <Badge variant="secondary" className="mb-4">Demo</Badge>
+                    <Button className="w-full mb-4" disabled>Subscribe</Button>
                     <ul className="text-sm space-y-1 text-left">
                       <li>• Enterprise workflows</li>
                       <li>• Unlimited executions</li>
@@ -190,6 +175,5 @@ export default function WorkflowsPage() {
         </div>
       </div>
     </div>
-    </Protect>
   )
 }

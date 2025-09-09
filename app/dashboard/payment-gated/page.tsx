@@ -1,19 +1,4 @@
-import { Protect } from '@clerk/nextjs'
-import CustomClerkPricing from "@/components/custom-clerk-pricing";
-
-function UpgradeCard() {
-  return (
-    <>
-      <div className="mx-auto max-w-2xl space-y-4 text-center px-4 sm:px-6">
-        <h1 className="text-center text-xl sm:text-2xl lg:text-3xl font-semibold">Upgrade to a paid plan</h1>
-        <p className="text-sm sm:text-base text-muted-foreground">This page is available on paid plans. Choose a plan that fits your needs.</p>
-      </div>
-      <div className="px-4 sm:px-8 lg:px-12">
-        <CustomClerkPricing />
-      </div>
-    </>
-  )
-}
+// Demo mode: paywall removed
 
 
 function FeaturesCard() {
@@ -37,16 +22,6 @@ function FeaturesCard() {
 
 export default function TeamPage() {
   return (
-    <Protect
-    condition={(has) => {
-      // Check if user has any of the paid plans
-      // return has({ plan: "starter" }) || has({ plan: "hobby" }) || has({ plan: "pro" })
-      // Or alternatively, check if user doesn't have free plan (if free plan exists)
-      return !has({ plan: "free_user" })
-    }}
-      fallback={<UpgradeCard/>}
-    >
       <FeaturesCard />
-    </Protect>
   )
 } 

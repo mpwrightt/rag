@@ -46,8 +46,6 @@ import {
   ArrowRight,
   Layers
 } from 'lucide-react'
-import { Protect } from '@clerk/nextjs'
-import CustomClerkPricing from '@/components/custom-clerk-pricing'
 import { useRouter, useSearchParams } from 'next/navigation'
 
 // Backend API base URL
@@ -103,19 +101,7 @@ type AIEnhancement = {
   status: 'analyzing' | 'complete' | 'error'
 }
 
-function UpgradeCard() {
-  return (
-    <>
-      <div className="text-center py-8">
-        <h1 className="text-center text-2xl font-semibold lg:text-3xl">Upgrade to a paid plan</h1>
-        <p>This page is available on paid plans. Choose a plan that fits your needs.</p>
-      </div>
-      <div className="px-8 lg:px-12">
-        <CustomClerkPricing />
-      </div>
-    </>
-  )
-}
+// Demo mode: paywall removed
 
 // Wrapper to satisfy Next.js Suspense requirement for useSearchParams
 export default function PromptsPage() {
@@ -158,7 +144,8 @@ function PromptsPageContent() {
       const params = new URLSearchParams(Array.from(searchParams.entries()))
       params.delete('create')
       const query = params.toString()
-      router.replace(`/dashboard/prompts${query ? `?${query}` : ''}`)
+      const cleaned = '/dashboard/prompts' + (query ? '?' + query : '')
+      router.replace(cleaned)
     }
   }, [searchParams, router])
 
@@ -366,7 +353,15 @@ function PromptsPageContent() {
     // Simulate AI enhancement process
     await new Promise(resolve => setTimeout(resolve, 2000))
     
-    const improvedContent = `${content}\n\nAdditional context: Ensure your response is comprehensive and well-structured. Consider the following aspects:\n1. Clarity and precision\n2. Actionable insights\n3. Relevant examples where appropriate\n4. Logical flow and organization`
+    const improvedContent = [
+      content,
+      '',
+      'Additional context: Ensure your response is comprehensive and well-structured. Consider the following aspects:',
+      '1. Clarity and precision',
+      '2. Actionable insights',
+      '3. Relevant examples where appropriate',
+      '4. Logical flow and organization',
+    ].join('\n')
     
     const improvements = [
       'Enhanced clarity and structure',
@@ -408,712 +403,173 @@ function PromptsPageContent() {
   }
 
   return (
-    <Protect condition={(has) => has({ plan: 'pro' })} fallback={<UpgradeCard />}>
-      <div className="flex flex-col h-full bg-background">
-        {/* Header */}
-        <div className="flex-shrink-0 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 p-6">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h1 className="text-2xl font-semibold flex items-center gap-2">
-                <Brain className="w-6 h-6 text-primary" />
-                AI Prompt Library
-              </h1>
-              <p className="text-muted-foreground">
-                Create, enhance, and manage your AI prompts with intelligent assistance
-              </p>
-            </div>
-            <div className="flex items-center gap-3">
-              <Badge variant="secondary" className="px-3 py-1">
-                <Sparkles className="w-3 h-3 mr-1" />
-                {prompts.filter(p => p.ai_enhanced).length} AI Enhanced
-              </Badge>
-              <Dialog open={isTemplateOpen} onOpenChange={setIsTemplateOpen}>
-                <DialogTrigger asChild>
-                  <Button variant="outline">
-                    <Layers className="w-4 h-4 mr-2" />
-                    Templates
-                  </Button>
-                </DialogTrigger>
-                <DialogContent className="max-w-4xl">
-                  <DialogHeader>
-                    <DialogTitle>Prompt Templates</DialogTitle>
-                  </DialogHeader>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-96 overflow-y-auto">
-                    {promptTemplates.map((template) => {
-                      const IconComponent = template.icon
-                      return (
-                        <Card key={template.id} className="cursor-pointer hover:border-primary/50 transition-colors"
-                              onClick={() => createFromTemplate(template)}>
-                          <CardContent className="p-4">
-                            <div className="flex items-start gap-3">
-                              <div className="w-10 h-10 bg-primary/10 rounded-lg flex items-center justify-center">
-                                <IconComponent className="w-5 h-5 text-primary" />
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <h3 className="font-medium mb-1">{template.name}</h3>
-                                <p className="text-sm text-muted-foreground mb-2">{template.description}</p>
-                                <div className="flex items-center gap-2">
-                                  <Badge variant="outline" className="text-xs">{template.category}</Badge>
-                                  <span className="text-xs text-muted-foreground">
-                                    {template.variables.length} variables
-                                  </span>
-                                </div>
-                              </div>
-                            </div>
-                          </CardContent>
-                        </Card>
-                      )
-                    })}
-                  </div>
-                </DialogContent>
-              </Dialog>
-              <Dialog open={isEnhancerOpen} onOpenChange={setIsEnhancerOpen}>
-                <DialogTrigger asChild>
-                  <Button variant="outline">
-                    <Wand2 className="w-4 h-4 mr-2" />
-                    AI Enhancer
-                  </Button>
-                </DialogTrigger>
-                <DialogContent className="max-w-4xl">
-                  <DialogHeader>
-                    <DialogTitle className="flex items-center gap-2">
-                      <Sparkles className="w-5 h-5 text-primary" />
-                      AI Prompt Enhancer
-                    </DialogTitle>
-                  </DialogHeader>
-                  <div className="space-y-4">
-                    <div className="space-y-2">
-                      <Label>Original Prompt</Label>
-                      <Textarea 
-                        placeholder="Paste your prompt here to enhance it with AI..."
-                        rows={4}
-                        className="font-mono text-sm"
-                      />
-                    </div>
-                    <div className="flex gap-2">
-                      <Button onClick={() => enhancePromptWithAI('Sample prompt content')}>
-                        <Sparkles className="w-4 h-4 mr-2" />
-                        Enhance with AI
-                      </Button>
-                      <Button variant="outline">
-                        <Settings className="w-4 h-4 mr-2" />
-                        Enhancement Settings
-                      </Button>
-                    </div>
-                    
-                    {aiEnhancing.length > 0 && (
-                      <div className="space-y-4">
-                        <h3 className="font-medium">Enhancement Results</h3>
-                        {aiEnhancing.map((enhancement) => (
-                          <Card key={enhancement.id} className="p-4">
-                            <div className="space-y-3">
-                              <div className="flex items-center justify-between">
-                                <span className="text-sm font-medium">
-                                  {enhancement.status === 'analyzing' && 'Analyzing prompt...'}
-                                  {enhancement.status === 'complete' && 'Enhancement Complete'}
-                                  {enhancement.status === 'error' && 'Enhancement Failed'}
-                                </span>
-                                {enhancement.status === 'complete' && (
-                                  <Badge className="bg-green-100 text-green-700">
-                                    {enhancement.confidence.toFixed(0)}% confident
-                                  </Badge>
-                                )}
-                              </div>
-                              
-                              {enhancement.status === 'analyzing' && (
-                                <div className="space-y-2">
-                                  <Progress value={65} className="h-2" />
-                                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                                    <RefreshCw className="w-3 h-3 animate-spin" />
-                                    Analyzing structure, clarity, and effectiveness...
-                                  </div>
-                                </div>
-                              )}
-                              
-                              {enhancement.status === 'complete' && (
-                                <div className="space-y-3">
-                                  <div className="bg-muted rounded-lg p-3">
-                                    <p className="text-sm font-mono">{enhancement.enhanced}</p>
-                                  </div>
-                                  <div className="space-y-2">
-                                    <h4 className="text-sm font-medium">Improvements Made:</h4>
-                                    <ul className="text-sm text-muted-foreground space-y-1">
-                                      {enhancement.improvements.map((improvement, idx) => (
-                                        <li key={idx} className="flex items-start gap-2">
-                                          <div className="w-1 h-1 bg-primary rounded-full mt-2 flex-shrink-0" />
-                                          {improvement}
-                                        </li>
-                                      ))}
-                                    </ul>
-                                  </div>
-                                  <div className="flex gap-2">
-                                    <Button size="sm" variant="outline">
-                                      <Copy className="w-3 h-3 mr-1" />
-                                      Copy Enhanced
-                                    </Button>
-                                    <Button size="sm" variant="outline">
-                                      <Plus className="w-3 h-3 mr-1" />
-                                      Save as New
-                                    </Button>
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          </Card>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </DialogContent>
-              </Dialog>
-              <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
-              <DialogTrigger asChild>
-                <Button>
-                  <Plus className="w-4 h-4 mr-2" />
-                  New Prompt
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="max-w-2xl">
-                <DialogHeader>
-                  <DialogTitle>Create New Prompt</DialogTitle>
-                </DialogHeader>
-                <div className="space-y-4 max-h-96 overflow-y-auto">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="title">Title</Label>
-                      <Input
-                        id="title"
-                        value={newPrompt.title}
-                        onChange={(e) => setNewPrompt(prev => ({ ...prev, title: e.target.value }))}
-                        placeholder="Enter prompt title..."
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="category">Category</Label>
-                      <select
-                        id="category"
-                        value={newPrompt.category}
-                        onChange={(e) => setNewPrompt(prev => ({ ...prev, category: e.target.value }))}
-                        className="w-full p-2 border rounded-lg"
-                      >
-                        {categories.slice(1).map(cat => (
-                          <option key={cat} value={cat}>
-                            {cat.charAt(0).toUpperCase() + cat.slice(1)}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="description">Description</Label>
-                    <Input
-                      id="description"
-                      value={newPrompt.description}
-                      onChange={(e) => setNewPrompt(prev => ({ ...prev, description: e.target.value }))}
-                      placeholder="Brief description of the prompt..."
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="content">Prompt Content</Label>
-                    <Textarea
-                      id="content"
-                      value={newPrompt.content}
-                      onChange={(e) => setNewPrompt(prev => ({ ...prev, content: e.target.value }))}
-                      placeholder="Enter your prompt content here. Use {variable_name} for placeholders..."
-                      rows={6}
-                      className="font-mono text-sm"
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="tags">Tags (comma-separated)</Label>
-                      <Input
-                        id="tags"
-                        value={newPrompt.tags}
-                        onChange={(e) => setNewPrompt(prev => ({ ...prev, tags: e.target.value }))}
-                        placeholder="tag1, tag2, tag3"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="visibility">Visibility</Label>
-                      <select
-                        id="visibility"
-                        value={newPrompt.visibility}
-                        onChange={(e) => setNewPrompt(prev => ({ 
-                          ...prev, 
-                          visibility: e.target.value as 'private' | 'public' | 'shared' 
-                        }))}
-                        className="w-full p-2 border rounded-lg"
-                      >
-                        <option value="private">Private</option>
-                        <option value="shared">Shared</option>
-                        <option value="public">Public</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div className="flex justify-end gap-2 pt-4 border-t">
-                    <Button variant="outline" onClick={() => setIsCreateOpen(false)}>
-                      Cancel
-                    </Button>
-                    <Button onClick={handleCreatePrompt}>
-                      Create Prompt
-                    </Button>
-                  </div>
-                </div>
-              </DialogContent>
-            </Dialog>
-          </div>
-
-          {/* Search and Filters */}
-          <div className="flex items-center gap-4">
-            <div className="relative flex-1 max-w-sm">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
-              <Input
-                placeholder="Search prompts..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-9"
-              />
-            </div>
-            <select
-              value={selectedCategory}
-              onChange={(e) => setSelectedCategory(e.target.value)}
-              className="p-2 border rounded-lg"
-            >
-              {categories.map(cat => (
-                <option key={cat} value={cat}>
-                  {cat === 'all' ? 'All Categories' : cat.charAt(0).toUpperCase() + cat.slice(1)}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6">
-          <div className="max-w-6xl mx-auto">
-            {/* Enhanced Tabs Navigation */}
-            <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full mb-6">
-              <TabsList className="grid w-full grid-cols-4">
-                <TabsTrigger value="my-prompts" className="flex items-center gap-2">
-                  <MessageSquare className="w-4 h-4" />
-                  My Prompts ({prompts.length})
-                </TabsTrigger>
-                <TabsTrigger value="ai-enhanced" className="flex items-center gap-2">
-                  <Sparkles className="w-4 h-4" />
-                  AI Enhanced ({prompts.filter(p => p.ai_enhanced).length})
-                </TabsTrigger>
-                <TabsTrigger value="analytics" className="flex items-center gap-2">
-                  <BarChart3 className="w-4 h-4" />
-                  Analytics
-                </TabsTrigger>
-                <TabsTrigger value="marketplace" className="flex items-center gap-2">
-                  <Globe className="w-4 h-4" />
-                  Marketplace
-                </TabsTrigger>
-              </TabsList>
-              
-              <TabsContent value="my-prompts" className="mt-6">
-                {isLoading ? (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    {[...Array(4)].map((_, i) => (
-                      <Card key={i}>
-                        <CardHeader>
-                          <Skeleton className="h-5 w-3/4" />
-                          <Skeleton className="h-4 w-full" />
-                        </CardHeader>
-                        <CardContent>
-                          <Skeleton className="h-20 w-full" />
-                        </CardContent>
-                      </Card>
-                    ))}
-                  </div>
-                ) : filteredPrompts.length === 0 ? (
-                  <div className="text-center py-12">
-                    <div className="w-16 h-16 bg-muted rounded-full flex items-center justify-center mx-auto mb-4">
-                      <MessageSquare className="w-8 h-8 text-muted-foreground" />
-                    </div>
-                    <p className="text-muted-foreground mb-4">
-                      {searchQuery 
-                        ? 'Try adjusting your search terms or filters'
-                        : 'Create your first prompt to get started'
-                      }
-                    </p>
-                    {!searchQuery && (
-                      <div className="flex gap-3 justify-center">
-                        <Button onClick={() => setIsCreateOpen(true)}>
-                          <Plus className="w-4 h-4 mr-2" />
-                          Create Prompt
-                        </Button>
-                        <Button variant="outline" onClick={() => setIsTemplateOpen(true)}>
-                          <Layers className="w-4 h-4 mr-2" />
-                          Use Template
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {filteredPrompts.map((prompt) => (
-                    <Card key={prompt.id} className="group hover:shadow-md transition-shadow hover:border-primary/20">
-                      <CardHeader className="pb-3">
-                        <div className="flex items-start justify-between">
-                          <div className="flex items-center gap-2 min-w-0 flex-1">
-                            {prompt.ai_enhanced ? (
-                              <div className="w-5 h-5 bg-gradient-to-r from-purple-500 to-blue-500 rounded flex items-center justify-center shrink-0">
-                                <Sparkles className="w-3 h-3 text-white" />
-                              </div>
-                            ) : (
-                              <MessageSquare className="w-5 h-5 text-primary shrink-0" />
-                            )}
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-2">
-                                <CardTitle className="text-base truncate">{prompt.title}</CardTitle>
-                                {prompt.ai_enhanced && (
-                                  <Badge variant="secondary" className="text-xs px-2">
-                                    <Zap className="w-2 h-2 mr-1" />
-                                    AI
-                                  </Badge>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            {prompt.performance_score && (
-                              <Badge variant="outline" className="text-xs px-2">
-                                {prompt.performance_score}%
-                              </Badge>
-                            )}
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8"
-                              onClick={() => handleToggleFavorite(prompt.id)}
-                            >
-                              <Star 
-                                className={`w-4 h-4 ${prompt.is_favorite ? 'fill-yellow-400 text-yellow-400' : 'text-muted-foreground'}`} 
-                              />
-                            </Button>
-                          </div>
-                        </div>
-                        <p className="text-sm text-muted-foreground">
-                          {prompt.description}
-                        </p>
-                      </CardHeader>
-                      <CardContent className="space-y-4">
-                        <div className="bg-muted/50 rounded-lg p-3">
-                          <p className="text-sm font-mono line-clamp-3">
-                            {prompt.content}
-                          </p>
-                          {prompt.template_variables && prompt.template_variables.length > 0 && (
-                            <div className="mt-2 flex items-center gap-1 text-xs text-muted-foreground">
-                              <Tag className="w-3 h-3" />
-                              <span>Variables: {prompt.template_variables.join(', ')}</span>
-                            </div>
-                          )}
-                        </div>
-                        
-                        {/* Quality Metrics */}
-                        {prompt.quality_metrics && (
-                          <div className="space-y-2">
-                            <div className="flex items-center justify-between text-xs">
-                              <span className="text-muted-foreground">Quality Score</span>
-                              <span className={getQualityColor(prompt.performance_score || 0)}>
-                                {prompt.performance_score}%
-                              </span>
-                            </div>
-                            <div className="grid grid-cols-2 gap-2 text-xs">
-                              <div className="flex items-center justify-between">
-                                <span className="text-muted-foreground">Clarity</span>
-                                <span>{prompt.quality_metrics.clarity}%</span>
-                              </div>
-                              <div className="flex items-center justify-between">
-                                <span className="text-muted-foreground">Effectiveness</span>
-                                <span>{prompt.quality_metrics.effectiveness}%</span>
-                              </div>
-                            </div>
-                          </div>
-                        )}
-                        
-                        <div className="flex items-center justify-between text-xs text-muted-foreground">
-                          <div className="flex items-center gap-4">
-                            <div className="flex items-center gap-1">
-                              <TrendingUp className="w-3 h-3" />
-                              <span>{prompt.usage_count} uses</span>
-                            </div>
-                            <div className="flex items-center gap-1">
-                              <Calendar className="w-3 h-3" />
-                              {new Date(prompt.updated_at).toLocaleDateString()}
-                            </div>
-                          </div>
-                          <Badge className={`text-xs px-2 py-1 ${getVisibilityColor(prompt.visibility)}`}>
-                            <div className="flex items-center gap-1">
-                              {getVisibilityIcon(prompt.visibility)}
-                              {prompt.visibility}
-                            </div>
-                          </Badge>
-                        </div>
-
-                      {prompt.tags.length > 0 && (
-                        <div className="flex flex-wrap gap-1">
-                          {prompt.tags.slice(0, 3).map((tag, index) => (
-                            <Badge key={index} variant="outline" className="text-xs">
-                              {tag}
-                            </Badge>
-                          ))}
-                          {prompt.tags.length > 3 && (
-                            <Badge variant="outline" className="text-xs">
-                              +{prompt.tags.length - 3}
-                            </Badge>
-                          )}
-                        </div>
-                      )}
-
-                        <div className="flex gap-2 pt-2 border-t">
-                          <Button 
-                            variant="ghost" 
-                            size="sm" 
-                            className="flex-1"
-                            onClick={() => {
-                              setSelectedPrompt(prompt)
-                              setIsViewOpen(true)
-                            }}
-                          >
-                            <Eye className="w-4 h-4 mr-2" />
-                            View
-                          </Button>
-                          <Button 
-                            variant="ghost" 
-                            size="sm"
-                            onClick={() => handleCopyPrompt(prompt.content)}
-                          >
-                            <Copy className="w-4 h-4 mr-2" />
-                            Copy
-                          </Button>
-                          {!prompt.ai_enhanced && (
-                            <Button 
-                              variant="ghost" 
-                              size="sm"
-                              onClick={() => enhancePromptWithAI(prompt.content)}
-                              className="text-purple-600 hover:text-purple-700"
-                            >
-                              <Wand2 className="w-4 h-4 mr-1" />
-                              Enhance
-                            </Button>
-                          )}
-                          <Button variant="ghost" size="icon" className="h-8 w-8">
-                            <Edit className="w-4 h-4" />
-                          </Button>
-                          <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive">
-                            <Trash2 className="w-4 h-4" />
-                          </Button>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
-                )}
-              </TabsContent>
-              
-              <TabsContent value="ai-enhanced" className="mt-6">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {prompts.filter(p => p.ai_enhanced).map((prompt) => (
-                    <Card key={prompt.id} className="group hover:shadow-md transition-shadow border-purple-200/50">
-                      <CardHeader className="pb-3">
-                        <div className="flex items-center gap-2 mb-2">
-                          <div className="w-6 h-6 bg-gradient-to-r from-purple-500 to-blue-500 rounded-full flex items-center justify-center">
-                            <Sparkles className="w-3 h-3 text-white" />
-                          </div>
-                          <span className="text-sm font-medium text-purple-600">AI Enhanced</span>
-                        </div>
-                        <CardTitle className="text-base">{prompt.title}</CardTitle>
-                        <p className="text-sm text-muted-foreground">{prompt.description}</p>
-                      </CardHeader>
-                      <CardContent>
-                        {prompt.version_history && prompt.version_history.length > 0 && (
-                          <Accordion type="single" collapsible className="w-full">
-                            <AccordionItem value="improvements">
-                              <AccordionTrigger className="text-sm">
-                                View AI Improvements ({prompt.version_history[0].improvements.length})
-                              </AccordionTrigger>
-                              <AccordionContent>
-                                <ul className="space-y-1 text-sm text-muted-foreground">
-                                  {prompt.version_history[0].improvements.map((improvement, idx) => (
-                                    <li key={idx} className="flex items-start gap-2">
-                                      <ChevronRight className="w-3 h-3 mt-0.5 text-green-500 flex-shrink-0" />
-                                      {improvement}
-                                    </li>
-                                  ))}
-                                </ul>
-                              </AccordionContent>
-                            </AccordionItem>
-                          </Accordion>
-                        )}
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
-              </TabsContent>
-              
-              <TabsContent value="analytics" className="mt-6">
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  <Card>
-                    <CardHeader>
-                      <CardTitle className="flex items-center gap-2 text-base">
-                        <BarChart3 className="w-5 h-5" />
-                        Usage Statistics
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="space-y-4">
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm text-muted-foreground">Total Prompts</span>
-                          <span className="font-medium">{prompts.length}</span>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm text-muted-foreground">AI Enhanced</span>
-                          <span className="font-medium text-purple-600">
-                            {prompts.filter(p => p.ai_enhanced).length}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm text-muted-foreground">Total Uses</span>
-                          <span className="font-medium">
-                            {prompts.reduce((sum, p) => sum + p.usage_count, 0)}
-                          </span>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                  
-                  <Card>
-                    <CardHeader>
-                      <CardTitle className="flex items-center gap-2 text-base">
-                        <Target className="w-5 h-5" />
-                        Performance
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="space-y-4">
-                        <div className="space-y-2">
-                          <div className="flex items-center justify-between text-sm">
-                            <span className="text-muted-foreground">Avg Quality Score</span>
-                            <span className="font-medium">87%</span>
-                          </div>
-                          <Progress value={87} className="h-2" />
-                        </div>
-                        <div className="space-y-2">
-                          <div className="flex items-center justify-between text-sm">
-                            <span className="text-muted-foreground">Enhancement Rate</span>
-                            <span className="font-medium text-green-600">+23%</span>
-                          </div>
-                          <Progress value={23} className="h-2" />
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                  
-                  <Card>
-                    <CardHeader>
-                      <CardTitle className="flex items-center gap-2 text-base">
-                        <TrendingUp className="w-5 h-5" />
-                        Top Categories
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="space-y-3">
-                        {['Technical', 'Business', 'Creative'].map((category, idx) => (
-                          <div key={category} className="flex items-center justify-between">
-                            <span className="text-sm text-muted-foreground">{category}</span>
-                            <Badge variant="secondary">{3 - idx} prompts</Badge>
-                          </div>
-                        ))}
-                      </div>
-                    </CardContent>
-                  </Card>
-                </div>
-              </TabsContent>
-              
-              <TabsContent value="marketplace" className="mt-6">
-                <div className="text-center py-12">
-                  <div className="w-16 h-16 bg-muted rounded-full flex items-center justify-center mx-auto mb-4">
-                    <Globe className="w-8 h-8 text-muted-foreground" />
-                  </div>
-                  <h3 className="text-lg font-medium mb-2">Prompt Marketplace</h3>
-                  <p className="text-muted-foreground mb-4">
-                    Discover and share prompts with the community
-                  </p>
-                  <Button variant="outline">
-                    <ArrowRight className="w-4 h-4 mr-2" />
-                    Explore Marketplace
-                  </Button>
-                </div>
-              </TabsContent>
-            </Tabs>
-          </div>
-        </div>
-
-        {/* View Prompt Dialog */}
-        {selectedPrompt && (
-          <Dialog open={isViewOpen} onOpenChange={setIsViewOpen}>
-            <DialogContent className="max-w-3xl">
-              <DialogHeader>
-                <DialogTitle className="flex items-center gap-2">
-                  <MessageSquare className="w-5 h-5" />
-                  {selectedPrompt.title}
-                </DialogTitle>
-              </DialogHeader>
-              <div className="space-y-4">
-                <p className="text-muted-foreground">{selectedPrompt.description}</p>
-                
-                <div className="space-y-2">
-                  <Label>Prompt Content</Label>
-                  <div className="bg-muted rounded-lg p-4">
-                    <pre className="text-sm font-mono whitespace-pre-wrap">
-                      {selectedPrompt.content}
-                    </pre>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4 text-sm">
-                  <div>
-                    <Label>Category</Label>
-                    <p className="text-muted-foreground capitalize">{selectedPrompt.category}</p>
-                  </div>
-                  <div>
-                    <Label>Usage Count</Label>
-                    <p className="text-muted-foreground">{selectedPrompt.usage_count} times</p>
-                  </div>
-                </div>
-
-                {selectedPrompt.tags.length > 0 && (
-                  <div>
-                    <Label>Tags</Label>
-                    <div className="flex flex-wrap gap-1 mt-1">
-                      {selectedPrompt.tags.map((tag, index) => (
-                        <Badge key={index} variant="outline">
-                          {tag}
-                        </Badge>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                <div className="flex justify-end gap-2 pt-4 border-t">
-                  <Button variant="outline" onClick={() => setIsViewOpen(false)}>
-                    Close
-                  </Button>
-                  <Button onClick={() => handleCopyPrompt(selectedPrompt.content)}>
-                    <Copy className="w-4 h-4 mr-2" />
-                    Copy Prompt
-                  </Button>
-                </div>
-              </div>
-            </DialogContent>
-          </Dialog>
-        )}
+    <div className="flex flex-col h-full">
+      {/* Header */}
+      <div className="border-b p-6">
+        <h1 className="text-2xl font-semibold flex items-center gap-2">
+          <Brain className="w-6 h-6 text-primary" />
+          AI Prompt Library
+        </h1>
+        <p className="text-muted-foreground">
+          Create, enhance, and manage your AI prompts with intelligent assistance
+        </p>
+        <div className="mt-4 flex items-center gap-3">
+          <Badge variant="secondary" className="px-3 py-1">
+            <Sparkles className="w-3 h-3 mr-1" />
+            {prompts.filter(p => p.ai_enhanced).length} AI Enhanced
+          </Badge>
+          <Button onClick={() => setIsCreateOpen(true)}>
+            <Plus className="w-4 h-4 mr-2" />
+            New Prompt
+          </Button>
+          <Button variant="outline" onClick={() => setIsTemplateOpen(true)}>
+            <Layers className="w-4 h-4 mr-2" />
+            Templates
+          </Button>
         </div>
       </div>
-    </Protect>
+
+      {/* Body */}
+      <div className="flex-1 min-h-0 p-6">
+        {/* Search and Filters */}
+        <div className="flex items-center gap-4 mb-4">
+          <div className="relative flex-1 max-w-sm">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground w-4 h-4" />
+            <Input
+              placeholder="Search prompts..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-9"
+            />
+          </div>
+          <select
+            value={selectedCategory}
+            onChange={(e) => setSelectedCategory(e.target.value)}
+            className="p-2 border rounded-lg bg-background"
+          >
+            {categories.map(cat => (
+              <option key={cat} value={cat}>
+                {cat === 'all' ? 'All Categories' : cat.charAt(0).toUpperCase() + cat.slice(1)}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Tabs */}
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+          <TabsList className="grid w-full grid-cols-2">
+            <TabsTrigger value="my-prompts" className="flex items-center gap-2">
+              <MessageSquare className="w-4 h-4" />
+              My Prompts ({prompts.length})
+            </TabsTrigger>
+            <TabsTrigger value="ai-enhanced" className="flex items-center gap-2">
+              <Sparkles className="w-4 h-4" />
+              AI Enhanced ({prompts.filter(p => p.ai_enhanced).length})
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="my-prompts" className="mt-6">
+            {isLoading ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {[...Array(4)].map((_, i) => (
+                  <Card key={i}>
+                    <CardHeader>
+                      <Skeleton className="h-5 w-3/4" />
+                      <Skeleton className="h-4 w-full" />
+                    </CardHeader>
+                    <CardContent>
+                      <Skeleton className="h-20 w-full" />
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {filteredPrompts.map((prompt) => (
+                  <Card key={prompt.id}>
+                    <CardHeader>
+                      <CardTitle className="text-base">{prompt.title}</CardTitle>
+                      <p className="text-sm text-muted-foreground">{prompt.description}</p>
+                    </CardHeader>
+                    <CardContent className="flex gap-2">
+                      <Button size="sm" variant="outline" onClick={() => { setSelectedPrompt(prompt); setIsViewOpen(true) }}>
+                        <Eye className="w-4 h-4 mr-2" />
+                        View
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => handleCopyPrompt(prompt.content)}>
+                        <Copy className="w-4 h-4 mr-2" />
+                        Copy
+                      </Button>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </TabsContent>
+
+          <TabsContent value="ai-enhanced" className="mt-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {prompts.filter(p => p.ai_enhanced).map((prompt) => (
+                <Card key={prompt.id} className="border-purple-200/50">
+                  <CardHeader>
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-purple-600" />
+                      {prompt.title}
+                    </CardTitle>
+                    <p className="text-sm text-muted-foreground">{prompt.description}</p>
+                  </CardHeader>
+                </Card>
+              ))}
+            </div>
+          </TabsContent>
+        </Tabs>
+      </div>
+
+      {/* Create Prompt Dialog (minimal) */}
+      <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Create New Prompt</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Label htmlFor="title">Title</Label>
+            <Input id="title" value={newPrompt.title} onChange={(e) => setNewPrompt(prev => ({ ...prev, title: e.target.value }))} />
+            <Label htmlFor="content">Content</Label>
+            <Textarea id="content" rows={4} value={newPrompt.content} onChange={(e) => setNewPrompt(prev => ({ ...prev, content: e.target.value }))} />
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" onClick={() => setIsCreateOpen(false)}>Cancel</Button>
+              <Button onClick={handleCreatePrompt}>Create</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* View Prompt Dialog (minimal) */}
+      {selectedPrompt && (
+        <Dialog open={isViewOpen} onOpenChange={setIsViewOpen}>
+          <DialogContent className="max-w-3xl">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <MessageSquare className="w-5 h-5" />
+                {selectedPrompt.title}
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              <p className="text-muted-foreground">{selectedPrompt.description}</p>
+              <div className="bg-muted rounded-lg p-4">
+                <pre className="text-sm font-mono whitespace-pre-wrap">{selectedPrompt.content}</pre>
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setIsViewOpen(false)}>Close</Button>
+                <Button onClick={() => handleCopyPrompt(selectedPrompt.content)}>
+                  <Copy className="w-4 h-4 mr-2" />
+                  Copy Prompt
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
+    </div>
   )
 }

@@ -1,14 +1,14 @@
-import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
+import { clerkMiddleware } from '@clerk/nextjs/server'
 
-const isProtectedRoute = createRouteMatcher(['/dashboard(.*)'])
+// Demo mode: disable protected routes
+// const isProtectedRoute = createRouteMatcher(['/dashboard(.*)'])
 
 export default clerkMiddleware(async (auth, req) => {
-  if (isProtectedRoute(req)) await auth.protect()
+  // Demo mode: no auth protection on any routes
 })
 
 export const config = {
   matcher: [
-    // Only run middleware for protected dashboard routes
-    '/dashboard(.*)'
+    // Demo mode: no routes are matched for middleware protection
   ],
 }
