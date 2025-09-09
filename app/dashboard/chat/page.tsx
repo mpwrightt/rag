@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useState, useRef, useEffect, useCallback } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -298,6 +299,7 @@ function MarkdownContent({ content, isUser = false }: { content: string, isUser?
 export default function ModernRAGChatPage() {
   // Mobile detection
   const isMobile = useIsMobile()
+  const searchParams = useSearchParams()
   
   // Core chat state
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -395,7 +397,17 @@ export default function ModernRAGChatPage() {
       const res = await fetch(`${API_BASE}/chat/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'bypass-tunnel-reminder': 'true' },
-        body: JSON.stringify({ message: prompt, search_type: chatSettings.searchMode, session_id: sessionId, metadata: { force_guided: true } }),
+        body: JSON.stringify({
+          message: prompt,
+          search_type: chatSettings.searchMode,
+          session_id: sessionId,
+          metadata: {
+            force_guided: true,
+            selectedCollections: chatSettings.selectedCollections || [],
+            selectedDocuments: chatSettings.selectedDocuments || [],
+            contextMode: chatSettings.contextMode,
+          }
+        }),
         signal: controller.signal
       })
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
@@ -722,6 +734,22 @@ export default function ModernRAGChatPage() {
     loadContextData()
     loadSuggestedQuestions()
   }, [checkConnection, loadContextData, loadSuggestedQuestions])
+
+  // Preselect collection from URL (?collectionId=...)
+  useEffect(() => {
+    try {
+      const id = searchParams?.get('collectionId')
+      if (id) {
+        setChatSettings(prev => ({
+          ...prev,
+          contextMode: 'collections',
+          selectedCollections: [id]
+        }))
+      }
+    } catch (e) {
+      // no-op
+    }
+  }, [searchParams])
 
   // Auto-scroll on new messages
   useEffect(() => {

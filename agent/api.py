@@ -39,6 +39,14 @@ from .db_utils import (
     get_graph_statistics,
     search_facts,
     search_facts_websearch,
+    # Collections
+    list_collections_db,
+    create_collection_db,
+    update_collection_db,
+    delete_collection_db,
+    add_documents_to_collection_db,
+    remove_document_from_collection_db,
+    list_collection_documents_db,
 )
 from .graph_utils import (
     initialize_graph,
@@ -560,7 +568,8 @@ async def execute_agent(
     message: str,
     session_id: str,
     user_id: Optional[str] = None,
-    save_conversation: bool = True
+    save_conversation: bool = True,
+    search_preferences: Optional[Dict[str, Any]] = None,
 ) -> tuple[str, List[ToolCall], List[SourceResult]]:
     """
     Execute the agent with a message.
@@ -578,10 +587,11 @@ async def execute_agent(
         # Clear previous search results
         clear_search_results()
         
-        # Create dependencies
+        # Create dependencies (include search scoping preferences if provided)
         deps = AgentDependencies(
             session_id=session_id,
-            user_id=user_id
+            user_id=user_id,
+            search_preferences=search_preferences or {},
         )
         
         # Get conversation context
@@ -636,6 +646,127 @@ async def execute_agent(
 
 
 # API Endpoints
+
+@app.get("/collections")
+async def api_list_collections(
+    page: int = 1,
+    per_page: int = 20,
+    search: Optional[str] = None,
+    created_by: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    is_shared: Optional[bool] = None,
+):
+    try:
+        offset = (page - 1) * per_page
+        collections, total = await list_collections_db(
+            limit=per_page,
+            offset=offset,
+            search=search,
+            created_by=created_by,
+            workspace_id=workspace_id,
+            is_shared=is_shared,
+        )
+        return {"collections": collections, "total": total, "page": page, "per_page": per_page}
+    except Exception as e:
+        logger.exception("Failed to list collections: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to list collections")
+
+
+@app.post("/collections")
+async def api_create_collection(request: Request):
+    try:
+        body = await request.json()
+        created = await create_collection_db(
+            name=body.get("name"),
+            description=body.get("description"),
+            color=body.get("color") or "#6366f1",
+            icon=body.get("icon") or "folder",
+            is_shared=bool(body.get("is_shared", False)),
+            created_by=request.headers.get("x-user-id"),
+            workspace_id=request.headers.get("x-workspace-id"),
+            metadata=body.get("metadata") or {},
+        )
+        return created
+    except Exception as e:
+        logger.exception("Failed to create collection: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to create collection")
+
+
+@app.patch("/collections/{collection_id}")
+async def api_update_collection(collection_id: str, request: Request):
+    try:
+        body = await request.json()
+        updated = await update_collection_db(
+            collection_id,
+            name=body.get("name"),
+            description=body.get("description"),
+            color=body.get("color"),
+            icon=body.get("icon"),
+            is_shared=body.get("is_shared"),
+            metadata=body.get("metadata"),
+        )
+        if not updated:
+            raise HTTPException(status_code=404, detail="Collection not found")
+        return updated
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to update collection: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to update collection")
+
+
+@app.delete("/collections/{collection_id}")
+async def api_delete_collection(collection_id: str):
+    try:
+        ok = await delete_collection_db(collection_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Collection not found")
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to delete collection: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to delete collection")
+
+
+@app.get("/collections/{collection_id}/documents")
+async def api_list_collection_documents(collection_id: str, page: int = 1, per_page: int = 50):
+    try:
+        docs, total = await list_collection_documents_db(collection_id, limit=per_page, offset=(page - 1) * per_page)
+        return {"documents": docs, "total": total, "page": page, "per_page": per_page}
+    except Exception as e:
+        logger.exception("Failed to list collection documents: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to list collection documents")
+
+
+@app.post("/collections/{collection_id}/documents")
+async def api_add_documents_to_collection(collection_id: str, request: Request):
+    try:
+        body = await request.json()
+        ids = body.get("document_ids") or []
+        if not isinstance(ids, list) or not ids:
+            raise HTTPException(status_code=400, detail="document_ids array required")
+        added = await add_documents_to_collection_db(collection_id, ids, added_by=request.headers.get("x-user-id"))
+        return {"added": added}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to add documents to collection: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to add documents to collection")
+
+
+@app.delete("/collections/{collection_id}/documents/{document_id}")
+async def api_remove_document_from_collection(collection_id: str, document_id: str):
+    try:
+        ok = await remove_document_from_collection_db(collection_id, document_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Not found")
+        return {"removed": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to remove document from collection: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to remove document from collection")
 @app.get("/health", response_model=HealthStatus)
 async def health_check():
     """Health check endpoint."""
@@ -673,11 +804,25 @@ async def chat(request: ChatRequest):
         # Get or create session
         session_id = await get_or_create_session(request)
         
+        # Build search preferences from metadata
+        prefs: Dict[str, Any] = {}
+        meta = request.metadata or {}
+        # Support multiple key styles from client
+        if isinstance(meta.get("collection_ids"), list):
+            prefs["collection_ids"] = meta.get("collection_ids")
+        if isinstance(meta.get("selectedCollections"), list):
+            prefs["collection_ids"] = meta.get("selectedCollections")
+        if isinstance(meta.get("document_ids"), list):
+            prefs["document_ids"] = meta.get("document_ids")
+        if isinstance(meta.get("selectedDocuments"), list):
+            prefs["document_ids"] = meta.get("selectedDocuments")
+
         # Execute agent
         response, tools_used, sources = await execute_agent(
             message=request.message,
             session_id=session_id,
-            user_id=request.user_id
+            user_id=request.user_id,
+            search_preferences=prefs,
         )
         
         # Build response metadata and attach a live graph payload when appropriate
@@ -761,9 +906,22 @@ async def chat_stream(request: ChatRequest):
                 yield f"data: {json.dumps({'type': 'session', 'session_id': session_id})}\n\n"
                 
                 # Create dependencies
+                # Build search preferences from metadata
+                prefs: Dict[str, Any] = {}
+                meta = request.metadata or {}
+                if isinstance(meta.get("collection_ids"), list):
+                    prefs["collection_ids"] = meta.get("collection_ids")
+                if isinstance(meta.get("selectedCollections"), list):
+                    prefs["collection_ids"] = meta.get("selectedCollections")
+                if isinstance(meta.get("document_ids"), list):
+                    prefs["document_ids"] = meta.get("document_ids")
+                if isinstance(meta.get("selectedDocuments"), list):
+                    prefs["document_ids"] = meta.get("selectedDocuments")
+
                 deps = AgentDependencies(
                     session_id=session_id,
-                    user_id=request.user_id
+                    user_id=request.user_id,
+                    search_preferences=prefs,
                 )
                 
                 # Get conversation context

@@ -62,6 +62,8 @@ class VectorSearchInput(BaseModel):
     """Input for vector search tool."""
     query: str = Field(..., description="Search query")
     limit: int = Field(default=10, description="Maximum number of results")
+    collection_ids: Optional[List[str]] = Field(default=None, description="Restrict search to these collection UUIDs")
+    document_ids: Optional[List[str]] = Field(default=None, description="Restrict search to these document UUIDs")
 
 
 class GraphSearchInput(BaseModel):
@@ -74,6 +76,8 @@ class HybridSearchInput(BaseModel):
     query: str = Field(..., description="Search query")
     limit: int = Field(default=10, description="Maximum number of results")
     text_weight: float = Field(default=0.3, description="Weight for text similarity (0-1)")
+    collection_ids: Optional[List[str]] = Field(default=None, description="Restrict search to these collection UUIDs")
+    document_ids: Optional[List[str]] = Field(default=None, description="Restrict search to these document UUIDs")
 
 
 class DocumentInput(BaseModel):
@@ -118,7 +122,9 @@ async def vector_search_tool(input_data: VectorSearchInput) -> List[ChunkResult]
         # Perform vector search
         results = await vector_search(
             embedding=embedding,
-            limit=input_data.limit
+            limit=input_data.limit,
+            collection_ids=input_data.collection_ids,
+            document_ids=input_data.document_ids,
         )
 
         # Convert to ChunkResult models
@@ -191,7 +197,9 @@ async def hybrid_search_tool(input_data: HybridSearchInput) -> List[ChunkResult]
             embedding=embedding,
             query_text=input_data.query,
             limit=input_data.limit,
-            text_weight=input_data.text_weight
+            text_weight=input_data.text_weight,
+            collection_ids=input_data.collection_ids,
+            document_ids=input_data.document_ids,
         )
         
         # Convert to ChunkResult models

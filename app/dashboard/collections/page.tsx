@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useState, useEffect } from 'react'
+import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -113,10 +114,14 @@ const COLLECTION_COLORS = [
 ]
 
 // Drag and Drop Components
-function DroppableCollection({ collection, onDrop, isActive }: { 
+function DroppableCollection({ collection, onDrop, isActive, onEdit, onDelete, onToggleStar, onTogglePublic }: { 
   collection: Collection
   onDrop: (documentId: string, collectionId: string) => void
-  isActive: boolean 
+  isActive: boolean,
+  onEdit: (id: string) => void,
+  onDelete: (id: string) => void,
+  onToggleStar: (id: string) => void,
+  onTogglePublic: (id: string) => void,
 }) {
   const { isOver, setNodeRef } = useDroppable({
     id: collection.id
@@ -133,10 +138,10 @@ function DroppableCollection({ collection, onDrop, isActive }: {
     >
       <CollectionCard 
         collection={collection} 
-        onEdit={() => {}} 
-        onDelete={() => {}} 
-        onToggleStar={() => {}}
-        onTogglePublic={() => {}}
+        onEdit={onEdit} 
+        onDelete={onDelete} 
+        onToggleStar={onToggleStar}
+        onTogglePublic={onTogglePublic}
       />
     </div>
   )
@@ -379,10 +384,12 @@ function CollectionCard({
             <Eye className="w-4 h-4 mr-2" />
             View
           </Button>
-          <Button size="sm" variant="outline" className="flex-1">
-            <Brain className="w-4 h-4 mr-2" />
-            Chat
-          </Button>
+          <Link href={`/dashboard/chat?collectionId=${encodeURIComponent(collection.id)}`} className="flex-1">
+            <Button size="sm" variant="outline" className="w-full">
+              <Brain className="w-4 h-4 mr-2" />
+              Chat
+            </Button>
+          </Link>
         </div>
       </CardContent>
     </Card>
@@ -428,7 +435,26 @@ export default function CollectionsPage() {
 
         if (collectionsRes.ok) {
           const collectionsData = await collectionsRes.json()
-          setCollections(collectionsData.collections || [])
+          const normalized = (collectionsData.collections || []).map((c: any) => ({
+            id: c.id,
+            name: c.name,
+            description: c.description || '',
+            color: c.color || '#6366f1',
+            is_public: (c.metadata && (c.metadata.visibility === 'public' || c.metadata.is_public === true)) || false,
+            is_starred: false,
+            created_at: c.created_at || new Date().toISOString(),
+            updated_at: c.updated_at || new Date().toISOString(),
+            document_count: c.document_count || 0,
+            total_chunks: 0,
+            size: c.total_size || 0,
+            tags: (c.metadata && c.metadata.tags) || [],
+            owner: c.created_by,
+            access_level: ((c.metadata && c.metadata.visibility === 'public') ? 'public' : (c.is_shared ? 'shared' : 'private')) as 'private' | 'shared' | 'public',
+            collaborators: [],
+            processing_status: 'idle',
+            last_activity: c.updated_at || c.created_at,
+          }))
+          setCollections(normalized)
         } else {
           // Mock data for demonstration
           setCollections([
@@ -502,7 +528,17 @@ export default function CollectionsPage() {
 
         if (documentsRes.ok) {
           const documentsData = await documentsRes.json()
-          setDocuments(documentsData.documents || [])
+          const docsRaw = Array.isArray(documentsData) ? documentsData : (documentsData.documents || [])
+          const normalizedDocs: Document[] = docsRaw.map((d: any) => ({
+            id: d.id,
+            name: d.title || d.source || `doc-${d.id}`,
+            title: d.title,
+            upload_date: d.created_at || new Date().toISOString(),
+            type: 'doc',
+            status: 'ready',
+            chunk_count: d.chunk_count || 0,
+          }))
+          setDocuments(normalizedDocs)
         } else {
           // Mock data for unassigned documents
           setDocuments([
@@ -575,24 +611,69 @@ export default function CollectionsPage() {
 
   const handleCreateCollection = async () => {
     try {
-      // In real app, make API call here
-      const newCollectionData: Collection = {
-        id: `collection-${Date.now()}`,
-        name: newCollection.name,
-        description: newCollection.description,
-        color: newCollection.color,
-        is_public: newCollection.is_public,
-        is_starred: false,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-        document_count: 0,
-        total_chunks: 0,
-        access_level: newCollection.is_public ? 'public' : 'private',
-        tags: newCollection.tags,
-        processing_status: 'idle'
+      if (editingCollection) {
+        const res = await fetch(`${API_BASE}/collections/${editingCollection.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', 'bypass-tunnel-reminder': 'true' },
+          body: JSON.stringify({
+            name: newCollection.name,
+            description: newCollection.description,
+            color: newCollection.color,
+            // Treat public as shared visibility flag in metadata
+            metadata: newCollection.is_public ? { visibility: 'public' } : { visibility: 'private' }
+          })
+        })
+        if (!res.ok) throw new Error(`Failed to update collection`)
+        const c = await res.json()
+        // normalize
+        const nc: Collection = {
+          id: c.id,
+          name: c.name,
+          description: c.description || '',
+          color: c.color || '#6366f1',
+          is_public: (c.metadata && (c.metadata.visibility === 'public' || c.metadata.is_public === true)) || false,
+          is_starred: editingCollection.is_starred,
+          created_at: c.created_at || new Date().toISOString(),
+          updated_at: c.updated_at || new Date().toISOString(),
+          document_count: c.document_count || 0,
+          total_chunks: 0,
+          access_level: ((c.metadata && c.metadata.visibility === 'public') ? 'public' : (c.is_shared ? 'shared' : 'private')) as any,
+          tags: (c.metadata && c.metadata.tags) || [],
+          processing_status: 'idle',
+        }
+        setCollections(prev => prev.map(x => x.id === nc.id ? nc : x))
+      } else {
+        const res = await fetch(`${API_BASE}/collections`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'bypass-tunnel-reminder': 'true' },
+          body: JSON.stringify({
+            name: newCollection.name,
+            description: newCollection.description,
+            color: newCollection.color,
+            icon: 'folder',
+            is_shared: newCollection.is_public,
+            metadata: newCollection.is_public ? { visibility: 'public', tags: newCollection.tags } : { visibility: 'private', tags: newCollection.tags }
+          })
+        })
+        if (!res.ok) throw new Error(`Failed to create collection`)
+        const c = await res.json()
+        const nc: Collection = {
+          id: c.id,
+          name: c.name,
+          description: c.description || '',
+          color: c.color || '#6366f1',
+          is_public: (c.metadata && (c.metadata.visibility === 'public' || c.metadata.is_public === true)) || false,
+          is_starred: false,
+          created_at: c.created_at || new Date().toISOString(),
+          updated_at: c.updated_at || new Date().toISOString(),
+          document_count: c.document_count || 0,
+          total_chunks: 0,
+          access_level: ((c.metadata && c.metadata.visibility === 'public') ? 'public' : (c.is_shared ? 'shared' : 'private')) as any,
+          tags: (c.metadata && c.metadata.tags) || [],
+          processing_status: 'idle',
+        }
+        setCollections(prev => [...prev, nc])
       }
-
-      setCollections(prev => [...prev, newCollectionData])
       setShowCreateDialog(false)
       setNewCollection({
         name: '',
@@ -601,6 +682,7 @@ export default function CollectionsPage() {
         is_public: false,
         tags: []
       })
+      setEditingCollection(null)
     } catch (error) {
       console.error('Failed to create collection:', error)
     }
@@ -621,8 +703,17 @@ export default function CollectionsPage() {
     }
   }
 
-  const handleDeleteCollection = (id: string) => {
-    setCollections(prev => prev.filter(c => c.id !== id))
+  const handleDeleteCollection = async (id: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/collections/${id}`, {
+        method: 'DELETE',
+        headers: { 'bypass-tunnel-reminder': 'true' }
+      })
+      if (!res.ok) throw new Error('Delete failed')
+      setCollections(prev => prev.filter(c => c.id !== id))
+    } catch (e) {
+      console.error('Failed to delete collection', e)
+    }
   }
 
   const handleToggleStar = (id: string) => {
@@ -631,14 +722,26 @@ export default function CollectionsPage() {
     ))
   }
 
-  const handleTogglePublic = (id: string) => {
-    setCollections(prev => prev.map(c => 
-      c.id === id ? { 
-        ...c, 
-        is_public: !c.is_public,
-        access_level: c.is_public ? 'private' : 'public'
-      } : c
-    ))
+  const handleTogglePublic = async (id: string) => {
+    try {
+      const current = collections.find(c => c.id === id)
+      const makePublic = !current?.is_public
+      const res = await fetch(`${API_BASE}/collections/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'bypass-tunnel-reminder': 'true' },
+        body: JSON.stringify({ metadata: makePublic ? { visibility: 'public' } : { visibility: 'private' } })
+      })
+      if (!res.ok) throw new Error('Toggle failed')
+      setCollections(prev => prev.map(c => 
+        c.id === id ? { 
+          ...c, 
+          is_public: makePublic,
+          access_level: makePublic ? 'public' : (c.access_level === 'public' ? 'private' : c.access_level)
+        } : c
+      ))
+    } catch (e) {
+      console.error('Failed to toggle visibility', e)
+    }
   }
 
   const handleAddTag = () => {
@@ -665,22 +768,31 @@ export default function CollectionsPage() {
     setDraggedDocument(document || null)
   }
 
-  const handleDragEnd = (event: DragEndEvent) => {
+  const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event
     
     if (over && active.id !== over.id) {
       const documentId = active.id as string
       const collectionId = over.id as string
       
-      // Move document to collection
-      setDocuments(prev => prev.map(doc => 
-        doc.id === documentId ? { ...doc, collection_id: collectionId } : doc
-      ))
-      
-      // Update collection document count
-      setCollections(prev => prev.map(col => 
-        col.id === collectionId ? { ...col, document_count: col.document_count + 1 } : col
-      ))
+      try {
+        const res = await fetch(`${API_BASE}/collections/${collectionId}/documents`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'bypass-tunnel-reminder': 'true' },
+          body: JSON.stringify({ document_ids: [documentId] })
+        })
+        if (!res.ok) throw new Error('Failed to add document to collection')
+        // Move document to collection locally
+        setDocuments(prev => prev.map(doc => 
+          doc.id === documentId ? { ...doc, collection_id: collectionId } : doc
+        ))
+        // Update collection document count
+        setCollections(prev => prev.map(col => 
+          col.id === collectionId ? { ...col, document_count: col.document_count + 1 } : col
+        ))
+      } catch (e) {
+        console.error('Add to collection failed', e)
+      }
     }
     
     setActiveId(null)
@@ -871,9 +983,13 @@ export default function CollectionsPage() {
                   key={collection.id}
                   collection={collection}
                   onDrop={(documentId, collectionId) => {
-                    // Handle drop logic here
+                    // Drop handling is performed in onDragEnd global handler
                   }}
                   isActive={!!activeId}
+                  onEdit={handleEditCollection}
+                  onDelete={handleDeleteCollection}
+                  onToggleStar={handleToggleStar}
+                  onTogglePublic={handleTogglePublic}
                 />
               ))}
             </div>
@@ -1079,33 +1195,61 @@ export default function CollectionsPage() {
                   </h3>
                   
                   <div className="space-y-3 max-h-96 overflow-y-auto">
-                    {collections.map((collection) => (
-                      <div
-                        key={collection.id}
-                        className="p-3 border rounded-lg bg-card hover:shadow-sm transition-shadow"
-                      >
-                        <div className="flex items-center gap-3 mb-2">
-                          <div 
-                            className="w-8 h-8 rounded-lg flex items-center justify-center"
-                            style={{ backgroundColor: collection.color }}
-                          >
-                            <Database className="w-4 h-4 text-white" />
+                    {collections.map((collection) => {
+                      const assigned = documents.filter(d => d.collection_id === collection.id)
+                      return (
+                        <div
+                          key={collection.id}
+                          className="p-3 border rounded-lg bg-card hover:shadow-sm transition-shadow"
+                        >
+                          <div className="flex items-center gap-3 mb-2">
+                            <div 
+                              className="w-8 h-8 rounded-lg flex items-center justify-center"
+                              style={{ backgroundColor: collection.color }}
+                            >
+                              <Database className="w-4 h-4 text-white" />
+                            </div>
+                            <div className="flex-1">
+                              <p className="font-medium text-sm">{collection.name}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {collection.document_count} documents
+                              </p>
+                            </div>
                           </div>
-                          <div className="flex-1">
-                            <p className="font-medium text-sm">{collection.name}</p>
-                            <p className="text-xs text-muted-foreground">
-                              {collection.document_count} documents
-                            </p>
-                          </div>
+
+                          {activeId && (
+                            <div className="border-2 border-dashed border-primary/30 rounded-lg p-2 text-center text-sm text-muted-foreground mb-2">
+                              Drop document here to add to collection
+                            </div>
+                          )}
+
+                          {assigned.length > 0 ? (
+                            <div className="space-y-2">
+                              {assigned.map((doc) => (
+                                <DraggableDocument
+                                  key={doc.id}
+                                  document={doc}
+                                  onRemove={async (docId) => {
+                                    try {
+                                      await fetch(`${API_BASE}/collections/${collection.id}/documents/${docId}`, {
+                                        method: 'DELETE',
+                                        headers: { 'bypass-tunnel-reminder': 'true' }
+                                      })
+                                    } catch (e) {
+                                      console.error('Failed to remove from collection', e)
+                                    }
+                                    setDocuments(prev => prev.map(d => d.id === docId ? { ...d, collection_id: undefined } : d))
+                                    setCollections(prev => prev.map(col => col.id === collection.id ? { ...col, document_count: Math.max(0, col.document_count - 1) } : col))
+                                  }}
+                                />
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-xs text-muted-foreground">No documents yet</p>
+                          )}
                         </div>
-                        
-                        {activeId && (
-                          <div className="border-2 border-dashed border-primary/30 rounded-lg p-2 text-center text-sm text-muted-foreground">
-                            Drop document here to add to collection
-                          </div>
-                        )}
-                      </div>
-                    ))}
+                      )
+                    })}
                   </div>
                 </div>
               </div>

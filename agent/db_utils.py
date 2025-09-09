@@ -699,10 +699,221 @@ async def create_collection_db(
         }
 
 
+async def update_collection_db(
+    collection_id: str,
+    *,
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+    color: Optional[str] = None,
+    icon: Optional[str] = None,
+    is_shared: Optional[bool] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Update an existing collection with provided fields.
+
+    Returns the updated collection dict, or None if not found.
+    """
+    async with db_pool.acquire() as conn:
+        sets = []
+        params = []
+        if name is not None:
+            sets.append(f"name = ${len(params)+1}")
+            params.append(name)
+        if description is not None:
+            sets.append(f"description = ${len(params)+1}")
+            params.append(description)
+        if color is not None:
+            sets.append(f"color = ${len(params)+1}")
+            params.append(color)
+        if icon is not None:
+            sets.append(f"icon = ${len(params)+1}")
+            params.append(icon)
+        if is_shared is not None:
+            sets.append(f"is_shared = ${len(params)+1}")
+            params.append(is_shared)
+        if metadata is not None:
+            sets.append(f"metadata = ${len(params)+1}::jsonb")
+            params.append(json.dumps(metadata))
+
+        if not sets:
+            # Nothing to update; return current row
+            row = await conn.fetchrow(
+                """
+                SELECT 
+                    id::text as id, name, description, color, icon, created_by, is_shared,
+                    workspace_id::text as workspace_id, document_count, total_size, last_accessed,
+                    metadata, created_at, updated_at
+                FROM collections WHERE id = $1::uuid
+                """,
+                collection_id,
+            )
+            if not row:
+                return None
+            return {
+                "id": row["id"],
+                "name": row["name"],
+                "description": row["description"],
+                "color": row["color"],
+                "icon": row["icon"],
+                "created_by": row["created_by"],
+                "is_shared": row["is_shared"],
+                "workspace_id": row["workspace_id"],
+                "document_count": row["document_count"],
+                "total_size": row["total_size"],
+                "last_accessed": row["last_accessed"].isoformat() if row["last_accessed"] else None,
+                "metadata": row["metadata"] if isinstance(row["metadata"], dict) else (json.loads(row["metadata"]) if row["metadata"] else {}),
+                "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+                "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+            }
+
+        sets.append("updated_at = CURRENT_TIMESTAMP")
+        update_sql = f"UPDATE collections SET {', '.join(sets)} WHERE id = ${len(params)+1}::uuid RETURNING \
+            id::text as id, name, description, color, icon, created_by, is_shared, \
+            workspace_id::text as workspace_id, document_count, total_size, last_accessed, \
+            metadata, created_at, updated_at"
+        row = await conn.fetchrow(update_sql, *params, collection_id)
+        if not row:
+            return None
+        return {
+            "id": row["id"],
+            "name": row["name"],
+            "description": row["description"],
+            "color": row["color"],
+            "icon": row["icon"],
+            "created_by": row["created_by"],
+            "is_shared": row["is_shared"],
+            "workspace_id": row["workspace_id"],
+            "document_count": row["document_count"],
+            "total_size": row["total_size"],
+            "last_accessed": row["last_accessed"].isoformat() if row["last_accessed"] else None,
+            "metadata": row["metadata"] if isinstance(row["metadata"], dict) else (json.loads(row["metadata"]) if row["metadata"] else {}),
+            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+            "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+        }
+
+
+async def delete_collection_db(collection_id: str) -> bool:
+    """Delete a collection by ID (cascades to membership)."""
+    async with db_pool.acquire() as conn:
+        result = await conn.execute("DELETE FROM collections WHERE id = $1::uuid", collection_id)
+        rows_affected = int(result.split()[-1]) if result and result.startswith("DELETE") else 0
+        return rows_affected > 0
+
+
+async def add_documents_to_collection_db(
+    collection_id: str,
+    document_ids: List[str],
+    added_by: Optional[str] = None,
+) -> int:
+    """Add documents to a collection. Returns number of inserts (ignoring existing)."""
+    if not document_ids:
+        return 0
+    async with db_pool.acquire() as conn:
+        inserted = 0
+        async with conn.transaction():
+            for doc_id in document_ids:
+                try:
+                    await conn.execute(
+                        """
+                        INSERT INTO collection_documents (collection_id, document_id, added_by)
+                        VALUES ($1::uuid, $2::uuid, $3)
+                        ON CONFLICT (collection_id, document_id) DO NOTHING
+                        """,
+                        collection_id,
+                        doc_id,
+                        added_by,
+                    )
+                    inserted += 1
+                except Exception:
+                    # ignore duplicates or bad ids
+                    continue
+            # Sync document_count
+            await conn.execute(
+                """
+                UPDATE collections c
+                SET document_count = (
+                    SELECT COUNT(*) FROM collection_documents cd WHERE cd.collection_id = c.id
+                ), updated_at = CURRENT_TIMESTAMP
+                WHERE c.id = $1::uuid
+                """,
+                collection_id,
+            )
+        return inserted
+
+
+async def remove_document_from_collection_db(collection_id: str, document_id: str) -> bool:
+    """Remove a single document from a collection."""
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            result = await conn.execute(
+                "DELETE FROM collection_documents WHERE collection_id = $1::uuid AND document_id = $2::uuid",
+                collection_id,
+                document_id,
+            )
+            rows = int(result.split()[-1]) if result and result.startswith("DELETE") else 0
+            await conn.execute(
+                """
+                UPDATE collections c
+                SET document_count = (
+                    SELECT COUNT(*) FROM collection_documents cd WHERE cd.collection_id = c.id
+                ), updated_at = CURRENT_TIMESTAMP
+                WHERE c.id = $1::uuid
+                """,
+                collection_id,
+            )
+            return rows > 0
+
+
+async def list_collection_documents_db(
+    collection_id: str,
+    *,
+    limit: int = 100,
+    offset: int = 0,
+) -> Tuple[List[Dict[str, Any]], int]:
+    """List documents that belong to a collection (with chunk_count)."""
+    async with db_pool.acquire() as conn:
+        total = await conn.fetchval(
+            "SELECT COUNT(*) FROM collection_documents WHERE collection_id = $1::uuid",
+            collection_id,
+        )
+        rows = await conn.fetch(
+            """
+            SELECT d.id::text as id, d.title, d.source, d.metadata, d.created_at, d.updated_at,
+                   COUNT(c.id) AS chunk_count
+            FROM collection_documents cd
+            JOIN documents d ON cd.document_id = d.id
+            LEFT JOIN chunks c ON c.document_id = d.id
+            WHERE cd.collection_id = $1::uuid
+            GROUP BY d.id, d.title, d.source, d.metadata, d.created_at, d.updated_at
+            ORDER BY d.created_at DESC
+            LIMIT $2 OFFSET $3
+            """,
+            collection_id,
+            limit,
+            offset,
+        )
+        docs = [
+            {
+                "id": r["id"],
+                "title": r["title"],
+                "source": r["source"],
+                "metadata": r["metadata"] if isinstance(r["metadata"], dict) else (json.loads(r["metadata"]) if r["metadata"] else {}),
+                "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+                "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
+                "chunk_count": r["chunk_count"],
+            }
+            for r in rows
+        ]
+        return docs, int(total or 0)
+
+
 # Vector Search Functions
 async def vector_search(
     embedding: List[float],
-    limit: int = 10
+    limit: int = 10,
+    collection_ids: Optional[List[str]] = None,
+    document_ids: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Perform vector similarity search.
@@ -718,20 +929,52 @@ async def vector_search(
         # Convert embedding to PostgreSQL vector string format
         # PostgreSQL vector format: '[1.0,2.0,3.0]' (no spaces after commas)
         embedding_str = '[' + ','.join(map(str, embedding)) + ']'
-        
-        results = await conn.fetch(
-            "SELECT * FROM match_chunks($1::vector, $2)",
-            embedding_str,
-            limit
-        )
-        
+
+        # If no filters provided, use optimized SQL function
+        if not collection_ids and not document_ids:
+            results = await conn.fetch(
+                "SELECT * FROM match_chunks($1::vector, $2)",
+                embedding_str,
+                limit
+            )
+        else:
+            # Inline the function with additional filters
+            # Build dynamic WHERE fragments
+            where_clauses = ["c.embedding IS NOT NULL"]
+            params = [embedding_str]
+            if document_ids:
+                where_clauses.append(f"d.id = ANY(${len(params) + 1}::uuid[])")
+                params.append(document_ids)
+            if collection_ids:
+                where_clauses.append(
+                    f"d.id IN (SELECT document_id FROM collection_documents WHERE collection_id = ANY(${len(params) + 1}::uuid[]))"
+                )
+                params.append(collection_ids)
+
+            query = f"""
+                SELECT
+                    c.id AS chunk_id,
+                    c.document_id,
+                    c.content,
+                    (1 - (c.embedding <=> $1::vector))::double precision AS similarity,
+                    c.metadata,
+                    d.title AS document_title,
+                    d.source AS document_source
+                FROM chunks c
+                JOIN documents d ON c.document_id = d.id
+                WHERE {' AND '.join(where_clauses)}
+                ORDER BY c.embedding <=> $1::vector
+                LIMIT {limit}
+            """
+            results = await conn.fetch(query, *params)
+
         return [
             {
                 "chunk_id": row["chunk_id"],
                 "document_id": row["document_id"],
                 "content": row["content"],
                 "similarity": row["similarity"],
-                "metadata": json.loads(row["metadata"]),
+                "metadata": json.loads(row["metadata"]) if isinstance(row["metadata"], str) else (row["metadata"] or {}),
                 "document_title": row["document_title"],
                 "document_source": row["document_source"]
             }
@@ -743,7 +986,9 @@ async def hybrid_search(
     embedding: List[float],
     query_text: str,
     limit: int = 10,
-    text_weight: float = 0.3
+    text_weight: float = 0.3,
+    collection_ids: Optional[List[str]] = None,
+    document_ids: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Perform hybrid search (vector + keyword).
@@ -761,15 +1006,81 @@ async def hybrid_search(
         # Convert embedding to PostgreSQL vector string format
         # PostgreSQL vector format: '[1.0,2.0,3.0]' (no spaces after commas)
         embedding_str = '[' + ','.join(map(str, embedding)) + ']'
-        
-        results = await conn.fetch(
-            "SELECT * FROM hybrid_search($1::vector, $2, $3, $4)",
-            embedding_str,
-            query_text,
-            limit,
-            text_weight
-        )
-        
+
+        if not collection_ids and not document_ids:
+            results = await conn.fetch(
+                "SELECT * FROM hybrid_search($1::vector, $2, $3, $4)",
+                embedding_str,
+                query_text,
+                limit,
+                text_weight
+            )
+        else:
+            # Inline hybrid query with filters
+            params = [embedding_str, query_text]
+            vector_where = ["c.embedding IS NOT NULL"]
+            text_where = ["to_tsvector('english', c.content) @@ plainto_tsquery('english', $2)"]
+            if document_ids:
+                vector_where.append(f"d.id = ANY(${len(params) + 1}::uuid[])")
+                text_where.append(f"d.id = ANY(${len(params) + 1}::uuid[])")
+                params.append(document_ids)
+            if collection_ids:
+                vector_where.append(
+                    f"d.id IN (SELECT document_id FROM collection_documents WHERE collection_id = ANY(${len(params) + 1}::uuid[]))"
+                )
+                text_where.append(
+                    f"d.id IN (SELECT document_id FROM collection_documents WHERE collection_id = ANY(${len(params) + 1}::uuid[]))"
+                )
+                params.append(collection_ids)
+
+            query = f"""
+                WITH vector_results AS (
+                    SELECT
+                        c.id AS chunk_id,
+                        c.document_id,
+                        c.content,
+                        (1 - (c.embedding <=> $1::vector))::double precision AS vector_sim,
+                        c.metadata,
+                        d.title AS doc_title,
+                        d.source AS doc_source
+                    FROM chunks c
+                    JOIN documents d ON c.document_id = d.id
+                    WHERE {' AND '.join(vector_where)}
+                ),
+                text_results AS (
+                    SELECT
+                        c.id AS chunk_id,
+                        c.document_id,
+                        c.content,
+                        ts_rank_cd(to_tsvector('english', c.content), plainto_tsquery('english', $2))::double precision AS text_sim,
+                        c.metadata,
+                        d.title AS doc_title,
+                        d.source AS doc_source
+                    FROM chunks c
+                    JOIN documents d ON c.document_id = d.id
+                    WHERE {' AND '.join(text_where)}
+                )
+                SELECT
+                    COALESCE(v.chunk_id, t.chunk_id) AS chunk_id,
+                    COALESCE(v.document_id, t.document_id) AS document_id,
+                    COALESCE(v.content, t.content) AS content,
+                    (COALESCE(v.vector_sim, 0::double precision) * (1 - $4) + COALESCE(t.text_sim, 0::double precision) * $4) AS combined_score,
+                    COALESCE(v.vector_sim, 0::double precision) AS vector_similarity,
+                    COALESCE(t.text_sim, 0::double precision) AS text_similarity,
+                    COALESCE(v.metadata, t.metadata) AS metadata,
+                    COALESCE(v.doc_title, t.doc_title) AS document_title,
+                    COALESCE(v.doc_source, t.doc_source) AS document_source
+                FROM vector_results v
+                FULL OUTER JOIN text_results t ON v.chunk_id = t.chunk_id
+                ORDER BY combined_score DESC
+                LIMIT {limit}
+            """
+            # Append text_weight as $4
+            # Ensure params align: $1 embedding, $2 query_text, optional arrays, $4 text_weight
+            # If we added filters, $3 may be arrays; but in the constructed query we embed limit, not params index.
+            # We pass text_weight at the end to occupy $4.
+            results = await conn.fetch(query, *params, text_weight)
+
         return [
             {
                 "chunk_id": row["chunk_id"],
@@ -778,7 +1089,7 @@ async def hybrid_search(
                 "combined_score": row["combined_score"],
                 "vector_similarity": row["vector_similarity"],
                 "text_similarity": row["text_similarity"],
-                "metadata": json.loads(row["metadata"]),
+                "metadata": json.loads(row["metadata"]) if isinstance(row["metadata"], str) else (row["metadata"] or {}),
                 "document_title": row["document_title"],
                 "document_source": row["document_source"]
             }

@@ -83,9 +83,13 @@ async def vector_search(
     Returns:
         List of matching chunks ordered by similarity (best first)
     """
+    # Include optional scoping filters from dependencies
+    filters = getattr(getattr(ctx, 'deps', None), 'search_preferences', {}) or {}
     input_data = VectorSearchInput(
         query=query,
-        limit=limit
+        limit=limit,
+        collection_ids=filters.get('collection_ids'),
+        document_ids=filters.get('document_ids'),
     )
     
     # Emit retrieval start
@@ -243,10 +247,14 @@ async def hybrid_search(
     Returns:
         List of chunks ranked by combined relevance score
     """
+    # Include optional scoping filters from dependencies
+    filters = getattr(getattr(ctx, 'deps', None), 'search_preferences', {}) or {}
     input_data = HybridSearchInput(
         query=query,
         limit=limit,
-        text_weight=text_weight
+        text_weight=text_weight,
+        collection_ids=filters.get('collection_ids'),
+        document_ids=filters.get('document_ids'),
     )
     
     # Emit retrieval start
