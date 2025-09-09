@@ -282,8 +282,23 @@ async def handle_websocket_chat(websocket: WebSocket, client_id: str, data: dict
         # Track the message
         start_time = datetime.now()
         
-        # Process with agent
-        deps = AgentDependencies(session_id=session_id)
+        # Process with agent  
+        # Extract collection and document filters from data metadata if available
+        metadata = data.get("metadata", {})
+        selected_collections = metadata.get('selectedCollections', [])
+        selected_documents = metadata.get('selectedDocuments', [])
+        
+        # Create search preferences with collection/document filtering
+        search_preferences = {}
+        if selected_collections:
+            search_preferences['collection_ids'] = selected_collections
+        if selected_documents:
+            search_preferences['document_ids'] = selected_documents
+            
+        deps = AgentDependencies(
+            session_id=session_id,
+            search_preferences=search_preferences if search_preferences else None
+        )
         
         # Stream response
         await websocket.send_json({
@@ -558,6 +573,7 @@ async def create_workflow(workflow_request: CreateWorkflowRequest):
 
 # Enhanced existing endpoints with analytics tracking
 @app.post("/api/chat/stream")
+@app.post("/chat/stream")  # Also handle the path without /api prefix for compatibility
 async def chat_stream(chat_request: ChatRequest):
     """Enhanced streaming chat with analytics tracking."""
     session_id, is_new_session = await get_or_create_session(chat_request.session_id)
@@ -566,7 +582,22 @@ async def chat_stream(chat_request: ChatRequest):
     
     async def generate_response():
         try:
-            deps = AgentDependencies(session_id=session_id)
+            # Extract collection and document filters from request metadata
+            metadata = chat_request.metadata or {}
+            selected_collections = metadata.get('selectedCollections', [])
+            selected_documents = metadata.get('selectedDocuments', [])
+            
+            # Create search preferences with collection/document filtering
+            search_preferences = {}
+            if selected_collections:
+                search_preferences['collection_ids'] = selected_collections
+            if selected_documents:
+                search_preferences['document_ids'] = selected_documents
+            
+            deps = AgentDependencies(
+                session_id=session_id,
+                search_preferences=search_preferences if search_preferences else None
+            )
             
             tools_used = []
             response_text = ""
