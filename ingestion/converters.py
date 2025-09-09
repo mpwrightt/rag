@@ -47,14 +47,48 @@ def convert_to_markdown(file_path: str) -> Tuple[str, Dict[str, Any]]:
             return text, meta
 
         if ext == "pdf":
+            # First attempt: pdfminer text extraction
             try:
                 from pdfminer.high_level import extract_text
                 text = extract_text(str(p)) or ""
-                return text, meta
+                if text.strip():
+                    return text, meta
+                else:
+                    logger.warning("PDF conversion via pdfminer returned empty text for %s", p.name)
             except Exception as e:
                 logger.warning("PDF conversion failed via pdfminer: %s", e)
-                # Fallback to binary decode
-                return _read_text(str(p)), {**meta, "warning": "pdfminer failed"}
+
+            # Optional OCR fallback if enabled
+            if os.getenv("OCR_PDF", "0").lower() in {"1", "true", "yes", "on"}:
+                try:
+                    from pdf2image import convert_from_path
+                    import pytesseract
+                    from PIL import Image
+                except Exception as e:
+                    logger.warning("OCR requested but pdf2image/pytesseract/Pillow not available: %s", e)
+                else:
+                    try:
+                        poppler_path = os.getenv("POPPLER_PATH") or None
+                        # Convert up to first 20 pages to limit processing time
+                        images = convert_from_path(str(p), dpi=300, fmt="jpeg", poppler_path=poppler_path)
+                        ocr_pages = []
+                        for idx, img in enumerate(images):
+                            if idx >= 20:
+                                break
+                            if not isinstance(img, Image.Image):
+                                img = img.convert("RGB")
+                            txt = pytesseract.image_to_string(img)
+                            if txt and txt.strip():
+                                ocr_pages.append(txt)
+                        if ocr_pages:
+                            return "\n\n".join(ocr_pages), {**meta, "note": "ocr_fallback"}
+                        else:
+                            logger.warning("OCR produced no text for %s", p.name)
+                    except Exception as e:
+                        logger.warning("OCR fallback failed: %s", e)
+
+            # Final fallback: try raw decode
+            return _read_text(str(p)), {**meta, "warning": "pdf extraction failed; raw decode used"}
 
         if ext in {"docx"}:
             try:

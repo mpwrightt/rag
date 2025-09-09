@@ -1603,7 +1603,7 @@ async def upload_document(file: UploadFile = File(...)):
     
     try:
         # Validate file type
-        allowed_extensions = {'.txt', '.md', '.pdf', '.docx', '.doc'}
+        allowed_extensions = {'.txt', '.md', '.pdf', '.doc', '.docx', '.xls', '.xlsx'}
         file_extension = os.path.splitext(file.filename)[1].lower() if file.filename else ''
         
         if file_extension not in allowed_extensions:
@@ -1612,22 +1612,32 @@ async def upload_document(file: UploadFile = File(...)):
                 detail=f"File type {file_extension} not supported. Allowed: {', '.join(allowed_extensions)}"
             )
         
-        # Validate file size (10MB limit)
-        max_size = 10 * 1024 * 1024  # 10MB
-        file_content = await file.read()
-        if len(file_content) > max_size:
-            raise HTTPException(
-                status_code=413,
-                detail=f"File too large. Maximum size is 10MB, got {len(file_content) / 1024 / 1024:.1f}MB"
-            )
+        # Stream upload to disk with configurable size limit (default 200MB)
+        try:
+            max_mb = int(os.getenv("MAX_UPLOAD_MB", "200"))
+        except Exception:
+            max_mb = 200
+        max_size = max_mb * 1024 * 1024
         
         # Create temporary directory for processing
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_file_path = Path(temp_dir) / file.filename
             
-            # Write uploaded file to temporary location
+            # Write the uploaded file to disk in chunks to avoid high memory usage
+            size_bytes = 0
             with open(temp_file_path, 'wb') as temp_file:
-                temp_file.write(file_content)
+                chunk_size = 8 * 1024 * 1024  # 8MB
+                while True:
+                    chunk = await file.read(chunk_size)
+                    if not chunk:
+                        break
+                    size_bytes += len(chunk)
+                    if size_bytes > max_size:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"File too large. Maximum size is {max_mb}MB, got {size_bytes / 1024 / 1024:.1f}MB"
+                        )
+                    temp_file.write(chunk)
             
             # Create ingestion configuration
             config = IngestionConfig(
@@ -1683,7 +1693,7 @@ async def upload_document(file: UploadFile = File(...)):
                 "success": True,
                 "message": f"File {file.filename} uploaded and processed successfully",
                 "filename": file.filename,
-                "size": len(file_content),
+                "size": size_bytes,
                 "documents_processed": len(successful_results),
                 "chunks_created": total_chunks,
                 "embeddings_created": total_chunks,  # Each chunk gets an embedding

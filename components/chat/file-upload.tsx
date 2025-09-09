@@ -37,8 +37,17 @@ interface UploadedFile {
 export function FileUpload({ 
   onFilesAdded, 
   maxFiles = 5,
-  maxSize = 10 * 1024 * 1024, // 10MB
-  acceptedTypes = ['image/*', 'application/pdf', '.txt', '.md', '.docx'],
+  maxSize = (Number(process.env.NEXT_PUBLIC_MAX_UPLOAD_MB || '200')) * 1024 * 1024, // default 200MB
+  acceptedTypes = [
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    '.doc', '.docx', '.xls', '.xlsx',
+    '.txt', '.md',
+    'image/*'
+  ],
   disabled 
 }: FileUploadProps) {
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
@@ -100,20 +109,20 @@ export function FileUpload({
 
   return (
     <div className="space-y-4">
-      <motion.div
+      <div
         {...getRootProps()}
         className={cn(
           "border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-all duration-200",
           isDragActive 
-            ? "border-primary bg-primary/5 scale-105" 
+            ? "border-primary bg-primary/5" 
             : "border-muted-foreground/25 hover:border-primary/50 hover:bg-muted/50",
           disabled && "opacity-50 cursor-not-allowed"
         )}
-        whileHover={{ scale: disabled ? 1 : 1.02 }}
-        whileTap={{ scale: disabled ? 1 : 0.98 }}
       >
         <input {...getInputProps()} />
         <motion.div
+          whileHover={{ scale: disabled ? 1 : 1.02 }}
+          whileTap={{ scale: disabled ? 1 : 0.98 }}
           animate={{ y: isDragActive ? -10 : 0 }}
           transition={{ duration: 0.2 }}
         >
@@ -131,7 +140,7 @@ export function FileUpload({
             Max {maxFiles} files, up to {formatFileSize(maxSize)} each
           </p>
         </motion.div>
-      </motion.div>
+      </div>
 
       <AnimatePresence>
         {uploadedFiles.length > 0 && (
