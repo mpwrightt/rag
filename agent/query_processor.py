@@ -49,7 +49,9 @@ class QueryProcessor:
             'of', 'with', 'by', 'from', 'up', 'about', 'into', 'through', 'during',
             'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had',
             'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might',
-            'what', 'which', 'who', 'whom', 'when', 'where', 'why', 'how'
+            'what', 'which', 'who', 'whom', 'when', 'where', 'why', 'how',
+            # Conversational filler and generic reporting verbs
+            'report', 'reports', 'reported', 'say', 'says', 'said', 'regarding'
         }
         
         # Entity patterns

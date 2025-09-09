@@ -47,6 +47,7 @@ from .graph_utils import (
     get_entity_relationships as kg_get_entity_relationships,
     search_knowledge_graph as kg_search_knowledge_graph,
 )
+from .query_processor import QueryProcessor
 from .models import (
     ChatRequest,
     ChatResponse,
@@ -1162,8 +1163,16 @@ async def search_vector(request: SearchRequest):
 async def search_graph(request: SearchRequest):
     """Knowledge graph search endpoint."""
     try:
+        # Use query understanding to make NL queries graph-friendly
+        try:
+            qp = QueryProcessor()
+            processed = qp.process(request.query)
+            effective_query = processed.graph_query or processed.cleaned or request.query
+        except Exception:
+            effective_query = request.query
+
         input_data = GraphSearchInput(
-            query=request.query
+            query=effective_query
         )
 
         start_time = datetime.now()
@@ -1172,16 +1181,19 @@ async def search_graph(request: SearchRequest):
         # Hard fallback: if no results via tool, hit DB directly with broader websearch
         if not results:
             try:
-                raw = await search_facts_websearch(request.query, request.limit)
+                # First try websearch on the optimized query
+                raw = await search_facts_websearch(effective_query, request.limit)
+                # If still nothing and we altered the query, try the original as a last resort
+                if not raw and effective_query != request.query:
+                    raw = await search_facts_websearch(request.query, request.limit)
                 fallback = [
                     GraphSearchResult(
                         fact=r.get("content", ""),
                         uuid=str(r.get("fact_id")),
                         valid_at=r.get("valid_at"),
                         invalid_at=r.get("invalid_at"),
-                        source_node_uuid=str(r.get("node_id")) if r.get("node_id") else None,
-                    )
-                    for r in raw
+                        source_node_uuid=str(r.get("node_id")) if r.get("node_id") else None
+                    ) for r in raw
                 ]
                 results = fallback
             except Exception as fe:
