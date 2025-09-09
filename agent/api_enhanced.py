@@ -321,18 +321,31 @@ async def handle_websocket_chat(websocket: WebSocket, client_id: str, data: dict
         response_text = ""
         tools_used = []
         
-        # Build conversation context with previous messages
-        conversation_context = ""
+        # Build conversation history for agent context
+        conversation_history = []
         if previous_messages:
             for msg in previous_messages[-10:]:  # Last 10 messages for context
-                role = msg['role']
-                content = msg['content'][:500]  # Truncate long messages
-                conversation_context += f"\n{role.upper()}: {content}"
-            conversation_context += f"\nUSER: {message}"
-        else:
-            conversation_context = message
+                conversation_history.append({
+                    "role": msg['role'],
+                    "content": msg['content']
+                })
         
-        async for chunk in rag_agent.run_stream(conversation_context, deps=deps):
+        # Add current user message to history
+        conversation_history.append({
+            "role": "user",
+            "content": message
+        })
+        
+        # Create context message that includes conversation history
+        if len(conversation_history) > 1:
+            context_message = "Previous conversation context:\n"
+            for msg in conversation_history[:-1]:  # All except current message
+                context_message += f"{msg['role'].upper()}: {msg['content'][:300]}...\n" if len(msg['content']) > 300 else f"{msg['role'].upper()}: {msg['content']}\n"
+            context_message += f"\nCurrent request: {message}"
+        else:
+            context_message = message
+        
+        async for chunk in rag_agent.run_stream(context_message, deps=deps):
             if hasattr(chunk, 'content') and chunk.content:
                 response_text += chunk.content
                 await websocket.send_json({
@@ -650,19 +663,32 @@ async def chat_stream(chat_request: ChatRequest):
             tools_used = []
             response_text = ""
             
-            # Build conversation context with previous messages
-            conversation_context = ""
+            # Build conversation history for agent context
+            conversation_history = []
             if previous_messages:
                 for msg in previous_messages[-10:]:  # Last 10 messages for context
-                    role = msg['role']
-                    content = msg['content'][:500]  # Truncate long messages
-                    conversation_context += f"\n{role.upper()}: {content}"
-                conversation_context += f"\nUSER: {chat_request.message}"
+                    conversation_history.append({
+                        "role": msg['role'],
+                        "content": msg['content']
+                    })
+            
+            # Add current user message to history
+            conversation_history.append({
+                "role": "user",
+                "content": chat_request.message
+            })
+            
+            # Create context message that includes conversation history
+            if len(conversation_history) > 1:
+                context_message = "Previous conversation context:\n"
+                for msg in conversation_history[:-1]:  # All except current message
+                    context_message += f"{msg['role'].upper()}: {msg['content'][:300]}...\n" if len(msg['content']) > 300 else f"{msg['role'].upper()}: {msg['content']}\n"
+                context_message += f"\nCurrent request: {chat_request.message}"
             else:
-                conversation_context = chat_request.message
+                context_message = chat_request.message
             
             # Stream the response
-            async for chunk in rag_agent.run_stream(conversation_context, deps=deps):
+            async for chunk in rag_agent.run_stream(context_message, deps=deps):
                 if hasattr(chunk, 'content') and chunk.content:
                     response_text += chunk.content
                     yield f"data: {json.dumps({'content': chunk.content, 'type': 'text'})}\n\n"
