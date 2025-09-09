@@ -791,6 +791,7 @@ async def chat_stream(request: ChatRequest):
                 full_response = ""
                 # Register live retrieval events listener for this session (graceful fallback)
                 retrieval_queue = None
+                guided_task = None
                 try:
                     retrieval_queue = register_retrieval_listener(session_id)
                     logger.info(f"Registered retrieval listener for session {session_id}, queue={retrieval_queue}")
@@ -839,9 +840,9 @@ async def chat_stream(request: ChatRequest):
                             logger.warning(f"Forced guided retrieval failed: {e}")
 
                     try:
-                        asyncio.create_task(_run_enhanced_retrieval())
+                        guided_task = asyncio.create_task(_run_enhanced_retrieval())
                     except Exception:
-                        pass
+                        guided_task = None
 
                 if use_mock:
                     # Emit mock staged retrieval events (guided_retrieval: graph -> vector)
@@ -998,6 +999,22 @@ async def chat_stream(request: ChatRequest):
 
                     tools_used = extract_tool_calls(result)
 
+                    # If we launched guided retrieval, give it a brief moment to finish and flush events
+                    if guided_task is not None:
+                        try:
+                            await asyncio.wait_for(guided_task, timeout=1.0)
+                        except Exception:
+                            pass
+
+                    # Final drain of retrieval events to ensure 'complete' and 'summary' reach the client
+                    if retrieval_queue is not None:
+                        try:
+                            while True:
+                                ev = retrieval_queue.get_nowait()
+                                yield f"data: {json.dumps({'type': 'retrieval', 'session_id': session_id, 'data': ev})}\n\n"
+                        except asyncio.QueueEmpty:
+                            pass
+                
                 # Final drain of retrieval events after model finished
                 if retrieval_queue is not None:
                     try:
