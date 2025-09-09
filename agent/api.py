@@ -760,7 +760,8 @@ async def api_add_documents_to_collection(collection_id: str, request: Request):
         raise
     except Exception as e:
         logger.exception("Failed to add documents to collection: %s", e)
-        raise HTTPException(status_code=500, detail="Failed to add documents to collection")
+        # Surface underlying error for debugging during integration
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.delete("/collections/{collection_id}/documents/{document_id}")

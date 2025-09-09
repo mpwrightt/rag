@@ -338,11 +338,14 @@ async def guided_retrieval(
     retriever = EnhancedRetriever()
     
     # Configuration for retrieval
+    filters = getattr(getattr(ctx, 'deps', None), 'search_preferences', {}) or {}
     config = {
         "use_graph": True,
         "use_vector": True,
         "use_query_expansion": True,
         "vector_limit": limit * 2,  # Get more candidates for reranking
+        "collection_ids": filters.get("collection_ids"),
+        "document_ids": filters.get("document_ids"),
     }
     
     # Execute enhanced retrieval
@@ -471,7 +474,13 @@ async def list_documents(
     Returns:
         List of documents with metadata and chunk counts
     """
-    input_data = DocumentListInput(limit=limit, offset=offset)
+    filters = getattr(getattr(ctx, 'deps', None), 'search_preferences', {}) or {}
+    input_data = DocumentListInput(
+        limit=limit,
+        offset=offset,
+        collection_ids=filters.get('collection_ids'),
+        document_ids=filters.get('document_ids'),
+    )
     
     documents = await list_documents_tool(input_data)
     

@@ -284,7 +284,9 @@ class EnhancedRetriever:
             # Initial vector search
             vector_input = VectorSearchInput(
                 query=query.vector_query,
-                limit=config.get("vector_limit", 20)
+                limit=config.get("vector_limit", 20),
+                collection_ids=config.get("collection_ids"),
+                document_ids=config.get("document_ids"),
             )
             raw_results = await vector_search_tool(vector_input)
             
@@ -306,7 +308,12 @@ class EnhancedRetriever:
             if config.get("use_query_expansion", True):
                 expanded_queries = self._expand_query(query)
                 for exp_query in expanded_queries[:2]:  # Top 2 expansions
-                    exp_input = VectorSearchInput(query=exp_query, limit=5)
+                    exp_input = VectorSearchInput(
+                        query=exp_query,
+                        limit=5,
+                        collection_ids=config.get("collection_ids"),
+                        document_ids=config.get("document_ids"),
+                    )
                     exp_results = await vector_search_tool(exp_input)
                     for r in exp_results:
                         # Slightly reduce score for expanded query results

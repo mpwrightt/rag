@@ -89,6 +89,8 @@ class DocumentListInput(BaseModel):
     """Input for listing documents."""
     limit: int = Field(default=20, description="Maximum number of documents")
     offset: int = Field(default=0, description="Number of documents to skip")
+    collection_ids: Optional[List[str]] = Field(default=None, description="Restrict listing to these collection UUIDs")
+    document_ids: Optional[List[str]] = Field(default=None, description="Restrict listing to these document UUIDs")
 
 
 class EntityRelationshipInput(BaseModel):
@@ -259,7 +261,9 @@ async def list_documents_tool(input_data: DocumentListInput) -> List[DocumentMet
     try:
         documents = await list_documents(
             limit=input_data.limit,
-            offset=input_data.offset
+            offset=input_data.offset,
+            collection_ids=input_data.collection_ids,
+            document_ids=input_data.document_ids,
         )
         
         # Convert to DocumentMetadata models

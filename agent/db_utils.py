@@ -396,7 +396,9 @@ async def get_document(document_id: str) -> Optional[Dict[str, Any]]:
 async def list_documents(
     limit: int = 100,
     offset: int = 0,
-    metadata_filter: Optional[Dict[str, Any]] = None
+    metadata_filter: Optional[Dict[str, Any]] = None,
+    collection_ids: Optional[List[str]] = None,
+    document_ids: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     List documents with optional filtering.
@@ -422,17 +424,27 @@ async def list_documents(
             FROM documents d
             LEFT JOIN chunks c ON d.id = c.document_id
         """
-        
-        params = []
-        conditions = []
-        
+
+        params: List[Any] = []
+        conditions: List[str] = []
+
         if metadata_filter:
             conditions.append(f"d.metadata @> ${len(params) + 1}::jsonb")
             params.append(json.dumps(metadata_filter))
-        
+
+        if document_ids:
+            conditions.append(f"d.id = ANY(${len(params) + 1}::uuid[])")
+            params.append(document_ids)
+
+        if collection_ids:
+            conditions.append(
+                f"d.id IN (SELECT document_id FROM collection_documents WHERE collection_id = ANY(${len(params) + 1}::uuid[]))"
+            )
+            params.append(collection_ids)
+
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
-        
+
         query += """
             GROUP BY d.id, d.title, d.source, d.metadata, d.created_at, d.updated_at
             ORDER BY d.created_at DESC
