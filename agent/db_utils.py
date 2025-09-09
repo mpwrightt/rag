@@ -806,29 +806,60 @@ async def add_documents_to_collection_db(
     document_ids: List[str],
     added_by: Optional[str] = None,
 ) -> int:
-    """Add documents to a collection. Returns number of inserts (ignoring existing)."""
+    """Add documents to a collection.
+    Returns number of rows actually inserted (ignores existing membership).
+    Defensive against invalid UUIDs and non-existent documents to avoid aborting the transaction.
+    """
     if not document_ids:
         return 0
+
+    # Sanitize and validate UUIDs client-side to prevent transaction aborts
+    valid_doc_ids: List[str] = []
+    for did in document_ids:
+        try:
+            valid_doc_ids.append(str(UUID(str(did))))
+        except Exception:
+            # Skip invalid UUID formats
+            continue
+
+    if not valid_doc_ids:
+        return 0
+
     async with db_pool.acquire() as conn:
-        inserted = 0
         async with conn.transaction():
-            for doc_id in document_ids:
-                try:
-                    await conn.execute(
-                        """
-                        INSERT INTO collection_documents (collection_id, document_id, added_by)
-                        VALUES ($1::uuid, $2::uuid, $3)
-                        ON CONFLICT (collection_id, document_id) DO NOTHING
-                        """,
-                        collection_id,
-                        doc_id,
-                        added_by,
-                    )
-                    inserted += 1
-                except Exception:
-                    # ignore duplicates or bad ids
-                    continue
-            # Sync document_count
+            # Ensure the collection exists (avoid fk violation on collection_id)
+            col_exists = await conn.fetchval(
+                "SELECT 1 FROM collections WHERE id = $1::uuid",
+                collection_id,
+            )
+            if not col_exists:
+                # Collection not found; raise to surface a 404 at API layer
+                raise ValueError("collection_not_found")
+
+            # Insert in bulk using UNNEST with conflict handling.
+            # Filter to only existing documents via JOIN to avoid FK violations.
+            inserted = await conn.fetchval(
+                """
+                WITH ids AS (
+                    SELECT d::uuid AS document_id
+                    FROM UNNEST($2::text[]) AS t(d)
+                ),
+                ins AS (
+                    INSERT INTO collection_documents (collection_id, document_id, added_by)
+                    SELECT $1::uuid, docs.id, $3
+                    FROM ids
+                    JOIN documents AS docs ON docs.id = ids.document_id
+                    ON CONFLICT (collection_id, document_id) DO NOTHING
+                    RETURNING 1
+                )
+                SELECT COALESCE(COUNT(*), 0)::int FROM ins
+                """,
+                collection_id,
+                valid_doc_ids,
+                added_by,
+            )
+
+            # Sync document_count for the collection
             await conn.execute(
                 """
                 UPDATE collections c
@@ -839,7 +870,8 @@ async def add_documents_to_collection_db(
                 """,
                 collection_id,
             )
-        return inserted
+
+            return int(inserted or 0)
 
 
 async def remove_document_from_collection_db(collection_id: str, document_id: str) -> bool:

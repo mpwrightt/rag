@@ -748,7 +748,13 @@ async def api_add_documents_to_collection(collection_id: str, request: Request):
         ids = body.get("document_ids") or []
         if not isinstance(ids, list) or not ids:
             raise HTTPException(status_code=400, detail="document_ids array required")
-        added = await add_documents_to_collection_db(collection_id, ids, added_by=request.headers.get("x-user-id"))
+        try:
+            added = await add_documents_to_collection_db(collection_id, ids, added_by=request.headers.get("x-user-id"))
+        except ValueError as ve:
+            # Surface clearer API errors
+            if str(ve) == "collection_not_found":
+                raise HTTPException(status_code=404, detail="Collection not found")
+            raise
         return {"added": added}
     except HTTPException:
         raise
