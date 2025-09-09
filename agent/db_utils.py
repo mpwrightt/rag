@@ -799,7 +799,7 @@ async def get_document_chunks(document_id: str) -> List[Dict[str, Any]]:
     """
     async with db_pool.acquire() as conn:
         results = await conn.fetch(
-            "SELECT * FROM get_document_chunks($1::uuid)",
+            "SELECT * FROM public.get_document_chunks($1::uuid)",
             document_id
         )
         
@@ -1054,7 +1054,7 @@ async def search_facts(
     """
     async with db_pool.acquire() as conn:
         results = await conn.fetch(
-            "SELECT * FROM search_facts($1, $2)",
+            "SELECT * FROM public.search_facts($1, $2)",
             query,
             limit
         )
@@ -1149,7 +1149,7 @@ async def get_entity_relationships(
     """
     async with db_pool.acquire() as conn:
         results = await conn.fetch(
-            "SELECT * FROM get_entity_relationships($1, $2)",
+            "SELECT * FROM public.get_entity_relationships($1, $2)",
             entity_name,
             depth
         )

@@ -36,6 +36,9 @@ from .db_utils import (
     delete_document,
     list_documents,
     get_document,
+    get_graph_statistics,
+    search_facts,
+    search_facts_websearch,
 )
 from .graph_utils import (
     initialize_graph,
@@ -55,6 +58,7 @@ from .models import (
     ToolCall,
     SourceResult,
     ChunkResult,
+    GraphSearchResult,
     RealTimeMetrics,
     ChatMetrics,
     DocumentUsageStats,
@@ -1144,13 +1148,31 @@ async def search_graph(request: SearchRequest):
         input_data = GraphSearchInput(
             query=request.query
         )
-        
+
         start_time = datetime.now()
         results = await graph_search_tool(input_data)
+
+        # Hard fallback: if no results via tool, hit DB directly with broader websearch
+        if not results:
+            try:
+                raw = await search_facts_websearch(request.query, request.limit)
+                fallback = [
+                    GraphSearchResult(
+                        fact=r.get("content", ""),
+                        uuid=str(r.get("fact_id")),
+                        valid_at=r.get("valid_at"),
+                        invalid_at=r.get("invalid_at"),
+                        source_node_uuid=str(r.get("node_id")) if r.get("node_id") else None,
+                    )
+                    for r in raw
+                ]
+                results = fallback
+            except Exception as fe:
+                logger.warning(f"KG fallback (websearch) failed: {fe}")
+
         end_time = datetime.now()
-        
         query_time = (end_time - start_time).total_seconds() * 1000
-        
+
         return SearchResponse(
             graph_results=results,
             total_results=len(results),
@@ -1160,6 +1182,23 @@ async def search_graph(request: SearchRequest):
         
     except Exception as e:
         logger.error(f"Graph search failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/graph/stats")
+async def graph_stats():
+    """Return live knowledge graph statistics (nodes, edges, facts)."""
+    try:
+        stats = await get_graph_statistics()
+        # Ensure a predictable JSON shape
+        return {
+            "graph_initialized": bool(stats.get("graph_initialized", True)),
+            "total_nodes": int(stats.get("total_nodes", 0) or 0),
+            "total_edges": int(stats.get("total_edges", 0) or 0),
+            "total_facts": int(stats.get("total_facts", 0) or 0),
+            "nodes_by_type": stats.get("nodes_by_type", {})
+        }
+    except Exception as e:
+        logger.error(f"Graph stats failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
