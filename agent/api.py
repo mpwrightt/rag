@@ -17,7 +17,7 @@ from datetime import datetime
 import uuid
 
 from fastapi import FastAPI, HTTPException, Request, Depends, UploadFile, File, Form
-from fastapi.responses import StreamingResponse, Response
+from fastapi.responses import StreamingResponse, Response, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 import uvicorn
@@ -49,6 +49,12 @@ from .db_utils import (
     add_documents_to_collection_db,
     remove_document_from_collection_db,
     list_collection_documents_db,
+    # Summary jobs
+    create_summary_job,
+    update_summary_job_status,
+    set_summary_job_result,
+    get_summary_job,
+    cancel_summary_job,
 )
 from .graph_utils import (
     initialize_graph,
@@ -1654,6 +1660,98 @@ async def generate_dbr_summary(
     except Exception as e:
         logger.error(f"DBR summary generation failed: {e}")
         raise HTTPException(status_code=500, detail=f"Summary generation failed: {str(e)}")
+
+
+@app.post("/documents/{document_id}/summary_async")
+async def start_dbr_summary_job(
+    document_id: str,
+    request: Request
+):
+    """
+    Start an asynchronous summary generation job and return a job_id immediately.
+    This avoids long-running HTTP requests that can time out on proxies.
+    """
+    try:
+        from .summarizer import dbr_summarizer
+
+        try:
+            body = await request.json() if request else {}
+        except Exception:
+            body = {}
+
+        include_context = body.get("include_context", True)
+        context_queries = body.get("context_queries")
+        summary_type = body.get("summary_type", "comprehensive")
+        force_regenerate = body.get("force_regenerate", False)
+
+        job_id = await create_summary_job(document_id, summary_type)
+
+        async def _run_job():
+            await update_summary_job_status(job_id, "running")
+            try:
+                result = await dbr_summarizer.summarize_dbr(
+                    document_id=document_id,
+                    include_context=include_context,
+                    context_queries=context_queries,
+                    summary_type=summary_type,
+                    force_regenerate=force_regenerate,
+                    job_id=job_id,
+                )
+                await set_summary_job_result(job_id, result)
+            except Exception as e:
+                logger.exception("Async summary job failed: %s", e)
+                await update_summary_job_status(job_id, "error", error=str(e))
+
+        # Fire-and-forget
+        asyncio.create_task(_run_job())
+
+        return JSONResponse(status_code=202, content={
+            "job_id": job_id,
+            "status": "queued",
+            "document_id": document_id,
+            "summary_type": summary_type,
+        })
+    except Exception as e:
+        logger.error(f"Failed to start summary job: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to start job: {str(e)}")
+
+
+@app.get("/jobs/{job_id}/status")
+async def get_job_status(job_id: str):
+    job = await get_summary_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    # Do not include the full result here to keep polling payload small
+    job.pop("result", None)
+    # Normalize keys for client compatibility
+    job["job_id"] = job.pop("id")
+    return job
+
+
+@app.get("/jobs/{job_id}/result")
+async def get_job_result(job_id: str):
+    job = await get_summary_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.get("status") != "done":
+        return JSONResponse(status_code=202, content={
+            "job_id": job_id,
+            "status": job.get("status"),
+            "error": job.get("error"),
+        })
+    return {
+        "job_id": job.get("id", job_id),
+        "status": job.get("status"),
+        "result": job.get("result"),
+    }
+
+
+@app.post("/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str):
+    ok = await cancel_summary_job(job_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Job not found or cannot cancel")
+    return {"job_id": job_id, "cancelled": True}
 
 
 @app.get("/documents/{document_id}/summary/{summary_type}")

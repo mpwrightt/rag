@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Database utilities for PostgreSQL connection and operations.
 """
@@ -165,6 +167,11 @@ db_pool = _DBPoolProxy()
 async def initialize_database():
     """Initialize database connection pool."""
     await db_pool.initialize()
+    # Ensure auxiliary tables exist
+    try:
+        await ensure_summary_jobs_table()
+    except Exception as e:
+        logger.warning(f"Failed to ensure summary_jobs table: {e}")
 
 
 async def close_database():
@@ -172,38 +179,134 @@ async def close_database():
     await db_pool.close()
 
 
-# Session Management Functions
-async def create_session(
-    user_id: Optional[str] = None,
-    metadata: Optional[Dict[str, Any]] = None,
-    timeout_minutes: int = 60
-) -> str:
-    """
-    Create a new session.
-    
-    Args:
-        user_id: Optional user identifier
-        metadata: Optional session metadata
-        timeout_minutes: Session timeout in minutes
-    
-    Returns:
-        Session ID
-    """
+# -------------------------
+# Summary Jobs (Async Tasks)
+# -------------------------
+
+async def ensure_summary_jobs_table():
+    """Create summary_jobs table if it doesn't exist."""
     async with db_pool.acquire() as conn:
-        expires_at = datetime.now(timezone.utc) + timedelta(minutes=timeout_minutes)
-        
-        result = await conn.fetchrow(
+        await conn.execute(
             """
-            INSERT INTO sessions (user_id, metadata, expires_at)
-            VALUES ($1, $2, $3)
-            RETURNING id::text
-            """,
-            user_id,
-            json.dumps(metadata or {}),
-            expires_at
+            CREATE TABLE IF NOT EXISTS summary_jobs (
+                id UUID PRIMARY KEY,
+                document_id UUID NOT NULL,
+                summary_type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'queued',
+                error TEXT,
+                result JSONB,
+                progress INTEGER,
+                total INTEGER,
+                cancelled BOOLEAN NOT NULL DEFAULT FALSE,
+                started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS idx_summary_jobs_document ON summary_jobs(document_id);
+            """
         )
-        
-        return result["id"]
+
+async def create_summary_job(document_id: str, summary_type: str) -> str:
+    import uuid as _uuid
+    job_id = str(_uuid.uuid4())
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO summary_jobs (id, document_id, summary_type, status)
+            VALUES ($1::uuid, $2::uuid, $3, 'queued')
+            """,
+            job_id, document_id, summary_type,
+        )
+    return job_id
+
+async def update_summary_job_status(
+    job_id: str,
+    status: str,
+    *,
+    progress: Optional[int] = None,
+    total: Optional[int] = None,
+    error: Optional[str] = None,
+):
+    fields = ["status = $2", "updated_at = NOW()"]
+    params: List[Any] = [job_id, status]
+    idx = 3
+    if progress is not None:
+        fields.append(f"progress = ${idx}")
+        params.append(progress)
+        idx += 1
+    if total is not None:
+        fields.append(f"total = ${idx}")
+        params.append(total)
+        idx += 1
+    if error is not None:
+        fields.append(f"error = ${idx}")
+        params.append(error)
+        idx += 1
+    set_clause = ", ".join(fields)
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            f"UPDATE summary_jobs SET {set_clause} WHERE id = $1::uuid",
+            *params,
+        )
+
+async def set_summary_job_result(job_id: str, result: Dict[str, Any]):
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE summary_jobs
+            SET result = $2::jsonb, status = 'done', updated_at = NOW()
+            WHERE id = $1::uuid
+            """,
+            job_id, json.dumps(result),
+        )
+
+async def get_summary_job(job_id: str) -> Optional[Dict[str, Any]]:
+    async with db_pool.acquire() as conn:
+        rec = await conn.fetchrow(
+            """
+            SELECT id::text, document_id::text, summary_type, status, error, result,
+                   progress, total, cancelled, started_at, updated_at
+            FROM summary_jobs
+            WHERE id = $1::uuid
+            """,
+            job_id,
+        )
+        if not rec:
+            return None
+        return {
+            "id": rec["id"],
+            "document_id": rec["document_id"],
+            "summary_type": rec["summary_type"],
+            "status": rec["status"],
+            "error": rec["error"],
+            "result": rec["result"],
+            "progress": rec["progress"],
+            "total": rec["total"],
+            "cancelled": rec["cancelled"],
+            "started_at": rec["started_at"].isoformat() if rec["started_at"] else None,
+            "updated_at": rec["updated_at"].isoformat() if rec["updated_at"] else None,
+        }
+
+async def cancel_summary_job(job_id: str) -> bool:
+    async with db_pool.acquire() as conn:
+        res = await conn.execute(
+            """
+            UPDATE summary_jobs
+            SET cancelled = TRUE, status = 'cancelled', updated_at = NOW()
+            WHERE id = $1::uuid
+            """,
+            job_id,
+        )
+        return res and res.upper().startswith("UPDATE")
+
+async def is_summary_job_cancelled(job_id: Optional[str]) -> bool:
+    if not job_id:
+        return False
+    async with db_pool.acquire() as conn:
+        rec = await conn.fetchrow(
+            "SELECT cancelled FROM summary_jobs WHERE id = $1::uuid",
+            job_id,
+        )
+        return bool(rec and rec["cancelled"]) 
 
 
 async def get_session(session_id: str) -> Optional[Dict[str, Any]]:

@@ -887,6 +887,8 @@ export default function DocumentsPage() {
   const [summaryError, setSummaryError] = useState<string | null>(null)
   const [summaryDetailsOpen, setSummaryDetailsOpen] = useState(false)
   const [downloadFormat, setDownloadFormat] = useState<'md' | 'txt' | 'json'>('md')
+  const [summaryJobId, setSummaryJobId] = useState<string | null>(null)
+  const [summaryProgress, setSummaryProgress] = useState<string | null>(null)
   const [showBulkActions, setShowBulkActions] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   // Pagination state (page-based)
@@ -1331,13 +1333,15 @@ export default function DocumentsPage() {
       setSummaryResult(null)
       setSummaryDocument(doc)
       setShowSummaryDialog(true)
-      
-      // Generate comprehensive summary
-      const response = await fetch(`${API_BASE}/documents/${encodeURIComponent(id)}/summary`, {
+      setSummaryJobId(null)
+      setSummaryProgress('Queuing summary job...')
+
+      // Start async summary job
+      const startRes = await fetch(`${API_BASE}/documents/${encodeURIComponent(id)}/summary_async`, {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
-          'bypass-tunnel-reminder': 'true' 
+          'bypass-tunnel-reminder': 'true'
         },
         body: JSON.stringify({
           summary_type: 'comprehensive',
@@ -1345,13 +1349,57 @@ export default function DocumentsPage() {
           force_regenerate: forceRegenerate
         })
       })
-      
-      if (!response.ok) {
-        throw new Error(`Failed to generate summary: ${response.status}`)
+
+      if (startRes.status !== 202) {
+        throw new Error(`Failed to start summary job: ${startRes.status}`)
       }
-      
-      const summaryData = await response.json()
-      setSummaryResult(summaryData)
+      const { job_id } = await startRes.json()
+      setSummaryJobId(job_id)
+      setSummaryProgress('Job queued...')
+
+      // Poll status until done
+      const sleep = (ms: number) => new Promise(res => setTimeout(res, ms))
+      let attempts = 0
+      const maxAttempts = 900 // ~30 minutes at 2s interval
+      while (attempts < maxAttempts) {
+        attempts += 1
+        const stRes = await fetch(`${API_BASE}/jobs/${encodeURIComponent(job_id)}/status`, {
+          headers: { 'bypass-tunnel-reminder': 'true' }
+        })
+        if (!stRes.ok) throw new Error(`Job status error: ${stRes.status}`)
+        const st = await stRes.json()
+        const status = (st?.status || '').toLowerCase()
+        if (status === 'done') {
+          setSummaryProgress('Finalizing result...')
+          break
+        }
+        if (status === 'error') {
+          throw new Error(st?.error || 'Summary job failed')
+        }
+        setSummaryProgress(status === 'running' ? 'Running analysis on large document...' : 'Waiting in queue...')
+        await sleep(2000)
+      }
+
+      // Fetch job result
+      const resRes = await fetch(`${API_BASE}/jobs/${encodeURIComponent(job_id)}/result`, {
+        headers: { 'bypass-tunnel-reminder': 'true' }
+      })
+      if (resRes.status === 202) {
+        // Edge case: result not ready yet; one more quick wait
+        await new Promise(r => setTimeout(r, 1000))
+        const resRes2 = await fetch(`${API_BASE}/jobs/${encodeURIComponent(job_id)}/result`, {
+          headers: { 'bypass-tunnel-reminder': 'true' }
+        })
+        if (!resRes2.ok) throw new Error(`Job result error: ${resRes2.status}`)
+        const payload2 = await resRes2.json()
+        setSummaryResult(payload2?.result ?? payload2)
+      } else {
+        if (!resRes.ok) throw new Error(`Job result error: ${resRes.status}`)
+        const payload = await resRes.json()
+        setSummaryResult(payload?.result ?? payload)
+      }
+      setSummaryProgress(null)
+      setSummaryJobId(null)
       
     } catch (error) {
       console.error('Failed to generate summary:', error)

@@ -17,7 +17,8 @@ import re
 from .agent import rag_agent, AgentDependencies
 from .db_utils import (
     get_document_chunks, get_document, vector_search,
-    get_cached_summary, store_summary, list_document_summaries
+    get_cached_summary, store_summary, list_document_summaries,
+    update_summary_job_status, is_summary_job_cancelled
 )
 from .tools import vector_search_tool, hybrid_search_tool, VectorSearchInput, HybridSearchInput
 from .models import ChunkResult
@@ -53,7 +54,8 @@ class DBRSummarizer:
         include_context: bool = True,
         context_queries: Optional[List[str]] = None,
         summary_type: str = "comprehensive",
-        force_regenerate: bool = False
+        force_regenerate: bool = False,
+        job_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Generate a comprehensive summary of a DBR document.
@@ -118,11 +120,18 @@ class DBRSummarizer:
                 )
             
             # 5. Perform hierarchical summarization with domain expertise
+            # Update job status with total batches/progress when known
             summary_result = await self._hierarchical_summarize(
-                chunks, document, context_info, summary_type, domain_classification
+                chunks, document, context_info, summary_type, domain_classification,
+                job_id=job_id
             )
             
             # 6. Generate final structured summary with domain expertise
+            if job_id:
+                try:
+                    await update_summary_job_status(job_id, "finalizing")
+                except Exception:
+                    pass
             final_summary = await self._generate_final_summary(
                 summary_result, document, context_info, summary_type, domain_classification
             )
@@ -366,7 +375,9 @@ Return only the queries, one per line:
         document: Dict[str, Any],
         context_info: Dict[str, Any],
         summary_type: str,
-        domain_classification: Optional[Any] = None
+        domain_classification: Optional[Any] = None,
+        *,
+        job_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Perform hierarchical summarization of document chunks.
@@ -378,15 +389,35 @@ Return only the queries, one per line:
         chunk_batches = [chunks[i:i + batch_size] for i in range(0, len(chunks), batch_size)]
         
         logger.info(f"Processing {len(chunks)} chunks in {len(chunk_batches)} batches")
+        # Notify job progress
+        if job_id:
+            try:
+                await update_summary_job_status(job_id, "running", progress=0, total=len(chunk_batches))
+            except Exception:
+                pass
         
         # Step 2: Summarize each batch with domain expertise
         batch_summaries = []
         for i, batch in enumerate(chunk_batches):
+            # Check cancellation
+            if job_id:
+                try:
+                    cancelled = await is_summary_job_cancelled(job_id)
+                    if cancelled:
+                        raise RuntimeError("Summary job cancelled")
+                except Exception:
+                    # If check fails, proceed
+                    pass
             try:
                 batch_summary = await self._summarize_batch(
                     batch, document, summary_type, i + 1, domain_classification
                 )
                 batch_summaries.append(batch_summary)
+                if job_id:
+                    try:
+                        await update_summary_job_status(job_id, "running", progress=i + 1, total=len(chunk_batches))
+                    except Exception:
+                        pass
             except Exception as e:
                 logger.error(f"Batch {i + 1} summarization failed: {e}")
                 # Continue with other batches
