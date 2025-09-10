@@ -11,6 +11,7 @@ import asyncio
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
 import json
+import hashlib
 
 from .agent import rag_agent, AgentDependencies
 from .db_utils import (
@@ -227,11 +228,31 @@ class DBRSummarizer:
             
             # Deduplicate and limit context chunks
             seen_chunks = set()
-            unique_chunks = []
+            unique_chunks: List[Any] = []
             for chunk in all_related_chunks:
-                chunk_key = f"{chunk.document_id}_{chunk.chunk_index}"
-                if chunk_key not in seen_chunks:
-                    seen_chunks.add(chunk_key)
+                # Support both pydantic objects (ChunkResult) and dicts
+                doc_id = getattr(chunk, 'document_id', None)
+                if doc_id is None and isinstance(chunk, dict):
+                    doc_id = chunk.get('document_id')
+
+                chunk_id = getattr(chunk, 'chunk_id', None)
+                if chunk_id is None and isinstance(chunk, dict):
+                    chunk_id = chunk.get('chunk_id')
+
+                # Fallback to content hash when chunk_id is missing
+                if not chunk_id:
+                    content = getattr(chunk, 'content', None)
+                    if content is None and isinstance(chunk, dict):
+                        content = chunk.get('content')
+                    if content:
+                        chunk_id = hashlib.sha1(content.encode('utf-8')).hexdigest()  # stable-ish key
+                    else:
+                        # As a last resort, use the index in the list
+                        chunk_id = f"idx_{len(unique_chunks)}"
+
+                key = f"{doc_id}_{chunk_id}"
+                if key not in seen_chunks:
+                    seen_chunks.add(key)
                     unique_chunks.append(chunk)
             
             context_info["related_chunks"] = unique_chunks[:10]  # Limit to 10 most relevant

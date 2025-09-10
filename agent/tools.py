@@ -153,7 +153,7 @@ async def search_by_title(
                     0.95 as similarity,
                     ROW_NUMBER() OVER (PARTITION BY d.id ORDER BY c.chunk_index) as rn
                 FROM documents d
-                LEFT JOIN document_collections dc ON d.id = dc.document_id
+                LEFT JOIN collection_documents dc ON d.id = dc.document_id
                 JOIN chunks c ON d.id = c.document_id
                 WHERE {where}
             """.format(where=" AND ".join(where_clauses))
