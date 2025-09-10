@@ -92,6 +92,30 @@ const Markdown = ({ children }: { children: string }) => (
   </ReactMarkdown>
 )
 
+// Normalize backend summary result to the object shape our UI expects.
+// Accepts either a full result object, or a wrapper { result: {...} }, or a plain string.
+const normalizeSummaryResult = (val: any) => {
+  try {
+    if (val && typeof val === 'string') {
+      const parsed = JSON.parse(val)
+      if (parsed && typeof parsed === 'object') return parsed
+      return { summary: val }
+    }
+    if (val && typeof val === 'object') return val
+    return { summary: String(val ?? '') }
+  } catch {
+    return { summary: typeof val === 'string' ? val : JSON.stringify(val ?? '') }
+  }
+}
+
+// Determine if summary content is present for rendering/downloading
+const hasSummaryContent = (data: any): boolean => {
+  if (!data) return false
+  const v: any = (data as any)?.summary ?? data
+  if (typeof v === 'string') return v.trim().length > 0
+  return !!v && Object.keys(v || {}).length > 0
+}
+
 // Backend API base URL
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8058'
 
@@ -1413,11 +1437,13 @@ export default function DocumentsPage() {
         })
         if (!resRes2.ok) throw new Error(`Job result error: ${resRes2.status}`)
         const payload2 = await resRes2.json()
-        setSummaryResult(payload2?.result ?? payload2)
+        const value2 = payload2?.result ?? payload2
+        setSummaryResult(normalizeSummaryResult(value2))
       } else {
         if (!resRes.ok) throw new Error(`Job result error: ${resRes.status}`)
         const payload = await resRes.json()
-        setSummaryResult(payload?.result ?? payload)
+        const value = payload?.result ?? payload
+        setSummaryResult(normalizeSummaryResult(value))
       }
       setSummaryProgress(null)
       setSummaryJobId(null)
@@ -1445,9 +1471,9 @@ export default function DocumentsPage() {
 
   // Build downloadable content from the current summary result
   const handleDownloadSummary = () => {
-    if (!summaryResult || !summaryResult.summary) return
+    if (!summaryResult) return
 
-    const raw = summaryResult.summary
+    const raw = (summaryResult as any).summary ?? summaryResult
 
     // Helpers (minimal duplicates of the render helpers for robustness)
     const stripCodeFences = (s: string) => {
@@ -2807,7 +2833,11 @@ export default function DocumentsPage() {
                       <div>
                         <p className="text-sm font-medium">Generated</p>
                         <p className="text-sm text-muted-foreground">
-                          {new Date(summaryResult.generated_at).toLocaleString()}
+                          {(
+                            summaryResult.generated_at && !isNaN(Date.parse(summaryResult.generated_at))
+                              ? new Date(summaryResult.generated_at)
+                              : new Date()
+                           ).toLocaleString()}
                         </p>
                       </div>
                       <div>
@@ -2843,12 +2873,18 @@ export default function DocumentsPage() {
                   )}
 
                   {/* Summary Content */}
-                  {summaryResult.summary && (
+                  {(() => {
+                    const displaySummary: any = (summaryResult as any)?.summary ?? summaryResult
+                    const hasContent = typeof displaySummary === 'string'
+                      ? displaySummary.trim().length > 0
+                      : !!displaySummary && Object.keys(displaySummary || {}).length > 0
+                    return hasContent
+                  })() && (
                     <div className="flex-1 overflow-y-auto overflow-x-hidden pr-2">
                       <div className="space-y-6">
                         {/* Handle raw JSON string that needs parsing */}
                         {(() => {
-                          let parsedSummary = summaryResult.summary;
+                          let parsedSummary: any = (summaryResult as any)?.summary ?? summaryResult;
                           // Helpers to normalize JSON-like strings into objects and unwrap nested payloads
                           const looksLikeJson = (s: string) => {
                             const t = (s || '').trim();
@@ -3401,7 +3437,7 @@ export default function DocumentsPage() {
                       <SelectItem value="json">JSON (.json)</SelectItem>
                     </SelectContent>
                   </Select>
-                  <Button onClick={handleDownloadSummary} disabled={!summaryResult || !summaryResult.summary}>
+                  <Button onClick={handleDownloadSummary} disabled={!hasSummaryContent(summaryResult)}>
                     <Download className="w-4 h-4 mr-2" />
                     Download
                   </Button>

@@ -295,13 +295,22 @@ async def get_summary_job(job_id: str) -> Optional[Dict[str, Any]]:
         )
         if not rec:
             return None
+        # Normalize result to a Python object (dict) if stored as JSON string
+        raw_result = rec["result"]
+        try:
+            if isinstance(raw_result, str):
+                parsed_result = json.loads(raw_result)
+            else:
+                parsed_result = raw_result
+        except Exception:
+            parsed_result = raw_result
         return {
             "id": rec["id"],
             "document_id": rec["document_id"],
             "summary_type": rec["summary_type"],
             "status": rec["status"],
             "error": rec["error"],
-            "result": rec["result"],
+            "result": parsed_result,
             "progress": rec["progress"],
             "total": rec["total"],
             "cancelled": rec["cancelled"],
