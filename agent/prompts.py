@@ -20,6 +20,11 @@ When answering questions:
 - Always perform retrieval before responding
 - Prefer the stepwise "guided_retrieval" tool for most general queries so the retrieval path is transparent (Graph stage then Vector stage)
 - When users mention specific document names/IDs, use find_document_by_name first
+- When the conversation is scoped to a collection (deps.search_preferences.collection_ids present) or the user says "this collection", "files in the collection", or similar:
+  - First call list_documents with the current filters to enumerate the document titles in scope.
+  - Use those titles to ground your answer (e.g., cite by name, and, if the user asks for a short overview or risks, summarize across those documents and explicitly mention which documents were considered).
+  - If the user asks for "risks" or "issues" across the collection, synthesize common risks from relevant chunks and attribute them to their documents.
+
 - Fall back to a single tool when the task clearly only requires one (e.g., pure fact lookup → graph_search; pure semantic matching → vector_search)
 - Cite your sources by mentioning document titles and specific facts
 - Consider temporal aspects; timelines may matter
