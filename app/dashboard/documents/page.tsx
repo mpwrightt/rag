@@ -58,6 +58,7 @@ import {
   Hash,
   Settings,
   ChevronDown,
+  ChevronUp,
   ChevronRight,
   ChevronLeft,
   ArrowUpDown,
@@ -883,6 +884,7 @@ export default function DocumentsPage() {
   const [summaryLoading, setSummaryLoading] = useState(false)
   const [summaryResult, setSummaryResult] = useState<any>(null)
   const [summaryError, setSummaryError] = useState<string | null>(null)
+  const [summaryDetailsOpen, setSummaryDetailsOpen] = useState(false)
   const [showBulkActions, setShowBulkActions] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   // Pagination state (page-based)
@@ -2463,9 +2465,19 @@ export default function DocumentsPage() {
               <SummaryIcon className="w-5 h-5" />
               Document Summary
             </DialogTitle>
-            <DialogDescription>
-              AI-generated comprehensive summary using RAG-enhanced context
-            </DialogDescription>
+            <div className="mt-2">
+              <Button variant="outline" size="sm" onClick={() => setSummaryDetailsOpen(v => !v)}>
+                {summaryDetailsOpen ? (
+                  <>
+                    <ChevronUp className="w-4 h-4 mr-1" /> Hide Details
+                  </>
+                ) : (
+                  <>
+                    <ChevronDown className="w-4 h-4 mr-1" /> Show Details
+                  </>
+                )}
+              </Button>
+            </div>
           </DialogHeader>
           
           {summaryDocument && (
@@ -2620,18 +2632,48 @@ export default function DocumentsPage() {
                             const t = (s || '').trim();
                             return t.startsWith('{') || t.startsWith('[');
                           };
+                          const stripCodeFences = (s: string) => {
+                            const t = (s || '').trim();
+                            if (t.startsWith('```') && t.endsWith('```')) {
+                              // Remove opening fence with optional language
+                              const withoutStart = t.replace(/^```[a-zA-Z0-9_-]*\n?/, '');
+                              return withoutStart.replace(/```$/, '').trim();
+                            }
+                            return t;
+                          };
+                          const dedent = (s: string) => {
+                            const lines = (s || '').replace(/\r\n/g, '\n').split('\n');
+                            // Ignore leading/trailing empty lines for indent calc
+                            const contentLines = lines.filter(l => l.trim().length > 0);
+                            if (contentLines.length === 0) return s || '';
+                            const indents = contentLines.map(l => (l.match(/^\s*/)?.[0].length ?? 0));
+                            const minIndent = Math.min(...indents);
+                            if (minIndent === 0) return s || '';
+                            return lines.map(l => l.startsWith(' '.repeat(minIndent)) ? l.slice(minIndent) : l).join('\n');
+                          };
                           const tryParseJson = (s: string) => {
-                            try { return JSON.parse(s); } catch { return null; }
+                            try { return JSON.parse(s); } catch {}
+                            // try loose: find first '{' .. last '}'
+                            const t = stripCodeFences(s);
+                            const i = t.indexOf('{');
+                            const j = t.lastIndexOf('}');
+                            if (i >= 0 && j > i) {
+                              const sub = t.slice(i, j + 1);
+                              try { return JSON.parse(sub); } catch {}
+                            }
+                            return null;
                           };
                           const cleanText = (s: string) => {
                             if (typeof s !== 'string') return s as unknown as string;
-                            const t = s.trim();
+                            let t = stripCodeFences(s);
                             // If wrapped in quotes (JSON-style), try to unescape
                             if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) {
                               try { return JSON.parse(t as string); } catch { /* ignore */ }
                             }
                             // Replace common escaped sequences
-                            return t.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+                            t = t.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+                            // Remove uniform indentation so Markdown doesn't treat it as a code block
+                            return dedent(t);
                           };
                           const canonicalKeys = new Set([
                             'executive_overview',
@@ -2651,7 +2693,7 @@ export default function DocumentsPage() {
                                 const parsed = tryParseJson(s);
                                 if (parsed) return extractText(parsed);
                               }
-                              return s;
+                              return dedent(s);
                             }
                             if (Array.isArray(val)) return val.map(extractText).filter(Boolean).join('\n');
                             if (typeof val === 'object') {
@@ -2829,9 +2871,17 @@ export default function DocumentsPage() {
                                         const ft = extractText(parsedSummary.full_text);
                                         if (ft && ft.length > text.length) text = ft;
                                       }
+                                      // Nuclear fallback: extract the value under "executive_overview" from a JSON-looking blob
+                                      if (text && text.trim().startsWith('{') && text.includes('"executive_overview"')) {
+                                        const s = text;
+                                        const m = s.match(/\"executive_overview\"\s*:\s*\"([\s\S]*?)\"/);
+                                        if (m && m[1]) {
+                                          try { text = JSON.parse(`"${m[1]}"`); } catch { text = m[1].replace(/\\n/g, '\n'); }
+                                        }
+                                      }
                                       return (
-                                        <div className="prose prose-sm max-w-none dark:prose-invert break-words whitespace-pre-wrap">
-                                          <Markdown>{text || ''}</Markdown>
+                                        <div className="text-sm max-w-none break-words whitespace-pre-wrap leading-relaxed">
+                                          {text || ''}
                                         </div>
                                       );
                                     })()}
@@ -3000,16 +3050,24 @@ export default function DocumentsPage() {
                                             </div>
                                           );
                                         }
-                                        // Fallback to cleaned markdown
+                                        // Fallback: try to extract "full_text" field from JSON-like blob
+                                        const s = cleanText(parsedSummary.full_text as string);
+                                        const m = s.match(/\"full_text\"\s*:\s*\"([\s\S]*?)\"/);
+                                        if (m && m[1]) {
+                                          let ft = m[1];
+                                          try { ft = JSON.parse(`"${m[1]}"`); } catch { ft = m[1].replace(/\\n/g, '\n'); }
+                                          return (
+                                            <div className="text-sm max-w-none break-words whitespace-pre-wrap leading-relaxed">{ft}</div>
+                                          );
+                                        }
+                                        // Final fallback to cleaned plain text
                                         return (
-                                          <div className="prose prose-sm max-w-none dark:prose-invert break-words whitespace-pre-wrap">
-                                            <Markdown>{cleanText(parsedSummary.full_text as string)}</Markdown>
-                                          </div>
+                                          <div className="text-sm max-w-none break-words whitespace-pre-wrap leading-relaxed">{s}</div>
                                         );
                                       })()
                                     ) : (
-                                      <div className="prose prose-sm max-w-none dark:prose-invert break-words whitespace-pre-wrap">
-                                        <Markdown>{typeof parsedSummary.full_text === 'string' ? cleanText(parsedSummary.full_text) : String(parsedSummary.full_text)}</Markdown>
+                                      <div className="text-sm max-w-none break-words whitespace-pre-wrap leading-relaxed">
+                                        {typeof parsedSummary.full_text === 'string' ? cleanText(parsedSummary.full_text) : String(parsedSummary.full_text)}
                                       </div>
                                     )}
                                   </div>
