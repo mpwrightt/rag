@@ -3,11 +3,15 @@ DBR Comprehensive Summarization System
 
 This module provides intelligent summarization of Daily Business Reports (DBRs)
 using the existing RAG system with hierarchical processing and context management.
+Optimized for Gemini 2.5 Flash by using concise, JSON-only prompts, retry/backoff,
+and optional stage-specific model selection.
 """
 
 import os
 import logging
 import asyncio
+import time
+import random
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
 import json
@@ -15,6 +19,8 @@ import hashlib
 import re
 
 from .agent import rag_agent, AgentDependencies
+from .providers import get_llm_model
+from pydantic_ai import Agent as PydanticAgent
 from .db_utils import (
     get_document_chunks, get_document, vector_search,
     get_cached_summary, store_summary, list_document_summaries,
@@ -396,33 +402,52 @@ Return only the queries, one per line:
             except Exception:
                 pass
         
-        # Step 2: Summarize each batch with domain expertise
-        batch_summaries = []
-        for i, batch in enumerate(chunk_batches):
-            # Check cancellation
-            if job_id:
-                try:
-                    cancelled = await is_summary_job_cancelled(job_id)
-                    if cancelled:
-                        raise RuntimeError("Summary job cancelled")
-                except Exception:
-                    # If check fails, proceed
-                    pass
-            try:
-                batch_summary = await self._summarize_batch(
-                    batch, document, summary_type, i + 1, domain_classification
-                )
-                batch_summaries.append(batch_summary)
+        # Step 2: Summarize each batch with domain expertise (parallelized)
+        batch_summaries: List[Dict[str, Any]] = []
+        concurrency = int(os.getenv("SUMMARY_CONCURRENCY", "8"))
+        sem = asyncio.Semaphore(max(1, concurrency))
+        lock = asyncio.Lock()
+        completed = 0
+
+        async def process_batch(index: int, batch: List[Dict[str, Any]]):
+            nonlocal completed
+            async with sem:
+                # Cancellation check before starting work on this batch
                 if job_id:
                     try:
-                        await update_summary_job_status(job_id, "running", progress=i + 1, total=len(chunk_batches))
+                        if await is_summary_job_cancelled(job_id):
+                            raise RuntimeError("Summary job cancelled")
                     except Exception:
                         pass
-            except Exception as e:
-                logger.error(f"Batch {i + 1} summarization failed: {e}")
-                # Continue with other batches
-                continue
-        
+                try:
+                    result = await self._summarize_batch(
+                        batch, document, summary_type, index + 1, domain_classification
+                    )
+                    async with lock:
+                        batch_summaries.append(result)
+                        completed += 1
+                        if job_id:
+                            try:
+                                await update_summary_job_status(job_id, "running", progress=completed, total=len(chunk_batches))
+                            except Exception:
+                                pass
+                except Exception as e:
+                    logger.error(f"Batch {index + 1} summarization failed: {e}")
+                    async with lock:
+                        completed += 1
+                        if job_id:
+                            try:
+                                await update_summary_job_status(job_id, "running", progress=completed, total=len(chunk_batches))
+                            except Exception:
+                                pass
+
+        await asyncio.gather(*[process_batch(i, batch) for i, batch in enumerate(chunk_batches)])
+        # Keep deterministic order by batch_number if present
+        try:
+            batch_summaries.sort(key=lambda x: x.get("batch_number", 0))
+        except Exception:
+            pass
+
         processing_time = (datetime.utcnow() - start_time).total_seconds()
         
         return {
@@ -453,7 +478,7 @@ Return only the queries, one per line:
         tokens_for_content = self.available_tokens // 2
         
         batch_size = max(1, tokens_for_content // avg_tokens_per_chunk)
-        return min(batch_size, 10)  # Cap at 10 chunks per batch
+        return min(batch_size, 25)  # Increased cap to reduce total batches
     
     async def _summarize_batch(
         self,
@@ -478,7 +503,12 @@ Return only the queries, one per line:
             prompt = document_classifier.get_domain_expert_prompt(
                 domain_classification.domain, summary_type, document
             )
-            prompt += f"\n\nDocument Section {batch_number}:\n{batch_content}\n\nProvide expert analysis of this section:"
+            prompt += (
+                f"\n\nDocument Section {batch_number}:\n{batch_content}\n\n"
+                "Respond ONLY with a compact JSON object (no markdown code fences, no prose) with keys: "
+                "'highlights' (array of brief bullet strings), 'metrics' (object of key:value numeric or short string), "
+                "'risks' (array of brief bullet strings), 'summary' (<=120 words)."
+            )
         else:
             # Use general prompt
             prompt = self._get_summary_prompt(batch_content, document, summary_type, batch_number)
@@ -486,8 +516,7 @@ Return only the queries, one per line:
         # Generate summary using agent
         try:
             deps = AgentDependencies(session_id=f"batch_summary_{batch_number}")
-            result = await rag_agent.run(prompt, deps=deps)
-            summary = result.data
+            summary = await self._run_llm_with_retry(prompt, stage="batch", deps=deps)
             
             return {
                 "batch_number": batch_number,
@@ -508,67 +537,37 @@ Return only the queries, one per line:
     ) -> str:
         """
         Generate the appropriate summary prompt based on summary type.
+        Optimized for Gemini 2.5 Flash: concise, JSON-only output without code fences.
         """
         doc_title = document.get("title", "Daily Business Report")
         
-        base_prompt = f"""
-Analyze and summarize the following section from "{doc_title}" (Part {batch_number}):
-
-{content}
-
-"""
+        base_prompt = (
+            f"Analyze and summarize the following section from \"{doc_title}\" (Part {batch_number}):\n\n"
+            f"{content}\n\n"
+            "Respond ONLY with a compact JSON object (no markdown code fences, no additional text). "
+            "Use keys: 'highlights' (array of brief bullets), 'metrics' (object), 'risks' (array), "
+            "'summary' (<=120 words)."
+        )
         
         if summary_type == "executive":
-            return base_prompt + """
-Provide an EXECUTIVE SUMMARY focusing on:
-- Key business outcomes and results
-- Critical decisions and actions taken
-- Strategic implications
-- High-level performance indicators
-- Executive-level insights and recommendations
-
-Be concise and focus on what executives need to know.
-"""
+            return base_prompt + (
+                " Focus on outcomes, decisions, and executive insights in 'highlights' and 'summary'."
+            )
         
         elif summary_type == "financial":
-            return base_prompt + """
-Provide a FINANCIAL SUMMARY focusing on:
-- Revenue, costs, and profit metrics
-- Budget performance and variances
-- Financial KPIs and ratios
-- Cash flow and liquidity indicators
-- Investment and capital allocation
-- Financial risks and opportunities
-
-Extract and highlight all numerical financial data.
-"""
+            return base_prompt + (
+                " Emphasize numeric KPIs in 'metrics' (e.g., revenue, costs, margins, variances)."
+            )
         
         elif summary_type == "operational":
-            return base_prompt + """
-Provide an OPERATIONAL SUMMARY focusing on:
-- Production and delivery metrics
-- Process efficiency and quality indicators
-- Resource utilization and capacity
-- Operational challenges and solutions
-- Team performance and productivity
-- System and infrastructure status
-
-Emphasize operational performance and process insights.
-"""
+            return base_prompt + (
+                " Emphasize process/throughput/quality indicators in 'metrics' and concise 'risks'."
+            )
         
         else:  # comprehensive
-            return base_prompt + """
-Provide a COMPREHENSIVE SUMMARY covering:
-- Key business metrics and performance indicators
-- Major events, decisions, and outcomes
-- Financial highlights and operational results
-- Strategic developments and market insights
-- Challenges faced and solutions implemented
-- Important trends and patterns identified
-- Recommendations and next steps
-
-Be thorough but organized. Structure the summary with clear sections.
-"""
+            return base_prompt + (
+                " Provide balanced coverage across metrics, highlights, and succinct risks."
+            )
     
     async def _generate_final_summary(
         self,
@@ -601,7 +600,7 @@ Be thorough but organized. Structure the summary with clear sections.
             ])
             context_section = f"\n\nRELATED CONTEXT:\n{context_content}"
         
-        # Generate domain-specific final summary prompt
+        # Generate domain-specific final summary prompt (JSON-only, concise)
         if domain_classification and domain_classification.domain != DocumentDomain.GENERAL:
             # Use expert domain-specific final prompt
             domain_name = domain_classification.domain.name.replace('_', ' ').title()
@@ -619,15 +618,13 @@ EXPERT SECTION ANALYSES:
 
 As a domain expert, synthesize these analyses into a comprehensive final summary that demonstrates deep professional expertise in {domain_classification.domain.value.replace('_', ' ')}.
 
-Structure your expert assessment as a JSON object:
-- "executive_overview": Executive summary from domain expert perspective (2-3 paragraphs)
-- "key_metrics": Domain-specific KPIs, metrics, and quantitative findings
-- "major_highlights": Most significant findings from professional perspective  
-- "challenges_and_risks": Domain-specific risks and challenges identified
-- "opportunities_and_recommendations": Expert recommendations and strategic insights
-- "conclusion": Professional assessment and outlook from domain expert viewpoint
-
-Demonstrate the depth of expertise expected from a senior professional in {domain_name}. Include industry terminology and insights that only an experienced practitioner would provide.
+Respond STRICTLY with a single JSON object (no markdown code fences, no extra text) with keys:
+- "executive_overview": concise executive summary (<= 180 words)
+- "key_metrics": object of KPIs and quantitative findings
+- "major_highlights": array of 5-8 concise bullets
+- "challenges_and_risks": array of concise bullets
+- "opportunities_and_recommendations": array of concise bullets
+- "conclusion": brief outlook
 """
         else:
             # Use general prompt
@@ -642,28 +639,18 @@ SECTION SUMMARIES:
 
 {context_section}
 
-Generate a well-structured final summary that:
-1. Synthesizes key insights from all sections
-2. Identifies overarching themes and patterns
-3. Highlights critical metrics and outcomes
-4. Provides executive-level conclusions
-5. Includes actionable insights and recommendations
-
-Structure the response as a JSON object with these sections:
-- "executive_overview": Brief high-level summary (2-3 paragraphs)
-- "key_metrics": Important quantitative data and KPIs
-- "major_highlights": 3-5 most important findings or events
-- "challenges_and_risks": Key issues identified
-- "opportunities_and_recommendations": Strategic insights and next steps
-- "conclusion": Overall assessment and outlook
-
-Ensure the summary is comprehensive yet concise, suitable for executive review.
+Generate a well-structured final summary and respond STRICTLY with one JSON object (no markdown fences, no extra text) with keys:
+- "executive_overview": brief high-level summary (<= 180 words)
+- "key_metrics": object of important quantitative data and KPIs
+- "major_highlights": 5-8 most important findings (array of strings)
+- "challenges_and_risks": key issues identified (array of strings)
+- "opportunities_and_recommendations": strategic next steps (array of strings)
+- "conclusion": overall outlook
 """
         
         try:
             deps = AgentDependencies(session_id=f"final_summary_{document['id']}")
-            result = await rag_agent.run(final_prompt, deps=deps)
-            final_response = result.data or ""
+            final_response = await self._run_llm_with_retry(final_prompt, stage="final", deps=deps)
 
             # Helper: try to parse loose JSON (strip code fences, isolate outer braces)
             def try_parse_json_loose(s: str):
@@ -716,6 +703,44 @@ Ensure the summary is comprehensive yet concise, suitable for executive review.
         except Exception as e:
             logger.error(f"Final summary generation failed: {e}")
             raise
+
+
+    # Helper methods for model execution with retry/backoff and optional stage-specific models
+    def _get_stage_agent(self, stage: str) -> PydanticAgent:
+        use_separate = os.getenv("SUMMARY_SEPARATE_MODELS", "0").strip() in {"1", "true", "yes"}
+        if not use_separate:
+            return rag_agent
+        # Lazy-init cached agents
+        if not hasattr(self, "_batch_agent"):
+            self._batch_agent = None
+            self._final_agent = None
+        if stage == "batch":
+            if self._batch_agent is None:
+                model_name = os.getenv("SUMMARY_BATCH_MODEL", os.getenv("LLM_CHOICE", "gemini-2.5-flash"))
+                self._batch_agent = PydanticAgent(get_llm_model(model_name), deps_type=AgentDependencies)
+            return self._batch_agent
+        else:
+            if self._final_agent is None:
+                model_name = os.getenv("SUMMARY_FINAL_MODEL", os.getenv("LLM_CHOICE", "gemini-2.5-flash"))
+                self._final_agent = PydanticAgent(get_llm_model(model_name), deps_type=AgentDependencies)
+            return self._final_agent
+
+    async def _run_llm_with_retry(self, prompt: str, stage: str, deps: AgentDependencies, *, max_retries: int = 4) -> str:
+        agent = self._get_stage_agent(stage)
+        last_err: Optional[Exception] = None
+        for attempt in range(max_retries + 1):
+            try:
+                result = await agent.run(prompt, deps=deps)
+                return (result.data or "").strip()
+            except Exception as e:
+                last_err = e
+                # Simple exponential backoff with jitter
+                delay = min(20.0, (2 ** attempt) + random.random())
+                if attempt >= max_retries:
+                    break
+                logger.warning(f"LLM call failed (stage={stage}, attempt={attempt+1}/{max_retries}) : {e}. Retrying in {delay:.1f}s")
+                await asyncio.sleep(delay)
+        raise RuntimeError(f"LLM call failed after retries (stage={stage}): {last_err}")
 
 
 # Singleton instance for the API

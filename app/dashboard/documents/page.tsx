@@ -166,6 +166,18 @@ function getDocText(doc: any): string | undefined {
   return undefined
 }
 
+// Format a millisecond duration as a human-readable short string
+function formatDuration(ms: number): string {
+  if (!isFinite(ms) || ms <= 0) return '< 1m'
+  const sec = Math.floor(ms / 1000)
+  const min = Math.floor(sec / 60)
+  const hr = Math.floor(min / 60)
+  const remMin = min % 60
+  if (hr > 0) return `${hr}h ${remMin}m`
+  if (min > 0) return `${min}m`
+  return `${Math.max(1, sec)}s`
+}
+
 type Document = {
   id: string
   name: string
@@ -915,6 +927,7 @@ export default function DocumentsPage() {
   const [summaryJobId, setSummaryJobId] = useState<string | null>(null)
   const [summaryProgress, setSummaryProgress] = useState<string | null>(null)
   const [summaryPercent, setSummaryPercent] = useState<number | null>(null)
+  const [summaryETA, setSummaryETA] = useState<string | null>(null)
   const cancelSummaryRef = useRef(false)
   const [showBulkActions, setShowBulkActions] = useState(false)
   const [dragOver, setDragOver] = useState(false)
@@ -1363,6 +1376,7 @@ export default function DocumentsPage() {
       setSummaryJobId(null)
       setSummaryProgress('Queuing summary job...')
       setSummaryPercent(0)
+      setSummaryETA(null)
       cancelSummaryRef.current = false
 
       // Start async summary job
@@ -1405,10 +1419,22 @@ export default function DocumentsPage() {
         const total = typeof st?.total === 'number' ? st.total : null
         if (prog != null && total && total > 0) {
           setSummaryPercent(Math.max(0, Math.min(100, Math.floor((prog / total) * 100))))
+          // Compute ETA from average time per completed batch
+          if (prog > 0 && typeof st?.started_at === 'string') {
+            const startedMs = Date.parse(st.started_at)
+            if (!isNaN(startedMs)) {
+              const elapsedMs = Date.now() - startedMs
+              const avgPerBatch = elapsedMs / Math.max(1, prog)
+              const remainingBatches = Math.max(0, total - prog)
+              const etaMs = remainingBatches * avgPerBatch
+              setSummaryETA(formatDuration(etaMs))
+            }
+          }
         }
         if (status === 'done') {
           setSummaryProgress('Finalizing result...')
           setSummaryPercent(100)
+          setSummaryETA(null)
           break
         }
         if (status === 'error') {
@@ -1419,6 +1445,7 @@ export default function DocumentsPage() {
           setSummaryJobId(null)
           setSummaryProgress(null)
           setSummaryPercent(null)
+          setSummaryETA(null)
           return
         }
         setSummaryProgress(status === 'running' ? 'Running analysis on large document...' : 'Waiting in queue...')
@@ -1448,6 +1475,7 @@ export default function DocumentsPage() {
       setSummaryProgress(null)
       setSummaryJobId(null)
       setSummaryPercent(null)
+      setSummaryETA(null)
       
     } catch (error) {
       console.error('Failed to generate summary:', error)
