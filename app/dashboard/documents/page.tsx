@@ -1264,6 +1264,22 @@ export default function DocumentsPage() {
     file: File,
     onProgress: (pct: number) => void
   ): Promise<void> {
+    // Fallback: single async upload if multipart endpoints are unavailable
+    const fallbackSingleUpload = async () => {
+      const fd = new FormData()
+      fd.append('file', file)
+      // Try async endpoint first
+      const resAsync = await fetch(`${API_BASE}/upload_async`, { method: 'POST', body: fd })
+      if (resAsync.status === 404) {
+        // Server does not have /upload_async yet; use synchronous /upload
+        const resSync = await fetch(`${API_BASE}/upload`, { method: 'POST', body: fd })
+        if (!resSync.ok) throw new Error(`fallback /upload failed: ${resSync.status}`)
+      } else if (!resAsync.ok) {
+        throw new Error(`fallback upload_async failed: ${resAsync.status}`)
+      }
+      onProgress(100)
+    }
+
     // 1) Initiate session
     const total_parts = Math.max(1, Math.ceil(file.size / CHUNK_SIZE))
     const initRes = await fetch(`${API_BASE}/uploads/initiate`, {
@@ -1271,6 +1287,10 @@ export default function DocumentsPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ filename: file.name, total_parts })
     })
+    if (initRes.status === 404) {
+      // Backend has not deployed multipart endpoints yet – degrade gracefully
+      return fallbackSingleUpload()
+    }
     if (!initRes.ok) throw new Error(`initiate failed: ${initRes.status}`)
     const { upload_id } = await initRes.json()
 
@@ -1293,6 +1313,10 @@ export default function DocumentsPage() {
         method: 'POST',
         body: fd
       })
+      if (r.status === 404) {
+        // Degrade to single upload
+        return fallbackSingleUpload()
+      }
       if (!r.ok) throw new Error(`part ${p.index} failed: ${r.status}`)
       uploaded += 1
       onProgress(Math.floor((uploaded / parts.length) * 100))
@@ -1312,6 +1336,9 @@ export default function DocumentsPage() {
     const compRes = await fetch(`${API_BASE}/uploads/${encodeURIComponent(upload_id)}/complete`, {
       method: 'POST'
     })
+    if (compRes.status === 404) {
+      return fallbackSingleUpload()
+    }
     if (!(compRes.status === 202 || compRes.ok)) throw new Error(`complete failed: ${compRes.status}`)
   }
 
@@ -1357,7 +1384,11 @@ export default function DocumentsPage() {
         // Smaller files: single request to async endpoint
         const fd = new FormData()
         fd.append('file', f)
-        const res = await fetch(`${API_BASE}/upload_async`, { method: 'POST', body: fd })
+        let res = await fetch(`${API_BASE}/upload_async`, { method: 'POST', body: fd })
+        if (res.status === 404) {
+          // Backend missing /upload_async; try synchronous /upload
+          res = await fetch(`${API_BASE}/upload`, { method: 'POST', body: fd })
+        }
         if (!res.ok) {
           setUploadProgress(prev => prev.map(u =>
             u.id === localId ? { ...u, status: 'error' as const, error: `Upload failed: ${res.status}` } : u
