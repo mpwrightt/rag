@@ -298,6 +298,7 @@ async def handle_websocket_chat(websocket: WebSocket, client_id: str, data: dict
         # Load previous conversation history for context
         from .db_utils import get_session_messages, add_message
         previous_messages = await get_session_messages(session_id, limit=20)  # Last 20 messages
+        logger.info(f"WebSocket endpoint: Loaded {len(previous_messages)} previous messages for session {session_id}")
         
         # Save user message to database
         await add_message(
@@ -622,10 +623,12 @@ async def create_workflow(workflow_request: CreateWorkflowRequest):
 
 # Enhanced existing endpoints with analytics tracking
 @app.post("/api/chat/stream")
-@app.post("/chat/stream")  # Also handle the path without /api prefix for compatibility
+@app.post("/chat/stream")  # Also handle the path without /api prefix for compatibility  
 async def chat_stream(chat_request: ChatRequest):
     """Enhanced streaming chat with analytics tracking."""
+    logger.info(f"🚀 Enhanced chat endpoint called with session_id: {chat_request.session_id}")
     session_id, is_new_session = await get_or_create_session(chat_request.session_id)
+    logger.info(f"📝 Using session: {session_id}, is_new: {is_new_session}")
     
     start_time = datetime.now()
     
@@ -646,6 +649,7 @@ async def chat_stream(chat_request: ChatRequest):
             # Load previous conversation history for context
             from .db_utils import get_session_messages, add_message
             previous_messages = await get_session_messages(session_id, limit=20)  # Last 20 messages
+            logger.info(f"Enhanced endpoint: Loaded {len(previous_messages)} previous messages for session {session_id}")
             
             # Save user message to database
             await add_message(
@@ -684,8 +688,10 @@ async def chat_stream(chat_request: ChatRequest):
                 for msg in conversation_history[:-1]:  # All except current message
                     context_message += f"{msg['role'].upper()}: {msg['content'][:300]}...\n" if len(msg['content']) > 300 else f"{msg['role'].upper()}: {msg['content']}\n"
                 context_message += f"\nCurrent request: {chat_request.message}"
+                logger.info(f"Enhanced endpoint: Built context with {len(conversation_history)-1} previous messages")
             else:
                 context_message = chat_request.message
+                logger.info(f"Enhanced endpoint: No conversation history, using direct message")
             
             # Stream the response
             async for chunk in rag_agent.run_stream(context_message, deps=deps):

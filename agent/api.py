@@ -902,8 +902,8 @@ async def chat(request: ChatRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/chat/stream")
-async def chat_stream(request: ChatRequest):
+@app.post("/chat/stream/legacy")  # Renamed to avoid conflict with enhanced endpoint
+async def chat_stream_legacy(request: ChatRequest):
     """Streaming chat endpoint using Server-Sent Events."""
     try:
         # Get or create session
@@ -1599,6 +1599,66 @@ async def get_document_content_endpoint(document_id: str, variant: str):
     except Exception as e:
         logger.error(f"Get document content failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/documents/{document_id}/summary")
+async def generate_dbr_summary(
+    document_id: str,
+    request: Dict[str, Any] = None
+):
+    """
+    Generate a comprehensive summary of a DBR document using the RAG system.
+    
+    Args:
+        document_id: UUID of the document to summarize
+        request: Optional configuration for summary generation
+    """
+    try:
+        from .summarizer import dbr_summarizer
+        
+        # Parse request parameters
+        params = request or {}
+        include_context = params.get("include_context", True)
+        context_queries = params.get("context_queries")
+        summary_type = params.get("summary_type", "comprehensive")
+        
+        # Validate summary type
+        valid_types = {"comprehensive", "executive", "financial", "operational"}
+        if summary_type not in valid_types:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid summary_type. Must be one of: {', '.join(valid_types)}"
+            )
+        
+        logger.info(f"Generating {summary_type} summary for document {document_id}")
+        
+        # Generate summary
+        summary_result = await dbr_summarizer.summarize_dbr(
+            document_id=document_id,
+            include_context=include_context,
+            context_queries=context_queries,
+            summary_type=summary_type
+        )
+        
+        return summary_result
+        
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"DBR summary generation failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Summary generation failed: {str(e)}")
+
+
+@app.get("/documents/{document_id}/summary/{summary_type}")
+async def get_dbr_summary_typed(document_id: str, summary_type: str):
+    """
+    Generate a typed summary of a DBR document.
+    Convenience endpoint for specific summary types.
+    """
+    return await generate_dbr_summary(
+        document_id,
+        {"summary_type": summary_type, "include_context": True}
+    )
 
 
 @app.post("/upload")

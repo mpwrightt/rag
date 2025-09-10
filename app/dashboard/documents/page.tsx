@@ -66,7 +66,8 @@ import {
   Move,
   Copy,
   Star,
-  StarOff
+  StarOff,
+  FileText as SummaryIcon
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import ReactMarkdown from 'react-markdown'
@@ -520,6 +521,7 @@ function DocumentCard({
   isSelected,
   onToggleSelect,
   onMoveToCollection,
+  onGenerateSummary,
 }: {
   document: Document
   onEdit: (id: string) => void
@@ -529,6 +531,7 @@ function DocumentCard({
   isSelected: boolean
   onToggleSelect: (id: string) => void
   onMoveToCollection: (id: string) => void
+  onGenerateSummary: (id: string) => void
 }) {
   const IconComponent = FILE_TYPE_ICONS[document.type] || File
   const colorClasses = FILE_TYPE_COLORS[document.type] || 'text-gray-600 bg-gray-100'
@@ -607,6 +610,15 @@ function DocumentCard({
                 >
                   <Edit3 className="w-4 h-4 mr-2" />
                   Edit Details
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="w-full justify-start"
+                  onClick={() => onGenerateSummary(document.id)}
+                >
+                  <SummaryIcon className="w-4 h-4 mr-2" />
+                  Generate Summary
                 </Button>
                 <Button
                   variant="ghost"
@@ -848,6 +860,12 @@ export default function DocumentsPage() {
   const [showPreviewDialog, setShowPreviewDialog] = useState(false)
   const [previewDocument, setPreviewDocument] = useState<Document | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
+  // Summary state
+  const [showSummaryDialog, setShowSummaryDialog] = useState(false)
+  const [summaryDocument, setSummaryDocument] = useState<Document | null>(null)
+  const [summaryLoading, setSummaryLoading] = useState(false)
+  const [summaryResult, setSummaryResult] = useState<any>(null)
+  const [summaryError, setSummaryError] = useState<string | null>(null)
   const [showBulkActions, setShowBulkActions] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   // Pagination state (page-based)
@@ -1282,6 +1300,43 @@ export default function DocumentsPage() {
     }
   }
 
+  const handleGenerateSummary = async (id: string) => {
+    const doc = documents.find(d => d.id === id)
+    if (!doc) return
+    
+    try {
+      setSummaryLoading(true)
+      setSummaryDocument(doc)
+      setShowSummaryDialog(true)
+      
+      // Generate comprehensive summary
+      const response = await fetch(`${API_BASE}/documents/${encodeURIComponent(id)}/summary`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'bypass-tunnel-reminder': 'true' 
+        },
+        body: JSON.stringify({
+          summary_type: 'comprehensive',
+          include_context: true
+        })
+      })
+      
+      if (!response.ok) {
+        throw new Error(`Failed to generate summary: ${response.status}`)
+      }
+      
+      const summaryData = await response.json()
+      setSummaryResult(summaryData)
+      
+    } catch (error) {
+      console.error('Failed to generate summary:', error)
+      setSummaryError(error instanceof Error ? error.message : 'Unknown error occurred')
+    } finally {
+      setSummaryLoading(false)
+    }
+  }
+
   const handleToggleSelect = (id: string) => {
     setSelectedDocuments(prev => 
       prev.includes(id) 
@@ -1703,6 +1758,7 @@ export default function DocumentsPage() {
                 isSelected={selectedDocuments.includes(document.id)}
                 onToggleSelect={handleToggleSelect}
                 onMoveToCollection={handleOpenMoveDialog}
+                onGenerateSummary={handleGenerateSummary}
               />
             ))}
           </div>
@@ -2373,6 +2429,242 @@ export default function DocumentsPage() {
                     Search
                   </Button>
                 </div>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Summary Dialog */}
+      <Dialog open={showSummaryDialog} onOpenChange={setShowSummaryDialog}>
+        <DialogContent className="max-w-5xl max-h-[90vh]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <SummaryIcon className="w-5 h-5" />
+              Document Summary
+            </DialogTitle>
+            <DialogDescription>
+              AI-generated comprehensive summary using RAG-enhanced context
+            </DialogDescription>
+          </DialogHeader>
+          
+          {summaryDocument && (
+            <div className="flex flex-col h-full max-h-[70vh]">
+              {/* Document Info */}
+              <div className="border-b pb-4 mb-4">
+                <h3 className="font-semibold text-lg">{summaryDocument.title || summaryDocument.name}</h3>
+                <p className="text-sm text-muted-foreground">
+                  {summaryDocument.type?.toUpperCase()} • {formatFileSize(summaryDocument.size)} • 
+                  {summaryDocument.chunk_count ? ` ${summaryDocument.chunk_count} chunks` : ''}
+                </p>
+              </div>
+
+              {/* Loading State */}
+              {summaryLoading && (
+                <div className="flex items-center justify-center py-12">
+                  <div className="text-center space-y-4">
+                    <div className="w-16 h-16 bg-blue-100 rounded-lg flex items-center justify-center mx-auto">
+                      <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+                    </div>
+                    <div className="space-y-2">
+                      <p className="font-medium">Generating Summary...</p>
+                      <p className="text-sm text-muted-foreground">
+                        Processing document chunks and gathering context
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Error State */}
+              {summaryError && (
+                <div className="flex items-center justify-center py-12">
+                  <div className="text-center space-y-4">
+                    <div className="w-16 h-16 bg-red-100 rounded-lg flex items-center justify-center mx-auto">
+                      <AlertTriangle className="w-8 h-8 text-red-600" />
+                    </div>
+                    <div className="space-y-2">
+                      <p className="font-medium text-red-600">Summary Generation Failed</p>
+                      <p className="text-sm text-muted-foreground">{summaryError}</p>
+                    </div>
+                    <Button 
+                      variant="outline" 
+                      onClick={() => handleGenerateSummary(summaryDocument.id)}
+                      disabled={summaryLoading}
+                    >
+                      <RefreshCw className="w-4 h-4 mr-2" />
+                      Try Again
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {/* Summary Results */}
+              {summaryResult && !summaryLoading && !summaryError && (
+                <div className="flex-1 overflow-y-auto space-y-6">
+                  {/* Summary Metadata */}
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-4 bg-muted/50 rounded-lg">
+                    <div>
+                      <p className="text-sm font-medium">Summary Type</p>
+                      <p className="text-sm text-muted-foreground capitalize">
+                        {summaryResult.summary_type}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium">Generated</p>
+                      <p className="text-sm text-muted-foreground">
+                        {new Date(summaryResult.generated_at).toLocaleString()}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium">Chunks Processed</p>
+                      <p className="text-sm text-muted-foreground">
+                        {summaryResult.metadata?.total_chunks || 'N/A'}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium">Related Docs</p>
+                      <p className="text-sm text-muted-foreground">
+                        {summaryResult.metadata?.related_documents || 0}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Summary Content */}
+                  {summaryResult.summary && (
+                    <div className="space-y-4">
+                      {/* JSON Structure Summary */}
+                      {typeof summaryResult.summary === 'object' && (
+                        <>
+                          {summaryResult.summary.executive_overview && (
+                            <div>
+                              <h4 className="font-semibold mb-2 flex items-center gap-2">
+                                <Target className="w-4 h-4" />
+                                Executive Overview
+                              </h4>
+                              <div className="prose prose-sm max-w-none">
+                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                  {summaryResult.summary.executive_overview}
+                                </ReactMarkdown>
+                              </div>
+                            </div>
+                          )}
+
+                          {summaryResult.summary.key_metrics && (
+                            <div>
+                              <h4 className="font-semibold mb-2 flex items-center gap-2">
+                                <BarChart3 className="w-4 h-4" />
+                                Key Metrics
+                              </h4>
+                              <div className="prose prose-sm max-w-none">
+                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                  {summaryResult.summary.key_metrics}
+                                </ReactMarkdown>
+                              </div>
+                            </div>
+                          )}
+
+                          {summaryResult.summary.major_highlights && (
+                            <div>
+                              <h4 className="font-semibold mb-2 flex items-center gap-2">
+                                <Sparkles className="w-4 h-4" />
+                                Major Highlights
+                              </h4>
+                              <div className="prose prose-sm max-w-none">
+                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                  {summaryResult.summary.major_highlights}
+                                </ReactMarkdown>
+                              </div>
+                            </div>
+                          )}
+
+                          {summaryResult.summary.challenges_and_risks && (
+                            <div>
+                              <h4 className="font-semibold mb-2 flex items-center gap-2">
+                                <AlertTriangle className="w-4 h-4" />
+                                Challenges & Risks
+                              </h4>
+                              <div className="prose prose-sm max-w-none">
+                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                  {summaryResult.summary.challenges_and_risks}
+                                </ReactMarkdown>
+                              </div>
+                            </div>
+                          )}
+
+                          {summaryResult.summary.opportunities_and_recommendations && (
+                            <div>
+                              <h4 className="font-semibold mb-2 flex items-center gap-2">
+                                <TrendingUp className="w-4 h-4" />
+                                Opportunities & Recommendations
+                              </h4>
+                              <div className="prose prose-sm max-w-none">
+                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                  {summaryResult.summary.opportunities_and_recommendations}
+                                </ReactMarkdown>
+                              </div>
+                            </div>
+                          )}
+
+                          {summaryResult.summary.conclusion && (
+                            <div>
+                              <h4 className="font-semibold mb-2 flex items-center gap-2">
+                                <CheckCircle className="w-4 h-4" />
+                                Conclusion
+                              </h4>
+                              <div className="prose prose-sm max-w-none">
+                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                  {summaryResult.summary.conclusion}
+                                </ReactMarkdown>
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      )}
+
+                      {/* Text-based Summary Fallback */}
+                      {typeof summaryResult.summary === 'string' && (
+                        <div>
+                          <h4 className="font-semibold mb-2">Summary</h4>
+                          <div className="prose prose-sm max-w-none">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                              {summaryResult.summary}
+                            </ReactMarkdown>
+                          </div>
+                        </div>
+                      )}
+
+                      {summaryResult.summary.full_text && (
+                        <div>
+                          <h4 className="font-semibold mb-2">Full Analysis</h4>
+                          <div className="prose prose-sm max-w-none">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                              {summaryResult.summary.full_text}
+                            </ReactMarkdown>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div className="flex justify-between items-center pt-4 border-t">
+                <div className="flex gap-2">
+                  <Button 
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleGenerateSummary(summaryDocument.id)}
+                    disabled={summaryLoading}
+                  >
+                    <RefreshCw className="w-4 h-4 mr-2" />
+                    Regenerate
+                  </Button>
+                </div>
+                <Button variant="outline" onClick={() => setShowSummaryDialog(false)}>
+                  Close
+                </Button>
               </div>
             </div>
           )}
