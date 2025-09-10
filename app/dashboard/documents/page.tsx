@@ -2454,7 +2454,7 @@ export default function DocumentsPage() {
               <div className="border-b pb-4 mb-4">
                 <h3 className="font-semibold text-lg">{summaryDocument.title || summaryDocument.name}</h3>
                 <p className="text-sm text-muted-foreground">
-                  {summaryDocument.type?.toUpperCase()} • {formatFileSize(summaryDocument.size)} • 
+                  {summaryDocument.type?.toUpperCase()} • {formatSizeMB(summaryDocument.size)} • 
                   {summaryDocument.chunk_count ? ` ${summaryDocument.chunk_count} chunks` : ''}
                 </p>
               </div>

@@ -1604,7 +1604,7 @@ async def get_document_content_endpoint(document_id: str, variant: str):
 @app.post("/documents/{document_id}/summary")
 async def generate_dbr_summary(
     document_id: str,
-    request: Dict[str, Any] = None
+    request: Request
 ):
     """
     Generate a comprehensive summary of a DBR document using the RAG system.
@@ -1616,11 +1616,15 @@ async def generate_dbr_summary(
     try:
         from .summarizer import dbr_summarizer
         
-        # Parse request parameters
-        params = request or {}
-        include_context = params.get("include_context", True)
-        context_queries = params.get("context_queries")
-        summary_type = params.get("summary_type", "comprehensive")
+        # Parse request body
+        try:
+            body = await request.json() if request else {}
+        except:
+            body = {}
+            
+        include_context = body.get("include_context", True)
+        context_queries = body.get("context_queries")
+        summary_type = body.get("summary_type", "comprehensive")
         
         # Validate summary type
         valid_types = {"comprehensive", "executive", "financial", "operational"}
@@ -1655,10 +1659,15 @@ async def get_dbr_summary_typed(document_id: str, summary_type: str):
     Generate a typed summary of a DBR document.
     Convenience endpoint for specific summary types.
     """
-    return await generate_dbr_summary(
-        document_id,
-        {"summary_type": summary_type, "include_context": True}
-    )
+    from fastapi import Request
+    import json
+    
+    # Create a mock request object with the summary type
+    class MockRequest:
+        async def json(self):
+            return {"summary_type": summary_type, "include_context": True}
+    
+    return await generate_dbr_summary(document_id, MockRequest())
 
 
 @app.post("/upload")

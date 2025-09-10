@@ -12,7 +12,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
 import json
 
-from .providers import get_llm_model
+from .agent import rag_agent, AgentDependencies
 from .db_utils import get_document_chunks, get_document, vector_search
 from .tools import vector_search_tool, hybrid_search_tool, VectorSearchInput, HybridSearchInput
 from .models import ChunkResult
@@ -33,7 +33,6 @@ class DBRSummarizer:
             max_context_tokens: Maximum tokens to use for context window
         """
         self.max_context_tokens = max_context_tokens
-        self.llm = get_llm_model()
         
         # Token estimation: rough approximation (1 token ≈ 4 characters)
         self.chars_per_token = 4
@@ -208,8 +207,10 @@ Generate queries that would help provide context for:
 Return only the queries, one per line:
 """
             
-            # Use simple completion for query generation (faster than agent)
-            response = await self.llm.complete(prompt)
+            # Use agent for query generation
+            deps = AgentDependencies(session_id=f"summary_{document['id']}")
+            result = await rag_agent.run(prompt, deps=deps)
+            response = result.data
             
             # Parse queries from response
             queries = [
@@ -308,9 +309,11 @@ Return only the queries, one per line:
         # Prepare summary prompt based on type
         prompt = self._get_summary_prompt(batch_content, document, summary_type, batch_number)
         
-        # Generate summary
+        # Generate summary using agent
         try:
-            summary = await self.llm.complete(prompt)
+            deps = AgentDependencies(session_id=f"batch_summary_{batch_number}")
+            result = await rag_agent.run(prompt, deps=deps)
+            summary = result.data
             
             return {
                 "batch_number": batch_number,
@@ -454,7 +457,9 @@ Ensure the summary is comprehensive yet concise, suitable for executive review.
 """
         
         try:
-            final_response = await self.llm.complete(final_prompt)
+            deps = AgentDependencies(session_id=f"final_summary_{document['id']}")
+            result = await rag_agent.run(final_prompt, deps=deps)
+            final_response = result.data
             
             # Try to parse as JSON, fallback to structured text
             try:
