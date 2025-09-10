@@ -924,6 +924,12 @@ async def chat(request: ChatRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/chat/stream")
+async def chat_stream(request: ChatRequest):
+    """Compatibility route for /chat/stream that forwards to the existing chat_stream_legacy."""
+    return await chat_stream_legacy(request)
+
+
 @app.post("/chat/stream/legacy")  # Renamed to avoid conflict with enhanced endpoint
 async def chat_stream_legacy(request: ChatRequest):
     """Streaming chat endpoint using Server-Sent Events."""
