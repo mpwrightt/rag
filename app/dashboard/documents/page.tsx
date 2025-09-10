@@ -1265,8 +1265,7 @@ export default function DocumentsPage() {
 
         const res = await fetch(`${API_BASE}/upload`, {
           method: 'POST',
-          body: fd,
-          headers: { 'bypass-tunnel-reminder': 'true' }
+          body: fd
         })
 
         if (!res.ok) {

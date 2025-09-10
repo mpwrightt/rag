@@ -258,9 +258,22 @@ app = FastAPI(
 )
 
 # Add middleware with flexible CORS
+# Configure CORS with environment-driven origins. Using wildcard with credentials can be problematic on some hosts.
+allowed_origins_env = os.getenv("ALLOWED_ORIGINS") or os.getenv("CORS_ALLOW_ORIGINS") or ""
+allowed_origins = [o.strip() for o in allowed_origins_env.split(",") if o.strip()]
+
+# In production, default to allowing datadiver.app domains via regex if no explicit origins are set
+default_origin_regex = None
+try:
+    if os.getenv("APP_ENV", "development").lower() != "development" and not allowed_origins:
+        default_origin_regex = r"https://(.+\.)?datadiver\.app$"
+except Exception:
+    default_origin_regex = None
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins or ([] if default_origin_regex else ["*"]),
+    allow_origin_regex=os.getenv("CORS_ALLOW_ORIGIN_REGEX") or default_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"]
