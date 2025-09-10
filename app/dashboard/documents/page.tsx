@@ -2123,7 +2123,7 @@ export default function DocumentsPage() {
             {selectedDocuments.length > 0 && (
               <Popover open={showBulkActions} onOpenChange={setShowBulkActions}>
                 <PopoverTrigger asChild>
-                  <Button variant="outline" className="flex items-center justify-center gap-2 min-h-[44px] sm:min-h-10">
+                  <Button variant="outline" className="hidden sm:inline-flex items-center justify-center gap-2 min-h-[44px] sm:min-h-10">
                     <CheckCircle className="w-4 h-4" />
                     <span className="text-sm">{selectedDocuments.length} selected</span>
                   </Button>
@@ -2171,7 +2171,7 @@ export default function DocumentsPage() {
             )}
             <Button 
               onClick={() => setShowUploadDialog(true)}
-              className="flex items-center justify-center gap-2 min-h-[44px] sm:min-h-10 text-sm sm:text-base"
+              className="hidden sm:inline-flex items-center justify-center gap-2 min-h-[44px] sm:min-h-10 text-sm sm:text-base"
             >
               <Plus className="w-4 h-4" />
               Add Documents
@@ -2601,6 +2601,17 @@ export default function DocumentsPage() {
             </div>
           )}
         </div>
+      </div>
+
+      {/* Mobile Floating Action Button (Upload) */}
+      <div className="sm:hidden fixed bottom-5 right-5 z-50">
+        <Button
+          onClick={() => setShowUploadDialog(true)}
+          className="h-14 w-14 rounded-full shadow-lg"
+          aria-label="Add documents"
+        >
+          <Plus className="w-6 h-6" />
+        </Button>
       </div>
 
       {/* Upload Dialog */}
