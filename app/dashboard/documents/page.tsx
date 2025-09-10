@@ -73,6 +73,7 @@ import {
 import { cn } from '@/lib/utils'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { AnimatedCircularProgress } from '@/components/magicui/animated-circular-progress'
 
 // Markdown renderer with wrapped code/pre blocks to prevent horizontal overflow
 const Markdown = ({ children }: { children: string }) => (
@@ -889,6 +890,8 @@ export default function DocumentsPage() {
   const [downloadFormat, setDownloadFormat] = useState<'md' | 'txt' | 'json'>('md')
   const [summaryJobId, setSummaryJobId] = useState<string | null>(null)
   const [summaryProgress, setSummaryProgress] = useState<string | null>(null)
+  const [summaryPercent, setSummaryPercent] = useState<number | null>(null)
+  const cancelSummaryRef = useRef(false)
   const [showBulkActions, setShowBulkActions] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   // Pagination state (page-based)
@@ -1335,6 +1338,8 @@ export default function DocumentsPage() {
       setShowSummaryDialog(true)
       setSummaryJobId(null)
       setSummaryProgress('Queuing summary job...')
+      setSummaryPercent(0)
+      cancelSummaryRef.current = false
 
       // Start async summary job
       const startRes = await fetch(`${API_BASE}/documents/${encodeURIComponent(id)}/summary_async`, {
@@ -1363,18 +1368,34 @@ export default function DocumentsPage() {
       const maxAttempts = 900 // ~30 minutes at 2s interval
       while (attempts < maxAttempts) {
         attempts += 1
+        if (cancelSummaryRef.current) {
+          break
+        }
         const stRes = await fetch(`${API_BASE}/jobs/${encodeURIComponent(job_id)}/status`, {
           headers: { 'bypass-tunnel-reminder': 'true' }
         })
         if (!stRes.ok) throw new Error(`Job status error: ${stRes.status}`)
         const st = await stRes.json()
         const status = (st?.status || '').toLowerCase()
+        const prog = typeof st?.progress === 'number' ? st.progress : null
+        const total = typeof st?.total === 'number' ? st.total : null
+        if (prog != null && total && total > 0) {
+          setSummaryPercent(Math.max(0, Math.min(100, Math.floor((prog / total) * 100))))
+        }
         if (status === 'done') {
           setSummaryProgress('Finalizing result...')
+          setSummaryPercent(100)
           break
         }
         if (status === 'error') {
           throw new Error(st?.error || 'Summary job failed')
+        }
+        if (status === 'cancelled') {
+          setSummaryError('Summary job was cancelled')
+          setSummaryJobId(null)
+          setSummaryProgress(null)
+          setSummaryPercent(null)
+          return
         }
         setSummaryProgress(status === 'running' ? 'Running analysis on large document...' : 'Waiting in queue...')
         await sleep(2000)
@@ -1400,6 +1421,7 @@ export default function DocumentsPage() {
       }
       setSummaryProgress(null)
       setSummaryJobId(null)
+      setSummaryPercent(null)
       
     } catch (error) {
       console.error('Failed to generate summary:', error)
@@ -1407,6 +1429,18 @@ export default function DocumentsPage() {
     } finally {
       setSummaryLoading(false)
     }
+  }
+
+  const handleCancelSummary = async () => {
+    if (!summaryJobId) return
+    cancelSummaryRef.current = true
+    setSummaryProgress('Cancelling...')
+    try {
+      await fetch(`${API_BASE}/jobs/${encodeURIComponent(summaryJobId)}/cancel`, {
+        method: 'POST',
+        headers: { 'bypass-tunnel-reminder': 'true' }
+      })
+    } catch {}
   }
 
   // Build downloadable content from the current summary result
