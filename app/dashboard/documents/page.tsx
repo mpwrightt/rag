@@ -2192,38 +2192,54 @@ export default function DocumentsPage() {
           </div>
         </div>
 
-        {/* Mobile-Optimized Search and Filters */}
-        <div className="flex flex-col gap-4">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
-            <Input
-              placeholder="Search documents by name, title, or tags..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10 pr-4 h-11 sm:h-10 text-base sm:text-sm"
-            />
-          </div>
-          
-          <div className="flex flex-col sm:flex-row gap-3">
-            {/* Condensed Mobile Controls */}
-            <div className="flex items-center gap-2 sm:hidden">
-              <Button
-                variant="outline"
-                className="h-11 flex-1"
-                onClick={() => setShowMobileFilters(true)}
-              >
-                <Filter className="w-4 h-4 mr-2" /> Filters
-              </Button>
-              <Button
-                variant="outline"
-                className="h-11 w-11 p-0"
-                onClick={() => setViewMode(viewMode === 'grid' ? 'list' : 'grid')}
-                aria-label="Toggle view"
-              >
-                {viewMode === 'grid' ? <List className="w-4 h-4" /> : <Grid3x3 className="w-4 h-4" />}
-              </Button>
+        {/* Mobile + Desktop Search and Filters */}
+        <div className="flex flex-col gap-3">
+          {/* Mobile: search + filters + toggle in one row */}
+          <div className="sm:hidden flex items-center gap-1.5">
+            <div className="relative flex-1 min-w-0 max-w-[66%]">
+              <Search className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground w-4 h-4" />
+              <Input
+                placeholder="Search..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-7 pr-2 h-9 text-sm"
+              />
             </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-9 w-9 p-0"
+              onClick={() => setShowMobileFilters(true)}
+              aria-label="Filters"
+            >
+              <Filter className="w-4 h-4" />
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-9 w-9 p-0"
+              onClick={() => setViewMode(viewMode === 'grid' ? 'list' : 'grid')}
+              aria-label="Toggle view"
+            >
+              {viewMode === 'grid' ? <List className="w-4 h-4" /> : <Grid3x3 className="w-4 h-4" />}
+            </Button>
+          </div>
 
+          {/* Desktop: full-width search */}
+          <div className="hidden sm:block">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground w-4 h-4" />
+              <Input
+                placeholder="Search documents by name, title, or tags..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-10 pr-4 h-10 text-sm"
+              />
+            </div>
+          </div>
+
+          <div className="flex flex-col sm:flex-row gap-3">
+            
             {/* Desktop Filter Controls */}
             <div className="hidden sm:flex sm:items-center gap-3 flex-wrap">
               <Select value={filterStatus} onValueChange={setFilterStatus}>
@@ -3278,14 +3294,14 @@ export default function DocumentsPage() {
 
       {/* Summary Dialog */}
       <Dialog open={showSummaryDialog} onOpenChange={setShowSummaryDialog}>
-        <DialogContent className="max-w-6xl max-h-[95vh] overflow-hidden flex flex-col">
-          <DialogHeader className="flex-shrink-0">
+        <DialogContent className="w-[96vw] sm:max-w-6xl max-h-[95vh] overflow-hidden flex flex-col p-0 sm:p-6">
+          <DialogHeader className="flex-shrink-0 p-4 sm:p-6 pb-2">
             <DialogTitle className="flex items-center gap-2">
               <SummaryIcon className="w-5 h-5" />
               Document Summary
             </DialogTitle>
             <div className="mt-2">
-              <Button variant="outline" size="sm" onClick={() => setSummaryDetailsOpen(v => !v)}>
+              <Button variant="outline" size="sm" className="w-full sm:w-auto" onClick={() => setSummaryDetailsOpen(v => !v)}>
                 {summaryDetailsOpen ? (
                   <>
                     <ChevronUp className="w-4 h-4 mr-1" /> Hide Details
@@ -3298,7 +3314,7 @@ export default function DocumentsPage() {
               </Button>
             </div>
           </DialogHeader>
-          
+
           {summaryDocument && (
             <div className="flex flex-col flex-1 overflow-hidden">
               {/* Document Info (collapsible) */}
@@ -3375,7 +3391,7 @@ export default function DocumentsPage() {
                   <div className="space-y-4 mb-6 flex-shrink-0">
                     {/* Domain Classification Info */}
                     {summaryResult.domain_classification && (
-                      <div className="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+                      <div className="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 sm:p-6">
                         <div className="flex items-center gap-2 mb-2">
                           <Sparkles className="w-5 h-5 text-blue-600 dark:text-blue-400" />
                           <h4 className="font-semibold text-blue-800 dark:text-blue-200">Expert Analysis Mode</h4>
@@ -3413,7 +3429,7 @@ export default function DocumentsPage() {
                     )}
                     
                     {/* Standard Metadata */}
-                    <div className="grid grid-cols-2 md:grid-cols-5 gap-4 p-4 bg-muted/50 rounded-lg">
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-4 p-4 sm:p-6 bg-muted/50 rounded-lg">
                       <div>
                         <p className="text-sm font-medium">Summary Type</p>
                         <p className="text-sm text-muted-foreground capitalize">
@@ -3470,7 +3486,7 @@ export default function DocumentsPage() {
                       : !!displaySummary && Object.keys(displaySummary || {}).length > 0
                     return hasContent
                   })() && (
-                    <div className="flex-1 overflow-y-auto overflow-x-hidden pr-2">
+                    <div className="flex-1 overflow-y-auto overflow-x-hidden px-4 sm:px-6 pb-2">
                       <div className="space-y-6">
                         {/* Handle raw JSON string that needs parsing */}
                         {(() => {
@@ -3671,7 +3687,7 @@ export default function DocumentsPage() {
                               } else {
                                 // Fallback: render as markdown text block
                                 return (
-                                  <div className="bg-background border rounded-lg p-6">
+                                  <div className="bg-background border rounded-lg p-4 sm:p-6">
                                     <h4 className="font-semibold mb-4 flex items-center gap-2">
                                       <FileText className="w-5 h-5" />
                                       Document Summary
@@ -3737,7 +3753,7 @@ export default function DocumentsPage() {
                             // If we received an array, flatten to bullets under Full Analysis
                             if (Array.isArray(parsedSummary)) {
                               return (
-                                <div className="bg-background border rounded-lg p-6">
+                                <div className="bg-background border rounded-lg p-4 sm:p-6">
                                   <h4 className="font-semibold mb-4 flex items-center gap-2">
                                     <FileText className="w-5 h-5" />
                                     Document Summary
@@ -3759,7 +3775,7 @@ export default function DocumentsPage() {
                             return (
                               <>
                                 {parsedSummary.executive_overview && (
-                                  <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-6">
+                                  <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 sm:p-6">
                                     <h4 className="font-semibold mb-4 flex items-center gap-2 text-blue-700 dark:text-blue-300">
                                       <Target className="w-5 h-5" />
                                       Executive Overview
@@ -3793,7 +3809,7 @@ export default function DocumentsPage() {
                                 )}
 
                                 {parsedSummary.key_metrics && (
-                                  <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-6">
+                                  <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-4 sm:p-6">
                                     <h4 className="font-semibold mb-4 flex items-center gap-2 text-green-700 dark:text-green-300">
                                       <BarChart3 className="w-5 h-5" />
                                       Key Metrics
@@ -3826,7 +3842,7 @@ export default function DocumentsPage() {
                                 )}
 
                                 {parsedSummary.major_highlights && (
-                                  <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-6">
+                                  <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4 sm:p-6">
                                     <h4 className="font-semibold mb-4 flex items-center gap-2 text-yellow-700 dark:text-yellow-300">
                                       <Sparkles className="w-5 h-5" />
                                       Major Highlights
@@ -3856,7 +3872,7 @@ export default function DocumentsPage() {
                                 )}
 
                                 {parsedSummary.challenges_and_risks && (
-                                  <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-6">
+                                  <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4 sm:p-6">
                                     <h4 className="font-semibold mb-4 flex items-center gap-2 text-red-700 dark:text-red-300">
                                       <AlertTriangle className="w-5 h-5" />
                                       Challenges & Risks
@@ -3886,7 +3902,7 @@ export default function DocumentsPage() {
                                 )}
 
                                 {parsedSummary.opportunities_and_recommendations && (
-                                  <div className="bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg p-6">
+                                  <div className="bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg p-4 sm:p-6">
                                     <h4 className="font-semibold mb-4 flex items-center gap-2 text-purple-700 dark:text-purple-300">
                                       <TrendingUp className="w-5 h-5" />
                                       Opportunities & Recommendations
@@ -3916,7 +3932,7 @@ export default function DocumentsPage() {
                                 )}
 
                                 {parsedSummary.conclusion && (
-                                  <div className="bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 rounded-lg p-6">
+                                  <div className="bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 rounded-lg p-4 sm:p-6">
                                     <h4 className="font-semibold mb-4 flex items-center gap-2 text-indigo-700 dark:text-indigo-300">
                                       <CheckCircle className="w-5 h-5" />
                                       Conclusion
@@ -3930,7 +3946,7 @@ export default function DocumentsPage() {
                                 )}
 
                                 {parsedSummary.full_text && (
-                                  <div className="bg-gray-50 dark:bg-gray-900/20 border border-gray-200 dark:border-gray-800 rounded-lg p-6">
+                                  <div className="bg-gray-50 dark:bg-gray-900/20 border border-gray-200 dark:border-gray-800 rounded-lg p-4 sm:p-6">
                                     <h4 className="font-semibold mb-4 flex items-center gap-2 text-gray-700 dark:text-gray-300">
                                       <FileText className="w-5 h-5" />
                                       Full Analysis
@@ -3968,7 +3984,7 @@ export default function DocumentsPage() {
                           
                           // Fallback for other types: render as readable list instead of raw JSON
                           return (
-                            <div className="bg-background border rounded-lg p-6">
+                            <div className="bg-background border rounded-lg p-4 sm:p-6">
                               <h4 className="font-semibold mb-4">Summary</h4>
                               {typeof parsedSummary === 'string' ? (
                                 <div className="prose prose-sm max-w-none dark:prose-invert break-words whitespace-pre-wrap">
@@ -3993,7 +4009,7 @@ export default function DocumentsPage() {
               )}
 
               {/* Action Buttons */}
-              <div className="flex justify-between items-center pt-4 border-t mt-4 flex-shrink-0">
+              <div className="hidden sm:flex justify-between items-center pt-4 border-t mt-4 flex-shrink-0 px-6">
                 <div className="flex gap-2">
                   <Button 
                     variant="outline"
@@ -4032,6 +4048,45 @@ export default function DocumentsPage() {
                     Download
                   </Button>
                   <Button variant="outline" onClick={() => setShowSummaryDialog(false)}>
+                    Close
+                  </Button>
+                </div>
+              </div>
+
+              {/* Mobile sticky action bar */}
+              <div className="sm:hidden sticky bottom-0 left-0 right-0 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 p-2 flex-shrink-0">
+                <div className="grid grid-cols-4 gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleGenerateSummary(summaryDocument.id, true)}
+                    disabled={summaryLoading}
+                    className="truncate"
+                  >
+                    Regen
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setDownloadFormat(downloadFormat === 'md' ? 'txt' : (downloadFormat === 'txt' ? 'json' : 'md'))}
+                    className="truncate"
+                  >
+                    Fmt: {downloadFormat.toUpperCase()}
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={handleDownloadSummary}
+                    disabled={!hasSummaryContent(summaryResult)}
+                    className="truncate"
+                  >
+                    Download
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowSummaryDialog(false)}
+                    className="truncate"
+                  >
                     Close
                   </Button>
                 </div>

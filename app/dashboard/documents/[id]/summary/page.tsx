@@ -256,7 +256,7 @@ export default function DocumentSummaryPage() {
           </h1>
           <p className="text-sm text-muted-foreground mt-1">Comprehensive summary</p>
         </div>
-        <div className="flex items-center gap-2 flex-shrink-0">
+        <div className="hidden sm:flex items-center gap-2 flex-shrink-0">
           <Button onClick={loadCached} variant="outline" disabled={loadingSummary}>
             <RefreshCw className="w-4 h-4 mr-2" /> Load Cached
           </Button>
@@ -271,10 +271,10 @@ export default function DocumentSummaryPage() {
 
       {(jobStatus && jobStatus !== 'done') && (
         <Card className="mb-4">
-          <CardHeader className="pb-2">
+          <CardHeader className="pb-2 px-4 sm:px-6">
             <CardTitle className="text-sm">Summary Generation</CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="px-4 sm:px-6 pb-4">
             <div className="flex items-center justify-between mb-2 text-sm">
               <div className="flex items-center gap-2">
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -306,7 +306,7 @@ export default function DocumentSummaryPage() {
           )}
 
           {hasSummaryContent(summary) && (
-            <div className="max-h-[calc(100vh-280px)] overflow-y-auto pr-1 sm:pr-2">
+            <div className="max-h-[calc(100vh-280px)] overflow-y-auto pr-1 sm:pr-2 pb-24 sm:pb-6">
               <div className="prose prose-sm sm:prose-base md:prose-lg dark:prose-invert max-w-none leading-relaxed tracking-[0.01em] break-words hyphens-auto prose-headings:scroll-mt-24 prose-p:my-3 prose-li:my-1 prose-ol:my-2 prose-ul:my-2 prose-img:rounded-md">
                 <Markdown>{summaryAsMarkdown}</Markdown>
               </div>
@@ -314,6 +314,21 @@ export default function DocumentSummaryPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Mobile sticky action bar */}
+      <div className="sm:hidden fixed bottom-0 left-0 right-0 z-40 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 p-2">
+        <div className="grid grid-cols-3 gap-2">
+          <Button variant="outline" size="sm" onClick={loadCached} disabled={loadingSummary} className="truncate">
+            <RefreshCw className="w-4 h-4 mr-1" /> Cached
+          </Button>
+          <Button size="sm" onClick={startGeneration} disabled={loadingSummary} className="truncate">
+            {loadingSummary ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <PlayCircle className="w-4 h-4 mr-1" />} Generate
+          </Button>
+          <Button variant="secondary" size="sm" onClick={downloadMarkdown} disabled={!hasSummaryContent(summary)} className="truncate">
+            <Download className="w-4 h-4 mr-1" /> Download
+          </Button>
+        </div>
+      </div>
     </div>
   )
 }
