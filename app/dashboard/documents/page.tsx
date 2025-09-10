@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useState, useEffect, useRef, useMemo } from 'react'
+import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -19,7 +20,7 @@ import {
   Grid3x3, 
   List, 
   FileText, 
-  File,
+  File as FileIcon,
   Image as ImageIcon,
   Video,
   Music,
@@ -589,7 +590,7 @@ function DocumentCard({
   onMoveToCollection: (id: string) => void
   onGenerateSummary: (id: string) => void
 }) {
-  const IconComponent = FILE_TYPE_ICONS[document.type] || File
+  const IconComponent = FILE_TYPE_ICONS[document.type] || FileIcon
   const colorClasses = FILE_TYPE_COLORS[document.type] || 'text-gray-600 bg-gray-100'
   
   return (
@@ -848,6 +849,17 @@ function DocumentCard({
           >
             <Search className="w-4 h-4 mr-2" />
             Search
+          </Button>
+          <Button 
+            size="sm" 
+            variant="outline" 
+            className="flex-1"
+            asChild
+          >
+            <Link href={`/dashboard/documents/${encodeURIComponent(document.id)}/summary`}>
+              <SummaryIcon className="w-4 h-4 mr-2" />
+              Summary
+            </Link>
           </Button>
         </div>
       </CardContent>
@@ -1242,6 +1254,67 @@ export default function DocumentsPage() {
 
   const uniqueFileTypes = Object.keys(fileTypeStats)
 
+  // Large-file upload configuration (client-side)
+  const LARGE_FILE_THRESHOLD = Number(process.env.NEXT_PUBLIC_LARGE_UPLOAD_MB || '20') * 1024 * 1024 // 20MB default
+  const CHUNK_SIZE = Number(process.env.NEXT_PUBLIC_UPLOAD_CHUNK_MB || '5') * 1024 * 1024 // 5MB per part
+  const MAX_CONCURRENCY = Number(process.env.NEXT_PUBLIC_UPLOAD_CONCURRENCY || '4') // 4 parallel part uploads
+
+  // Upload a large file in parallel parts using the multipart endpoints
+  async function uploadLargeFileInParts(
+    file: File,
+    onProgress: (pct: number) => void
+  ): Promise<void> {
+    // 1) Initiate session
+    const total_parts = Math.max(1, Math.ceil(file.size / CHUNK_SIZE))
+    const initRes = await fetch(`${API_BASE}/uploads/initiate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename: file.name, total_parts })
+    })
+    if (!initRes.ok) throw new Error(`initiate failed: ${initRes.status}`)
+    const { upload_id } = await initRes.json()
+
+    // 2) Build parts
+    const parts: { index: number, blob: Blob }[] = []
+    for (let start = 0, index = 0; start < file.size; start += CHUNK_SIZE, index++) {
+      const end = Math.min(file.size, start + CHUNK_SIZE)
+      const blob = file.slice(start, end)
+      parts.push({ index, blob })
+    }
+
+    // 3) Upload parts with concurrency
+    let uploaded = 0
+    const uploadPart = async (p: { index: number, blob: Blob }) => {
+      const fd = new FormData()
+      fd.append('index', String(p.index))
+      // Give the chunk a deterministic name (server reads as stream)
+      fd.append('chunk', new File([p.blob], `${file.name}.part.${p.index}`))
+      const r = await fetch(`${API_BASE}/uploads/${encodeURIComponent(upload_id)}/part`, {
+        method: 'POST',
+        body: fd
+      })
+      if (!r.ok) throw new Error(`part ${p.index} failed: ${r.status}`)
+      uploaded += 1
+      onProgress(Math.floor((uploaded / parts.length) * 100))
+    }
+
+    // Simple promise pool
+    const queue = parts.slice()
+    const workers = Array.from({ length: Math.min(MAX_CONCURRENCY, parts.length) }, async () => {
+      while (queue.length) {
+        const next = queue.shift()!
+        await uploadPart(next)
+      }
+    })
+    await Promise.all(workers)
+
+    // 4) Complete session (stitches + ingests async on server)
+    const compRes = await fetch(`${API_BASE}/uploads/${encodeURIComponent(upload_id)}/complete`, {
+      method: 'POST'
+    })
+    if (!(compRes.status === 202 || compRes.ok)) throw new Error(`complete failed: ${compRes.status}`)
+  }
+
   const handleFileUpload = async (files: FileList | null) => {
     if (!files || files.length === 0) return
 
@@ -1257,32 +1330,46 @@ export default function DocumentsPage() {
     try {
       const fileArray = Array.from(files)
 
-      // Upload each file individually to the backend endpoint expected by FastAPI
       for (let i = 0; i < fileArray.length; i++) {
         const f = fileArray[i]
-        const fd = new FormData()
-        fd.append('file', f)
+        const localId = localUploads[i].id
 
-        const res = await fetch(`${API_BASE}/upload`, {
-          method: 'POST',
-          body: fd
-        })
-
-        if (!res.ok) {
-          // Mark this file as error and continue with others
-          setUploadProgress(prev => prev.map(u =>
-            u.id === localUploads[i].id ? { ...u, status: 'error' as const, error: `Upload failed: ${res.status}` } : u
-          ))
+        // Use multipart + parallel parts for large files
+        if (f.size >= LARGE_FILE_THRESHOLD) {
+          try {
+            await uploadLargeFileInParts(f, (pct) => {
+              setUploadProgress(prev => prev.map(u =>
+                u.id === localId ? { ...u, progress: pct, status: pct >= 100 ? 'complete' as const : 'uploading' } : u
+              ))
+            })
+            // Ensure complete status
+            setUploadProgress(prev => prev.map(u =>
+              u.id === localId ? { ...u, status: 'complete' as const, progress: 100 } : u
+            ))
+          } catch (err: any) {
+            setUploadProgress(prev => prev.map(u =>
+              u.id === localId ? { ...u, status: 'error' as const, error: err?.message || 'Upload failed' } : u
+            ))
+          }
           continue
         }
 
-        // Mark this file complete
+        // Smaller files: single request to async endpoint
+        const fd = new FormData()
+        fd.append('file', f)
+        const res = await fetch(`${API_BASE}/upload_async`, { method: 'POST', body: fd })
+        if (!res.ok) {
+          setUploadProgress(prev => prev.map(u =>
+            u.id === localId ? { ...u, status: 'error' as const, error: `Upload failed: ${res.status}` } : u
+          ))
+          continue
+        }
         setUploadProgress(prev => prev.map(u =>
-          u.id === localUploads[i].id ? { ...u, status: 'complete' as const, progress: 100 } : u
+          u.id === localId ? { ...u, status: 'complete' as const, progress: 100 } : u
         ))
       }
 
-      // Refresh documents after processing uploads
+      // Refresh documents after processing uploads (ingestion runs async on server)
       await fetchDocumentsPage(1)
     } catch (e) {
       console.error('Upload error', e)
@@ -1813,7 +1900,7 @@ export default function DocumentsPage() {
 
               <Select value={filterType} onValueChange={setFilterType}>
                 <SelectTrigger className="flex-1 h-11 text-sm">
-                  <File className="w-4 h-4 mr-2" />
+                  <FileIcon className="w-4 h-4 mr-2" />
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -1900,7 +1987,7 @@ export default function DocumentsPage() {
 
               <Select value={filterType} onValueChange={setFilterType}>
                 <SelectTrigger className="w-32">
-                  <File className="w-4 h-4 mr-2" />
+                  <FileIcon className="w-4 h-4 mr-2" />
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -2266,7 +2353,7 @@ export default function DocumentsPage() {
                   <span>Images</span>
                 </div>
                 <div className="flex items-center justify-center gap-2">
-                  <File className="w-4 h-4 text-blue-500" />
+                  <FileIcon className="w-4 h-4 text-blue-500" />
                   <span>Text, Markdown</span>
                 </div>
               </div>

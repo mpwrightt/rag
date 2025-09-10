@@ -284,6 +284,9 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 # Initialize question generator
 question_generator = None
 
+# In-memory store for multipart upload sessions (best-effort, non-persistent)
+UPLOAD_SESSIONS: Dict[str, Dict[str, Any]] = {}
+
 
 # Helper functions for agent execution
 async def get_or_create_session(request: ChatRequest) -> str:
@@ -1979,6 +1982,282 @@ async def upload_document(file: UploadFile = File(...)):
     except Exception as e:
         logger.error(f"File upload and ingestion failed: {e}")
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+
+
+@app.post("/upload_async")
+async def upload_document_async(file: UploadFile = File(...)):
+    """Asynchronous upload endpoint.
+
+    Saves the uploaded file to a staging directory and immediately returns 202,
+    then converts + ingests in a background task to avoid long-running requests
+    that can time out at proxies (e.g., Replit gateway).
+    """
+    if not INGESTION_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="Document ingestion pipeline is not available"
+        )
+
+    try:
+        allowed_extensions = {'.txt', '.md', '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.csv', '.tsv'}
+        original_name = file.filename or "upload.bin"
+        file_extension = os.path.splitext(original_name)[1].lower()
+
+        if file_extension not in allowed_extensions:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File type {file_extension} not supported. Allowed: {', '.join(allowed_extensions)}"
+            )
+
+        try:
+            max_mb = int(os.getenv("MAX_UPLOAD_MB", "200"))
+        except Exception:
+            max_mb = 200
+        max_size = max_mb * 1024 * 1024
+
+        # Persist staging dir across background task lifecycle
+        staging_dir = tempfile.mkdtemp(prefix="rag_upload_")
+        temp_file_path = Path(staging_dir) / original_name
+
+        # Stream write uploaded file
+        size_bytes = 0
+        with open(temp_file_path, 'wb') as temp_file:
+            chunk_size = 8 * 1024 * 1024  # 8MB
+            while True:
+                chunk = await file.read(chunk_size)
+                if not chunk:
+                    break
+                size_bytes += len(chunk)
+                if size_bytes > max_size:
+                    # Cleanup and abort
+                    try:
+                        shutil.rmtree(staging_dir, ignore_errors=True)
+                    except Exception:
+                        pass
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"File too large. Maximum size is {max_mb}MB, got {size_bytes / 1024 / 1024:.1f}MB"
+                    )
+                temp_file.write(chunk)
+
+        async def _process_async_upload():
+            """Background task to convert to markdown and ingest, then cleanup."""
+            try:
+                # Convert to Markdown
+                try:
+                    md_text, conv_meta = convert_to_markdown(str(temp_file_path))
+                except Exception as e:
+                    logger.exception("Conversion to markdown failed (async): %s", e)
+                    return
+                if not md_text or not md_text.strip():
+                    logger.warning("No extractable text found in async upload: %s", original_name)
+                    return
+
+                md_name = f"{Path(original_name).stem}.md"
+                md_path = Path(staging_dir) / md_name
+                with open(md_path, 'w', encoding='utf-8') as f_md:
+                    f_md.write(md_text)
+
+                # Pre-ingestion diagnostics
+                found_md = sorted(glob.glob(str(Path(staging_dir) / "**/*.md"), recursive=True))
+
+                # Ingestion config
+                config = IngestionConfig(
+                    chunk_size=int(os.getenv("CHUNK_SIZE", 800)),
+                    chunk_overlap=int(os.getenv("CHUNK_OVERLAP", 150)),
+                    max_chunk_size=int(os.getenv("MAX_CHUNK_SIZE", 1500)),
+                    embedding_model=os.getenv("EMBEDDING_MODEL", "text-embedding-004"),
+                    vector_dimension=int(os.getenv("VECTOR_DIMENSION", 768)),
+                    llm_choice=os.getenv("INGESTION_LLM_CHOICE", os.getenv("LLM_CHOICE", "gemini-1.5-flash")),
+                    enable_graph=True,
+                    clean_before_ingest=False,
+                )
+
+                pipeline = DocumentIngestionPipeline(
+                    config=config,
+                    documents_folder=staging_dir,
+                    clean_before_ingest=False,
+                )
+
+                results = await pipeline.ingest_documents()
+                successful_results = [r for r in results if r.document_id and len(r.errors) == 0]
+                failed_results = [r for r in results if not r.document_id or len(r.errors) > 0]
+
+                if successful_results:
+                    logger.info(
+                        "Async upload ingested %d document(s) (chunks=%d) for %s",
+                        len(successful_results),
+                        sum(r.chunks_created for r in successful_results),
+                        original_name,
+                    )
+                else:
+                    logger.warning("Async upload produced no successful results for %s; errors=%s; found_md=%s",
+                                   original_name,
+                                   [err for r in failed_results for err in (r.errors or [])],
+                                   found_md)
+            except Exception as e:
+                logger.exception("Async upload processing failed: %s", e)
+            finally:
+                # Cleanup staging dir
+                try:
+                    shutil.rmtree(staging_dir, ignore_errors=True)
+                except Exception:
+                    pass
+
+        # Kick off background processing and return immediately
+        asyncio.create_task(_process_async_upload())
+
+        return JSONResponse(status_code=202, content={
+            "success": True,
+            "status": "queued",
+            "filename": original_name,
+            "size": size_bytes,
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"File async upload scheduling failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Upload scheduling failed: {str(e)}")
+
+
+@app.post("/uploads/initiate")
+async def initiate_multipart_upload(request: Request):
+    """Initiate a multipart upload session for large files.
+
+    Body JSON:
+      - filename: original filename
+      - total_parts: expected number of chunks (int)
+    """
+    try:
+        body = await request.json()
+        filename = (body.get("filename") or "upload.bin").strip()
+        total_parts = int(body.get("total_parts"))
+        if not filename or total_parts <= 0:
+            raise HTTPException(status_code=400, detail="filename and total_parts are required")
+
+        # Create staging dir for this session
+        staging_dir = tempfile.mkdtemp(prefix="rag_mpu_")
+        upload_id = str(uuid.uuid4())
+        UPLOAD_SESSIONS[upload_id] = {
+            "filename": filename,
+            "total_parts": total_parts,
+            "staging_dir": staging_dir,
+            "created_at": datetime.utcnow().isoformat(),
+        }
+        return {"upload_id": upload_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to initiate multipart upload: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to initiate upload")
+
+
+@app.post("/uploads/{upload_id}/part")
+async def upload_multipart_part(upload_id: str, index: int = Form(...), chunk: UploadFile = File(...)):
+    """Upload a single part for a multipart upload session.
+
+    Accepts multipart/form-data with fields:
+      - index: 0-based part index
+      - chunk: file part payload
+    """
+    session = UPLOAD_SESSIONS.get(upload_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Upload session not found")
+    try:
+        staging_dir = session["staging_dir"]
+        total_parts = int(session.get("total_parts") or 0)
+        if index < 0 or (total_parts and index >= total_parts):
+            raise HTTPException(status_code=400, detail="Invalid part index")
+
+        part_path = Path(staging_dir) / f"part_{index:06d}"
+        # Write part to disk
+        size_bytes = 0
+        with open(part_path, "wb") as f:
+            while True:
+                data = await chunk.read(8 * 1024 * 1024)
+                if not data:
+                    break
+                size_bytes += len(data)
+                f.write(data)
+        return {"ok": True, "index": index, "size": size_bytes}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to write multipart part: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to write part")
+
+
+@app.post("/uploads/{upload_id}/complete")
+async def complete_multipart_upload(upload_id: str):
+    """Complete multipart upload: stitch parts and start async ingestion."""
+    session = UPLOAD_SESSIONS.get(upload_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Upload session not found")
+    staging_dir = session["staging_dir"]
+    filename = session["filename"]
+    total_parts = int(session.get("total_parts") or 0)
+
+    try:
+        staging = Path(staging_dir)
+        # Validate parts
+        parts = sorted(staging.glob("part_*"))
+        if total_parts and len(parts) != total_parts:
+            raise HTTPException(status_code=400, detail=f"Expected {total_parts} parts, got {len(parts)}")
+
+        assembled_path = staging / filename
+        # Stitch parts
+        with open(assembled_path, "wb") as out_f:
+            for p in parts:
+                with open(p, "rb") as in_f:
+                    shutil.copyfileobj(in_f, out_f, length=8 * 1024 * 1024)
+
+        # Background processing similar to /upload_async
+        async def _process_assembled():
+            try:
+                # Convert to markdown
+                md_text, conv_meta = convert_to_markdown(str(assembled_path))
+                if not md_text or not md_text.strip():
+                    logger.warning("No extractable text in assembled file %s", assembled_path)
+                    return
+                md_path = staging / f"{Path(filename).stem}.md"
+                with open(md_path, "w", encoding="utf-8") as f_md:
+                    f_md.write(md_text)
+
+                config = IngestionConfig(
+                    chunk_size=int(os.getenv("CHUNK_SIZE", 800)),
+                    chunk_overlap=int(os.getenv("CHUNK_OVERLAP", 150)),
+                    max_chunk_size=int(os.getenv("MAX_CHUNK_SIZE", 1500)),
+                    embedding_model=os.getenv("EMBEDDING_MODEL", "text-embedding-004"),
+                    vector_dimension=int(os.getenv("VECTOR_DIMENSION", 768)),
+                    llm_choice=os.getenv("INGESTION_LLM_CHOICE", os.getenv("LLM_CHOICE", "gemini-1.5-flash")),
+                    enable_graph=True,
+                    clean_before_ingest=False,
+                )
+                pipeline = DocumentIngestionPipeline(
+                    config=config,
+                    documents_folder=staging_dir,
+                    clean_before_ingest=False,
+                )
+                results = await pipeline.ingest_documents()
+                ok = [r for r in results if r.document_id and len(r.errors) == 0]
+                logger.info("Multipart complete: %s -> %d document(s)", filename, len(ok))
+            except Exception as e:
+                logger.exception("Multipart completion failed: %s", e)
+            finally:
+                # Cleanup session and staging
+                try:
+                    shutil.rmtree(staging_dir, ignore_errors=True)
+                finally:
+                    UPLOAD_SESSIONS.pop(upload_id, None)
+
+        asyncio.create_task(_process_assembled())
+        return JSONResponse(status_code=202, content={"success": True, "status": "queued"})
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to complete multipart upload: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to complete upload")
 
 
 @app.post("/convert")
