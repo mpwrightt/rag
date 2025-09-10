@@ -1731,6 +1731,28 @@ export default function DocumentsPage() {
       setSummaryETA(null)
       cancelSummaryRef.current = false
 
+      // Fast path: if cached summaries exist and user didn't request regeneration, use cache immediately
+      if (!forceRegenerate) {
+        try {
+          const cacheRes = await fetch(`${API_BASE}/documents/${encodeURIComponent(id)}/summaries`, {
+            headers: { 'bypass-tunnel-reminder': 'true' }
+          })
+          if (cacheRes.ok) {
+            const cacheData = await cacheRes.json()
+            const arr = Array.isArray(cacheData?.cached_summaries) ? cacheData.cached_summaries : []
+            if (arr.length > 0) {
+              const latest = arr[0]
+              setSummaryResult(normalizeSummaryResult(latest?.result ?? latest))
+              setSummaryProgress(null)
+              setSummaryJobId(null)
+              setSummaryPercent(null)
+              setSummaryETA(null)
+              return
+            }
+          }
+        } catch {}
+      }
+
       // Start async summary job
       const startRes = await fetch(`${API_BASE}/documents/${encodeURIComponent(id)}/summary_async`, {
         method: 'POST',
@@ -1756,6 +1778,9 @@ export default function DocumentsPage() {
       const sleep = (ms: number) => new Promise(res => setTimeout(res, ms))
       let attempts = 0
       const maxAttempts = 900 // ~30 minutes at 2s interval
+      // If the job remains in 'queued' state too long, fall back to synchronous summary to avoid user waiting
+      let queuedStreak = 0
+      const QUEUED_FALLBACK_ATTEMPTS = Number(process.env.NEXT_PUBLIC_SUMMARY_QUEUED_FALLBACK_ATTEMPTS || '8')
       while (attempts < maxAttempts) {
         attempts += 1
         if (cancelSummaryRef.current) {
@@ -1769,6 +1794,12 @@ export default function DocumentsPage() {
         const status = (st?.status || '').toLowerCase()
         const prog = typeof st?.progress === 'number' ? st.progress : null
         const total = typeof st?.total === 'number' ? st.total : null
+        // Track consecutive queued status
+        if (status === 'queued') {
+          queuedStreak += 1
+        } else {
+          queuedStreak = 0
+        }
         if (prog != null && total && total > 0) {
           setSummaryPercent(Math.max(0, Math.min(100, Math.floor((prog / total) * 100))))
           // Compute ETA from average time per completed batch
@@ -1799,6 +1830,42 @@ export default function DocumentsPage() {
           setSummaryPercent(null)
           setSummaryETA(null)
           return
+        }
+        // Synchronous fallback if the job is stuck in queued for too long
+        if (queuedStreak >= QUEUED_FALLBACK_ATTEMPTS) {
+          try {
+            setSummaryProgress('Queue delay detected — generating summary now...')
+            const syncRes = await fetch(`${API_BASE}/documents/${encodeURIComponent(id)}/summary`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'bypass-tunnel-reminder': 'true'
+              },
+              body: JSON.stringify({
+                summary_type: 'comprehensive',
+                include_context: true,
+                force_regenerate: forceRegenerate
+              })
+            })
+            if (!syncRes.ok) throw new Error(`Sync summary failed: ${syncRes.status}`)
+            const payload = await syncRes.json()
+            const value = payload?.result ?? payload
+            setSummaryResult(normalizeSummaryResult(value))
+            setSummaryProgress(null)
+            setSummaryJobId(null)
+            setSummaryPercent(null)
+            setSummaryETA(null)
+            // Best-effort cancel of the async job to free queue slot
+            try {
+              await fetch(`${API_BASE}/jobs/${encodeURIComponent(job_id)}/cancel`, {
+                method: 'POST',
+                headers: { 'bypass-tunnel-reminder': 'true' }
+              })
+            } catch {}
+            return
+          } catch (e) {
+            // If sync fallback fails, continue polling
+          }
         }
         setSummaryProgress(status === 'running' ? 'Running analysis on large document...' : 'Waiting in queue...')
         await sleep(2000)
