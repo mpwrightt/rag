@@ -1300,12 +1300,14 @@ export default function DocumentsPage() {
     }
   }
 
-  const handleGenerateSummary = async (id: string) => {
+  const handleGenerateSummary = async (id: string, forceRegenerate: boolean = false) => {
     const doc = documents.find(d => d.id === id)
     if (!doc) return
     
     try {
       setSummaryLoading(true)
+      setSummaryError(null)
+      setSummaryResult(null)
       setSummaryDocument(doc)
       setShowSummaryDialog(true)
       
@@ -1318,7 +1320,8 @@ export default function DocumentsPage() {
         },
         body: JSON.stringify({
           summary_type: 'comprehensive',
-          include_context: true
+          include_context: true,
+          force_regenerate: forceRegenerate
         })
       })
       
@@ -2503,36 +2506,94 @@ export default function DocumentsPage() {
               {summaryResult && !summaryLoading && !summaryError && (
                 <div className="flex-1 overflow-hidden flex flex-col">
                   {/* Summary Metadata */}
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-4 bg-muted/50 rounded-lg mb-6 flex-shrink-0">
-                    <div>
-                      <p className="text-sm font-medium">Summary Type</p>
-                      <p className="text-sm text-muted-foreground capitalize">
-                        {summaryResult.summary_type}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium">Generated</p>
-                      <p className="text-sm text-muted-foreground">
-                        {new Date(summaryResult.generated_at).toLocaleString()}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium">Chunks Processed</p>
-                      <p className="text-sm text-muted-foreground">
-                        {summaryResult.metadata?.total_chunks || 'N/A'}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium">Related Docs</p>
-                      <p className="text-sm text-muted-foreground">
-                        {summaryResult.metadata?.related_documents || 0}
-                      </p>
+                  <div className="space-y-4 mb-6 flex-shrink-0">
+                    {/* Domain Classification Info */}
+                    {summaryResult.domain_classification && (
+                      <div className="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+                        <div className="flex items-center gap-2 mb-2">
+                          <Sparkles className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+                          <h4 className="font-semibold text-blue-800 dark:text-blue-200">Expert Analysis Mode</h4>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                            <p className="text-sm font-medium text-blue-700 dark:text-blue-300">Domain Detected</p>
+                            <p className="text-sm text-blue-600 dark:text-blue-400 font-medium">
+                              {summaryResult.domain_classification.domain_name}
+                            </p>
+                            <p className="text-xs text-blue-600/70 dark:text-blue-400/70 mt-1">
+                              Confidence: {(summaryResult.domain_classification.confidence * 100).toFixed(0)}%
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-sm font-medium text-blue-700 dark:text-blue-300">Analysis Approach</p>
+                            <p className="text-sm text-blue-600 dark:text-blue-400">
+                              {summaryResult.domain_classification.reasoning}
+                            </p>
+                          </div>
+                        </div>
+                        {summaryResult.domain_classification.keywords && summaryResult.domain_classification.keywords.length > 0 && (
+                          <div className="mt-3">
+                            <p className="text-sm font-medium text-blue-700 dark:text-blue-300 mb-2">Key Domain Indicators</p>
+                            <div className="flex flex-wrap gap-1">
+                              {summaryResult.domain_classification.keywords.slice(0, 8).map((keyword: string, idx: number) => (
+                                <span key={idx} className="inline-block px-2 py-1 text-xs bg-blue-100 dark:bg-blue-800/30 text-blue-700 dark:text-blue-300 rounded">
+                                  {keyword}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    
+                    {/* Standard Metadata */}
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-4 p-4 bg-muted/50 rounded-lg">
+                      <div>
+                        <p className="text-sm font-medium">Summary Type</p>
+                        <p className="text-sm text-muted-foreground capitalize">
+                          {summaryResult.summary_type}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium">Generated</p>
+                        <p className="text-sm text-muted-foreground">
+                          {new Date(summaryResult.generated_at).toLocaleString()}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium">Chunks Processed</p>
+                        <p className="text-sm text-muted-foreground">
+                          {summaryResult.metadata?.total_chunks || 'N/A'}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium">Related Docs</p>
+                        <p className="text-sm text-muted-foreground">
+                          {summaryResult.metadata?.related_documents || 0}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium">Source</p>
+                        <p className="text-sm text-muted-foreground">
+                          {summaryResult.metadata?.cached ? (
+                            <span className="inline-flex items-center gap-1 text-green-600 dark:text-green-400">
+                              <Database className="w-3 h-3" />
+                              Cached
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-400">
+                              <Sparkles className="w-3 h-3" />
+                              Generated
+                            </span>
+                          )}
+                        </p>
+                      </div>
                     </div>
                   </div>
 
                   {/* Summary Content */}
                   {summaryResult.summary && (
-                    <div className="flex-1 overflow-y-auto pr-2">
+                    <div className="flex-1 overflow-y-auto overflow-x-hidden pr-2">
                       <div className="space-y-6">
                         {/* Handle raw JSON string that needs parsing */}
                         {(() => {
@@ -2541,7 +2602,14 @@ export default function DocumentsPage() {
                           // If it's a string that looks like JSON, try to parse it
                           if (typeof parsedSummary === 'string') {
                             try {
-                              parsedSummary = JSON.parse(parsedSummary);
+                              // Attempt to parse stringified JSON
+                              const maybe = JSON.parse(parsedSummary);
+                              // Some providers wrap content under a `summary` field; unwrap if present
+                              if (maybe && typeof maybe === 'object' && (maybe.summary || maybe.data)) {
+                                parsedSummary = maybe.summary || maybe.data;
+                              } else {
+                                parsedSummary = maybe;
+                              }
                             } catch (e) {
                               // If parsing fails, treat as markdown text
                               return (
@@ -2550,7 +2618,7 @@ export default function DocumentsPage() {
                                     <FileText className="w-5 h-5" />
                                     Document Summary
                                   </h4>
-                                  <div className="prose prose-sm max-w-none dark:prose-invert">
+                                  <div className="prose prose-sm max-w-none dark:prose-invert break-words whitespace-pre-wrap">
                                     <ReactMarkdown remarkPlugins={[remarkGfm]}>
                                       {parsedSummary}
                                     </ReactMarkdown>
@@ -2562,6 +2630,24 @@ export default function DocumentsPage() {
                           
                           // Handle structured JSON summary
                           if (typeof parsedSummary === 'object' && parsedSummary !== null) {
+                            // If we received an array, flatten to bullets under Full Analysis
+                            if (Array.isArray(parsedSummary)) {
+                              return (
+                                <div className="bg-background border rounded-lg p-6">
+                                  <h4 className="font-semibold mb-4 flex items-center gap-2">
+                                    <FileText className="w-5 h-5" />
+                                    Document Summary
+                                  </h4>
+                                  <ul className="list-disc ml-6 space-y-2 text-sm break-words">
+                                    {parsedSummary.map((item, idx) => (
+                                      <li key={idx} className="whitespace-pre-wrap">
+                                        {typeof item === 'string' ? item : JSON.stringify(item)}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )
+                            }
                             return (
                               <>
                                 {parsedSummary.executive_overview && (
@@ -2570,7 +2656,7 @@ export default function DocumentsPage() {
                                       <Target className="w-5 h-5" />
                                       Executive Overview
                                     </h4>
-                                    <div className="prose prose-sm max-w-none dark:prose-invert">
+                                    <div className="prose prose-sm max-w-none dark:prose-invert break-words whitespace-pre-wrap">
                                       <ReactMarkdown remarkPlugins={[remarkGfm]}>
                                         {parsedSummary.executive_overview}
                                       </ReactMarkdown>
@@ -2584,11 +2670,21 @@ export default function DocumentsPage() {
                                       <BarChart3 className="w-5 h-5" />
                                       Key Metrics
                                     </h4>
-                                    <div className="prose prose-sm max-w-none dark:prose-invert">
-                                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                        {parsedSummary.key_metrics}
-                                      </ReactMarkdown>
-                                    </div>
+                                    {Array.isArray(parsedSummary.key_metrics) ? (
+                                      <ul className="list-disc ml-6 space-y-1 text-sm break-words">
+                                        {parsedSummary.key_metrics.map((m: any, idx: number) => (
+                                          <li key={idx} className="whitespace-pre-wrap">
+                                            {typeof m === 'string' ? m : JSON.stringify(m)}
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    ) : (
+                                      <div className="prose prose-sm max-w-none dark:prose-invert break-words whitespace-pre-wrap">
+                                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                          {parsedSummary.key_metrics}
+                                        </ReactMarkdown>
+                                      </div>
+                                    )}
                                   </div>
                                 )}
 
@@ -2598,11 +2694,21 @@ export default function DocumentsPage() {
                                       <Sparkles className="w-5 h-5" />
                                       Major Highlights
                                     </h4>
-                                    <div className="prose prose-sm max-w-none dark:prose-invert">
-                                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                        {parsedSummary.major_highlights}
-                                      </ReactMarkdown>
-                                    </div>
+                                    {Array.isArray(parsedSummary.major_highlights) ? (
+                                      <ul className="list-disc ml-6 space-y-1 text-sm break-words">
+                                        {parsedSummary.major_highlights.map((m: any, idx: number) => (
+                                          <li key={idx} className="whitespace-pre-wrap">
+                                            {typeof m === 'string' ? m : JSON.stringify(m)}
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    ) : (
+                                      <div className="prose prose-sm max-w-none dark:prose-invert break-words whitespace-pre-wrap">
+                                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                          {parsedSummary.major_highlights}
+                                        </ReactMarkdown>
+                                      </div>
+                                    )}
                                   </div>
                                 )}
 
@@ -2612,11 +2718,21 @@ export default function DocumentsPage() {
                                       <AlertTriangle className="w-5 h-5" />
                                       Challenges & Risks
                                     </h4>
-                                    <div className="prose prose-sm max-w-none dark:prose-invert">
-                                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                        {parsedSummary.challenges_and_risks}
-                                      </ReactMarkdown>
-                                    </div>
+                                    {Array.isArray(parsedSummary.challenges_and_risks) ? (
+                                      <ul className="list-disc ml-6 space-y-1 text-sm break-words">
+                                        {parsedSummary.challenges_and_risks.map((m: any, idx: number) => (
+                                          <li key={idx} className="whitespace-pre-wrap">
+                                            {typeof m === 'string' ? m : JSON.stringify(m)}
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    ) : (
+                                      <div className="prose prose-sm max-w-none dark:prose-invert break-words whitespace-pre-wrap">
+                                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                          {parsedSummary.challenges_and_risks}
+                                        </ReactMarkdown>
+                                      </div>
+                                    )}
                                   </div>
                                 )}
 
@@ -2626,11 +2742,21 @@ export default function DocumentsPage() {
                                       <TrendingUp className="w-5 h-5" />
                                       Opportunities & Recommendations
                                     </h4>
-                                    <div className="prose prose-sm max-w-none dark:prose-invert">
-                                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                        {parsedSummary.opportunities_and_recommendations}
-                                      </ReactMarkdown>
-                                    </div>
+                                    {Array.isArray(parsedSummary.opportunities_and_recommendations) ? (
+                                      <ul className="list-disc ml-6 space-y-1 text-sm break-words">
+                                        {parsedSummary.opportunities_and_recommendations.map((m: any, idx: number) => (
+                                          <li key={idx} className="whitespace-pre-wrap">
+                                            {typeof m === 'string' ? m : JSON.stringify(m)}
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    ) : (
+                                      <div className="prose prose-sm max-w-none dark:prose-invert break-words whitespace-pre-wrap">
+                                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                          {parsedSummary.opportunities_and_recommendations}
+                                        </ReactMarkdown>
+                                      </div>
+                                    )}
                                   </div>
                                 )}
 
@@ -2640,7 +2766,7 @@ export default function DocumentsPage() {
                                       <CheckCircle className="w-5 h-5" />
                                       Conclusion
                                     </h4>
-                                    <div className="prose prose-sm max-w-none dark:prose-invert">
+                                    <div className="prose prose-sm max-w-none dark:prose-invert break-words whitespace-pre-wrap">
                                       <ReactMarkdown remarkPlugins={[remarkGfm]}>
                                         {parsedSummary.conclusion}
                                       </ReactMarkdown>
@@ -2654,7 +2780,7 @@ export default function DocumentsPage() {
                                       <FileText className="w-5 h-5" />
                                       Full Analysis
                                     </h4>
-                                    <div className="prose prose-sm max-w-none dark:prose-invert">
+                                    <div className="prose prose-sm max-w-none dark:prose-invert break-words whitespace-pre-wrap">
                                       <ReactMarkdown remarkPlugins={[remarkGfm]}>
                                         {parsedSummary.full_text}
                                       </ReactMarkdown>
@@ -2664,12 +2790,12 @@ export default function DocumentsPage() {
                               </>
                             );
                           }
-
+                          
                           // Fallback for other types
                           return (
                             <div className="bg-background border rounded-lg p-6">
                               <h4 className="font-semibold mb-4">Summary</h4>
-                              <pre className="whitespace-pre-wrap text-sm bg-muted p-4 rounded overflow-x-auto">
+                              <pre className="whitespace-pre-wrap break-words text-sm bg-muted p-4 rounded overflow-x-hidden">
                                 {JSON.stringify(parsedSummary, null, 2)}
                               </pre>
                             </div>
@@ -2687,12 +2813,23 @@ export default function DocumentsPage() {
                   <Button 
                     variant="outline"
                     size="sm"
-                    onClick={() => handleGenerateSummary(summaryDocument.id)}
+                    onClick={() => handleGenerateSummary(summaryDocument.id, false)}
                     disabled={summaryLoading}
                   >
                     <RefreshCw className="w-4 h-4 mr-2" />
                     Regenerate
                   </Button>
+                  {summaryResult?.metadata?.cached && (
+                    <Button 
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleGenerateSummary(summaryDocument.id, true)}
+                      disabled={summaryLoading}
+                    >
+                      <Zap className="w-4 h-4 mr-2" />
+                      Force Fresh
+                    </Button>
+                  )}
                 </div>
                 <Button variant="outline" onClick={() => setShowSummaryDialog(false)}>
                   Close

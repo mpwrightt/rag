@@ -1625,6 +1625,7 @@ async def generate_dbr_summary(
         include_context = body.get("include_context", True)
         context_queries = body.get("context_queries")
         summary_type = body.get("summary_type", "comprehensive")
+        force_regenerate = body.get("force_regenerate", False)
         
         # Validate summary type
         valid_types = {"comprehensive", "executive", "financial", "operational"}
@@ -1634,14 +1635,16 @@ async def generate_dbr_summary(
                 detail=f"Invalid summary_type. Must be one of: {', '.join(valid_types)}"
             )
         
-        logger.info(f"Generating {summary_type} summary for document {document_id}")
+        cache_action = "regenerating" if force_regenerate else "checking cache for"
+        logger.info(f"Processing {summary_type} summary for document {document_id} ({cache_action})")
         
-        # Generate summary
+        # Generate summary (with caching logic)
         summary_result = await dbr_summarizer.summarize_dbr(
             document_id=document_id,
             include_context=include_context,
             context_queries=context_queries,
-            summary_type=summary_type
+            summary_type=summary_type,
+            force_regenerate=force_regenerate
         )
         
         return summary_result
@@ -1668,6 +1671,66 @@ async def get_dbr_summary_typed(document_id: str, summary_type: str):
             return {"summary_type": summary_type, "include_context": True}
     
     return await generate_dbr_summary(document_id, MockRequest())
+
+
+@app.get("/documents/{document_id}/summaries")
+async def list_cached_summaries(document_id: str):
+    """
+    List all cached summaries for a document.
+    """
+    try:
+        from .db_utils import list_document_summaries
+        
+        summaries = await list_document_summaries(document_id)
+        return {
+            "document_id": document_id,
+            "cached_summaries": summaries,
+            "total_count": len(summaries)
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to list cached summaries: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list summaries: {str(e)}")
+
+
+@app.delete("/documents/{document_id}/summaries")
+async def clear_document_summaries(document_id: str, summary_type: str = None):
+    """
+    Clear cached summaries for a document.
+    Query parameter summary_type can specify which type to clear, or clear all if omitted.
+    """
+    try:
+        from .db_utils import delete_summary
+        
+        success = await delete_summary(document_id, summary_type)
+        if success:
+            message = f"Cleared {summary_type or 'all'} summaries for document {document_id}"
+            return {"message": message, "success": True}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to clear summaries")
+            
+    except Exception as e:
+        logger.error(f"Failed to clear summaries: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to clear summaries: {str(e)}")
+
+
+@app.get("/summaries/statistics")
+async def get_summary_cache_statistics():
+    """
+    Get statistics about the summary cache.
+    """
+    try:
+        from .db_utils import get_summary_statistics
+        
+        stats = await get_summary_statistics()
+        return {
+            "cache_statistics": stats,
+            "cache_enabled": True
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to get summary statistics: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get statistics: {str(e)}")
 
 
 @app.post("/upload")

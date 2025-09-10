@@ -13,9 +13,13 @@ from datetime import datetime
 import json
 
 from .agent import rag_agent, AgentDependencies
-from .db_utils import get_document_chunks, get_document, vector_search
+from .db_utils import (
+    get_document_chunks, get_document, vector_search,
+    get_cached_summary, store_summary, list_document_summaries
+)
 from .tools import vector_search_tool, hybrid_search_tool, VectorSearchInput, HybridSearchInput
 from .models import ChunkResult
+from .document_classifier import document_classifier, DocumentDomain
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +50,8 @@ class DBRSummarizer:
         document_id: str,
         include_context: bool = True,
         context_queries: Optional[List[str]] = None,
-        summary_type: str = "comprehensive"
+        summary_type: str = "comprehensive",
+        force_regenerate: bool = False
     ) -> Dict[str, Any]:
         """
         Generate a comprehensive summary of a DBR document.
@@ -56,53 +61,114 @@ class DBRSummarizer:
             include_context: Whether to include RAG context from related documents
             context_queries: Specific queries to search for context (auto-generated if None)
             summary_type: Type of summary ("comprehensive", "executive", "financial", "operational")
+            force_regenerate: Force regeneration even if cached summary exists
         
         Returns:
             Dictionary containing the summary and metadata
         """
         try:
-            # 1. Get document metadata
+            # 1. Check for cached summary first (unless forced to regenerate)
+            if not force_regenerate:
+                logger.info(f"Checking for cached summary: {document_id} ({summary_type})")
+                cached_summary = await get_cached_summary(document_id, summary_type)
+                if cached_summary:
+                    logger.info(f"Found cached summary for document {document_id}")
+                    # Convert database format to API format
+                    return {
+                        "document_id": cached_summary["document_id"],
+                        "document_title": "Cached Document",  # We'll get this from doc metadata if needed
+                        "summary_type": cached_summary["summary_type"],
+                        "generated_at": cached_summary["created_at"],
+                        "summary": cached_summary["summary_content"],
+                        "domain_classification": cached_summary["domain_classification"],
+                        "metadata": {
+                            **cached_summary["metadata"],
+                            "cached": True,
+                            "cache_updated_at": cached_summary["updated_at"]
+                        }
+                    }
+            
+            # 2. Get document metadata for fresh generation
             document = await get_document(document_id)
             if not document:
                 raise ValueError(f"Document {document_id} not found")
             
-            logger.info(f"Starting DBR summarization for document: {document.get('title', 'Unknown')}")
+            logger.info(f"Generating new summary for document: {document.get('title', 'Unknown')}")
             
             # 2. Get all document chunks
             chunks = await get_document_chunks(document_id)
             if not chunks:
                 raise ValueError(f"No chunks found for document {document_id}")
             
-            # 3. Get RAG context if requested
+            # 3. Classify document domain for expert analysis
+            logger.info("Classifying document domain for expert-level analysis...")
+            domain_classification = await document_classifier.classify_document(
+                document, chunks[:5]  # Use first 5 chunks for classification
+            )
+            logger.info(f"Document classified as {domain_classification.domain.value} "
+                       f"(confidence: {domain_classification.confidence:.2f})")
+            
+            # 4. Get RAG context if requested
             context_info = {}
             if include_context:
                 context_info = await self._get_rag_context(
                     document, chunks[:5], context_queries  # Use first 5 chunks for context queries
                 )
             
-            # 4. Perform hierarchical summarization
+            # 5. Perform hierarchical summarization with domain expertise
             summary_result = await self._hierarchical_summarize(
-                chunks, document, context_info, summary_type
+                chunks, document, context_info, summary_type, domain_classification
             )
             
-            # 5. Generate final structured summary
+            # 6. Generate final structured summary with domain expertise
             final_summary = await self._generate_final_summary(
-                summary_result, document, context_info, summary_type
+                summary_result, document, context_info, summary_type, domain_classification
             )
             
-            return {
+            # 7. Prepare the response data
+            domain_classification_data = {
+                "domain": domain_classification.domain.value,
+                "domain_name": domain_classification.domain.name.replace('_', ' ').title(),
+                "confidence": domain_classification.confidence,
+                "reasoning": domain_classification.reasoning,
+                "keywords": domain_classification.keywords
+            }
+            
+            metadata = {
+                "total_chunks": len(chunks),
+                "context_queries_used": len(context_info.get("queries", [])),
+                "related_documents": len(context_info.get("related_docs", [])),
+                "processing_time": summary_result.get("processing_time", 0),
+                "expert_analysis": True,
+                "cached": False
+            }
+            
+            response_data = {
                 "document_id": document_id,
                 "document_title": document.get("title", "Unknown"),
                 "summary_type": summary_type,
                 "generated_at": datetime.utcnow().isoformat(),
                 "summary": final_summary,
-                "metadata": {
-                    "total_chunks": len(chunks),
-                    "context_queries_used": len(context_info.get("queries", [])),
-                    "related_documents": len(context_info.get("related_docs", [])),
-                    "processing_time": summary_result.get("processing_time", 0)
-                }
+                "domain_classification": domain_classification_data,
+                "metadata": metadata
             }
+            
+            # 8. Store the summary in cache for future use
+            try:
+                await store_summary(
+                    document_id=document_id,
+                    summary_type=summary_type,
+                    domain_classification=domain_classification_data,
+                    summary_content=final_summary,
+                    context_info=context_info,
+                    metadata=metadata
+                )
+                logger.info(f"Cached summary for document {document_id} ({summary_type})")
+            except Exception as cache_error:
+                logger.warning(f"Failed to cache summary: {cache_error}")
+                # Don't fail the request if caching fails
+            
+            return response_data
             
         except Exception as e:
             logger.error(f"DBR summarization failed: {e}")
@@ -234,7 +300,8 @@ Return only the queries, one per line:
         chunks: List[Dict[str, Any]],
         document: Dict[str, Any],
         context_info: Dict[str, Any],
-        summary_type: str
+        summary_type: str,
+        domain_classification: Optional[Any] = None
     ) -> Dict[str, Any]:
         """
         Perform hierarchical summarization of document chunks.
@@ -247,11 +314,13 @@ Return only the queries, one per line:
         
         logger.info(f"Processing {len(chunks)} chunks in {len(chunk_batches)} batches")
         
-        # Step 2: Summarize each batch
+        # Step 2: Summarize each batch with domain expertise
         batch_summaries = []
         for i, batch in enumerate(chunk_batches):
             try:
-                batch_summary = await self._summarize_batch(batch, document, summary_type, i + 1)
+                batch_summary = await self._summarize_batch(
+                    batch, document, summary_type, i + 1, domain_classification
+                )
                 batch_summaries.append(batch_summary)
             except Exception as e:
                 logger.error(f"Batch {i + 1} summarization failed: {e}")
@@ -295,7 +364,8 @@ Return only the queries, one per line:
         batch: List[Dict[str, Any]],
         document: Dict[str, Any],
         summary_type: str,
-        batch_number: int
+        batch_number: int,
+        domain_classification: Optional[Any] = None
     ) -> Dict[str, Any]:
         """
         Summarize a batch of chunks.
@@ -306,8 +376,16 @@ Return only the queries, one per line:
             for i, chunk in enumerate(batch)
         ])
         
-        # Prepare summary prompt based on type
-        prompt = self._get_summary_prompt(batch_content, document, summary_type, batch_number)
+        # Prepare domain-specific summary prompt
+        if domain_classification and domain_classification.domain != DocumentDomain.GENERAL:
+            # Use expert domain-specific prompt
+            prompt = document_classifier.get_domain_expert_prompt(
+                domain_classification.domain, summary_type, document
+            )
+            prompt += f"\n\nDocument Section {batch_number}:\n{batch_content}\n\nProvide expert analysis of this section:"
+        else:
+            # Use general prompt
+            prompt = self._get_summary_prompt(batch_content, document, summary_type, batch_number)
         
         # Generate summary using agent
         try:
@@ -401,7 +479,8 @@ Be thorough but organized. Structure the summary with clear sections.
         summary_result: Dict[str, Any],
         document: Dict[str, Any],
         context_info: Dict[str, Any],
-        summary_type: str
+        summary_type: str,
+        domain_classification: Optional[Any] = None
     ) -> Dict[str, Any]:
         """
         Generate the final comprehensive summary from batch summaries.
@@ -426,11 +505,40 @@ Be thorough but organized. Structure the summary with clear sections.
             ])
             context_section = f"\n\nRELATED CONTEXT:\n{context_content}"
         
-        # Generate final summary prompt
-        final_prompt = f"""
-Create a comprehensive final summary of this Daily Business Report by synthesizing the following section summaries:
+        # Generate domain-specific final summary prompt
+        if domain_classification and domain_classification.domain != DocumentDomain.GENERAL:
+            # Use expert domain-specific final prompt
+            domain_name = domain_classification.domain.name.replace('_', ' ').title()
+            final_prompt = f"""
+You are a senior expert in {domain_classification.domain.value.replace('_', ' ')} providing the final comprehensive analysis.
 
-Document: {document.get('title', 'Daily Business Report')}
+DOCUMENT: {document.get('title', 'Document')}
+DOMAIN: {domain_name} (Confidence: {domain_classification.confidence:.1%})
+CLASSIFICATION REASONING: {domain_classification.reasoning}
+
+EXPERT SECTION ANALYSES:
+{combined_summaries}
+
+{context_section}
+
+As a domain expert, synthesize these analyses into a comprehensive final summary that demonstrates deep professional expertise in {domain_classification.domain.value.replace('_', ' ')}.
+
+Structure your expert assessment as a JSON object:
+- "executive_overview": Executive summary from domain expert perspective (2-3 paragraphs)
+- "key_metrics": Domain-specific KPIs, metrics, and quantitative findings
+- "major_highlights": Most significant findings from professional perspective  
+- "challenges_and_risks": Domain-specific risks and challenges identified
+- "opportunities_and_recommendations": Expert recommendations and strategic insights
+- "conclusion": Professional assessment and outlook from domain expert viewpoint
+
+Demonstrate the depth of expertise expected from a senior professional in {domain_name}. Include industry terminology and insights that only an experienced practitioner would provide.
+"""
+        else:
+            # Use general prompt
+            final_prompt = f"""
+Create a comprehensive final summary by synthesizing the following section summaries:
+
+Document: {document.get('title', 'Document')}
 Date: {document.get('created_at', 'Unknown')}
 
 SECTION SUMMARIES:
@@ -441,7 +549,7 @@ SECTION SUMMARIES:
 Generate a well-structured final summary that:
 1. Synthesizes key insights from all sections
 2. Identifies overarching themes and patterns
-3. Highlights critical business metrics and outcomes
+3. Highlights critical metrics and outcomes
 4. Provides executive-level conclusions
 5. Includes actionable insights and recommendations
 

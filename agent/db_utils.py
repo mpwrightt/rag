@@ -1781,3 +1781,276 @@ async def clear_graph() -> bool:
     except Exception as e:
         logger.error(f"Failed to clear graph: {e}")
         return False
+
+
+# Document Summary Storage Functions
+
+async def get_cached_summary(
+    document_id: str,
+    summary_type: str
+) -> Optional[Dict[str, Any]]:
+    """
+    Retrieve a cached summary from the database.
+    
+    Args:
+        document_id: UUID of the document
+        summary_type: Type of summary ('comprehensive', 'executive', 'financial', 'operational')
+    
+    Returns:
+        Cached summary data or None if not found
+    """
+    if not db_pool:
+        logger.error("Database pool not initialized")
+        return None
+    
+    try:
+        async with db_pool.acquire() as conn:
+            result = await conn.fetchrow(
+                """
+                SELECT 
+                    id::text,
+                    document_id::text,
+                    summary_type,
+                    domain_classification,
+                    summary_content,
+                    context_info,
+                    metadata,
+                    created_at,
+                    updated_at
+                FROM document_summaries 
+                WHERE document_id = $1 AND summary_type = $2
+                """,
+                document_id,
+                summary_type
+            )
+            
+            if result:
+                return {
+                    "id": result["id"],
+                    "document_id": result["document_id"],
+                    "summary_type": result["summary_type"],
+                    "domain_classification": json.loads(result["domain_classification"]),
+                    "summary_content": json.loads(result["summary_content"]),
+                    "context_info": json.loads(result["context_info"]),
+                    "metadata": json.loads(result["metadata"]),
+                    "created_at": result["created_at"].isoformat(),
+                    "updated_at": result["updated_at"].isoformat(),
+                    "cached": True
+                }
+            return None
+            
+    except Exception as e:
+        logger.error(f"Failed to retrieve cached summary: {e}")
+        return None
+
+
+async def store_summary(
+    document_id: str,
+    summary_type: str,
+    domain_classification: Dict[str, Any],
+    summary_content: Dict[str, Any],
+    context_info: Dict[str, Any],
+    metadata: Dict[str, Any]
+) -> bool:
+    """
+    Store a generated summary in the database cache.
+    
+    Args:
+        document_id: UUID of the document
+        summary_type: Type of summary
+        domain_classification: Domain classification information
+        summary_content: The generated summary content
+        context_info: Context information used in generation
+        metadata: Additional metadata
+    
+    Returns:
+        True if stored successfully, False otherwise
+    """
+    if not db_pool:
+        logger.error("Database pool not initialized")
+        return False
+    
+    try:
+        async with db_pool.acquire() as conn:
+            # Use INSERT ... ON CONFLICT to handle updates
+            await conn.execute(
+                """
+                INSERT INTO document_summaries (
+                    document_id,
+                    summary_type,
+                    domain_classification,
+                    summary_content,
+                    context_info,
+                    metadata
+                ) VALUES ($1, $2, $3, $4, $5, $6)
+                ON CONFLICT (document_id, summary_type)
+                DO UPDATE SET
+                    domain_classification = EXCLUDED.domain_classification,
+                    summary_content = EXCLUDED.summary_content,
+                    context_info = EXCLUDED.context_info,
+                    metadata = EXCLUDED.metadata,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                document_id,
+                summary_type,
+                json.dumps(domain_classification),
+                json.dumps(summary_content),
+                json.dumps(context_info),
+                json.dumps(metadata)
+            )
+            
+            logger.info(f"Stored summary for document {document_id} (type: {summary_type})")
+            return True
+            
+    except Exception as e:
+        logger.error(f"Failed to store summary: {e}")
+        return False
+
+
+async def list_document_summaries(document_id: str) -> List[Dict[str, Any]]:
+    """
+    List all cached summaries for a document.
+    
+    Args:
+        document_id: UUID of the document
+    
+    Returns:
+        List of summary metadata
+    """
+    if not db_pool:
+        logger.error("Database pool not initialized")
+        return []
+    
+    try:
+        async with db_pool.acquire() as conn:
+            results = await conn.fetch(
+                """
+                SELECT 
+                    id::text,
+                    summary_type,
+                    domain_classification,
+                    metadata,
+                    created_at,
+                    updated_at
+                FROM document_summaries 
+                WHERE document_id = $1
+                ORDER BY created_at DESC
+                """,
+                document_id
+            )
+            
+            return [
+                {
+                    "id": row["id"],
+                    "summary_type": row["summary_type"],
+                    "domain_classification": json.loads(row["domain_classification"]),
+                    "metadata": json.loads(row["metadata"]),
+                    "created_at": row["created_at"].isoformat(),
+                    "updated_at": row["updated_at"].isoformat()
+                }
+                for row in results
+            ]
+            
+    except Exception as e:
+        logger.error(f"Failed to list document summaries: {e}")
+        return []
+
+
+async def delete_summary(document_id: str, summary_type: str = None) -> bool:
+    """
+    Delete cached summary/summaries for a document.
+    
+    Args:
+        document_id: UUID of the document
+        summary_type: Specific summary type to delete, or None to delete all
+    
+    Returns:
+        True if deleted successfully, False otherwise
+    """
+    if not db_pool:
+        logger.error("Database pool not initialized")
+        return False
+    
+    try:
+        async with db_pool.acquire() as conn:
+            if summary_type:
+                # Delete specific summary type
+                result = await conn.execute(
+                    "DELETE FROM document_summaries WHERE document_id = $1 AND summary_type = $2",
+                    document_id,
+                    summary_type
+                )
+            else:
+                # Delete all summaries for document
+                result = await conn.execute(
+                    "DELETE FROM document_summaries WHERE document_id = $1",
+                    document_id
+                )
+            
+            logger.info(f"Deleted summaries for document {document_id}")
+            return True
+            
+    except Exception as e:
+        logger.error(f"Failed to delete summary: {e}")
+        return False
+
+
+async def get_summary_statistics() -> Dict[str, Any]:
+    """
+    Get statistics about cached summaries.
+    
+    Returns:
+        Statistics about the summary cache
+    """
+    if not db_pool:
+        logger.error("Database pool not initialized")
+        return {}
+    
+    try:
+        async with db_pool.acquire() as conn:
+            # Total summaries
+            total_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM document_summaries"
+            )
+            
+            # Summaries by type
+            type_counts = await conn.fetch(
+                """
+                SELECT summary_type, COUNT(*) as count
+                FROM document_summaries
+                GROUP BY summary_type
+                ORDER BY count DESC
+                """
+            )
+            
+            # Recent summaries (last 24 hours)
+            recent_count = await conn.fetchval(
+                """
+                SELECT COUNT(*) FROM document_summaries
+                WHERE created_at >= NOW() - INTERVAL '24 hours'
+                """
+            )
+            
+            # Domain distribution
+            domain_stats = await conn.fetch(
+                """
+                SELECT 
+                    domain_classification->>'domain' as domain,
+                    COUNT(*) as count
+                FROM document_summaries
+                WHERE domain_classification->>'domain' IS NOT NULL
+                GROUP BY domain_classification->>'domain'
+                ORDER BY count DESC
+                """
+            )
+            
+            return {
+                "total_summaries": total_count,
+                "summaries_by_type": {row["summary_type"]: row["count"] for row in type_counts},
+                "recent_summaries_24h": recent_count,
+                "domain_distribution": {row["domain"]: row["count"] for row in domain_stats}
+            }
+            
+    except Exception as e:
+        logger.error(f"Failed to get summary statistics: {e}")
+        return {}
