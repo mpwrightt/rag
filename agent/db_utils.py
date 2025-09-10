@@ -180,6 +180,29 @@ async def close_database():
 
 
 # -------------------------
+# Session Management Functions (restored)
+# -------------------------
+async def create_session(
+    user_id: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    timeout_minutes: int = 60,
+) -> str:
+    """Create a new session and return its ID."""
+    async with db_pool.acquire() as conn:
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=timeout_minutes)
+        row = await conn.fetchrow(
+            """
+            INSERT INTO sessions (user_id, metadata, expires_at)
+            VALUES ($1, $2::jsonb, $3)
+            RETURNING id::text
+            """,
+            user_id,
+            json.dumps(metadata or {}),
+            expires_at,
+        )
+        return row["id"]
+
+# -------------------------
 # Summary Jobs (Async Tasks)
 # -------------------------
 

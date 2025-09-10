@@ -2696,19 +2696,34 @@ export default function DocumentsPage() {
                 </div>
               )}
 
-              {/* Loading State */}
+              {/* Loading / Progress State */}
               {summaryLoading && (
-                <div className="flex items-center justify-center py-12">
-                  <div className="text-center space-y-4">
-                    <div className="w-16 h-16 bg-blue-100 rounded-lg flex items-center justify-center mx-auto">
-                      <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+                <div className="flex items-center justify-center py-10">
+                  <div className="flex flex-col items-center gap-4">
+                    {summaryPercent != null ? (
+                      <AnimatedCircularProgress
+                        size={88}
+                        strokeWidth={8}
+                        progress={summaryPercent}
+                        className="text-center"
+                        label={<span className="text-sm font-semibold">{summaryPercent}%</span>}
+                      />
+                    ) : (
+                      <div className="w-16 h-16 bg-blue-100 rounded-lg flex items-center justify-center">
+                        <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+                      </div>
+                    )}
+                    <div className="text-center">
+                      <p className="font-medium mb-1">{summaryProgress || 'Generating Summary...'}</p>
+                      <p className="text-sm text-muted-foreground">This may take a bit for large documents</p>
                     </div>
-                    <div className="space-y-2">
-                      <p className="font-medium">Generating Summary...</p>
-                      <p className="text-sm text-muted-foreground">
-                        Processing document chunks and gathering context
-                      </p>
-                    </div>
+                    {summaryJobId && (
+                      <div className="flex gap-2">
+                        <Button variant="outline" size="sm" onClick={handleCancelSummary}>
+                          Cancel
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

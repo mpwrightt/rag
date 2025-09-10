@@ -55,6 +55,7 @@ from .db_utils import (
     set_summary_job_result,
     get_summary_job,
     cancel_summary_job,
+    is_summary_job_cancelled,
 )
 from .graph_utils import (
     initialize_graph,
@@ -1700,7 +1701,14 @@ async def start_dbr_summary_job(
                 await set_summary_job_result(job_id, result)
             except Exception as e:
                 logger.exception("Async summary job failed: %s", e)
-                await update_summary_job_status(job_id, "error", error=str(e))
+                # If the job was cancelled, keep status as 'cancelled'
+                try:
+                    if await is_summary_job_cancelled(job_id):
+                        await update_summary_job_status(job_id, "cancelled", error=str(e))
+                    else:
+                        await update_summary_job_status(job_id, "error", error=str(e))
+                except Exception:
+                    await update_summary_job_status(job_id, "error", error=str(e))
 
         # Fire-and-forget
         asyncio.create_task(_run_job())
