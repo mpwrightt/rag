@@ -28,7 +28,6 @@ from .context import get_current_search_results, clear_search_results
 from .db_utils import (
     initialize_database,
     close_database,
-    create_session,
     get_session,
     add_message,
     get_session_messages,
@@ -235,8 +234,13 @@ async def get_or_create_session(session_id: Optional[str] = None) -> Tuple[str, 
             return session_id, False
     
     # Create new session
-    new_session_id = await create_session()
-    return new_session_id, True
+    try:
+        from .db_utils import create_session as _create_session
+        new_session_id = await _create_session()
+        return new_session_id, True
+    except Exception as e:
+        # Fallback to ephemeral session id
+        return str(uuid.uuid4()), True
 
 
 # WebSocket endpoints

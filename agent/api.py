@@ -30,7 +30,6 @@ from .context import get_current_search_results, clear_search_results, register_
 from .db_utils import (
     initialize_database,
     close_database,
-    create_session,
     get_session,
     add_message,
     get_session_messages,
@@ -282,19 +281,16 @@ async def get_or_create_session(request: ChatRequest) -> str:
             session = await get_session(request.session_id)
             if session:
                 return request.session_id
-        except Exception as e:
-            logger.warning("get_session failed, using provided session_id without DB validation: %s", e)
-            return request.session_id
-    
-    # Create new session in DB, with graceful fallback to a generated ID
+        except Exception:
+            pass
+    # Create a new session (lazy import to avoid startup ImportError)
     try:
-        return await create_session(
-            user_id=request.user_id,
-            metadata=request.metadata
-        )
+        from .db_utils import create_session as _create_session
+        new_session_id = await _create_session(user_id=None, metadata={"source": "api"})
+        return new_session_id
     except Exception as e:
-        logger.warning("create_session failed, generating in-memory session id: %s", e)
-        return request.session_id or str(uuid.uuid4())
+        logger.warning("create_session unavailable, generating ephemeral session id: %s", e)
+        return str(uuid.uuid4())
 
 
 async def get_conversation_context(
