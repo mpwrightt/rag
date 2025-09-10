@@ -142,7 +142,8 @@ class DBRSummarizer:
                 "related_documents": len(context_info.get("related_docs", [])),
                 "processing_time": summary_result.get("processing_time", 0),
                 "expert_analysis": True,
-                "cached": False
+                "cached": False,
+                "cache_saved": False
             }
             
             response_data = {
@@ -155,18 +156,60 @@ class DBRSummarizer:
                 "metadata": metadata
             }
             
-            # 8. Store the summary in cache for future use
+            # 8. Store the summary in cache for future use (sanitize context to JSON-safe)
+            def _serialize_chunk_obj(ch: Any) -> Dict[str, Any]:
+                if isinstance(ch, dict):
+                    return {
+                        "chunk_id": ch.get("chunk_id"),
+                        "document_id": ch.get("document_id"),
+                        "content": ch.get("content"),
+                        "score": ch.get("score"),
+                        "metadata": ch.get("metadata", {}),
+                        "document_title": ch.get("document_title"),
+                        "document_source": ch.get("document_source"),
+                    }
+                # Pydantic model (ChunkResult)
+                cid = getattr(ch, "chunk_id", None)
+                did = getattr(ch, "document_id", None)
+                content = getattr(ch, "content", None)
+                score = getattr(ch, "score", None)
+                metadata_c = getattr(ch, "metadata", {}) or {}
+                dt = getattr(ch, "document_title", None)
+                ds = getattr(ch, "document_source", None)
+                return {
+                    "chunk_id": cid,
+                    "document_id": did,
+                    "content": content,
+                    "score": score,
+                    "metadata": metadata_c,
+                    "document_title": dt,
+                    "document_source": ds,
+                }
+
+            safe_context_info = {
+                "queries": list(context_info.get("queries", [])),
+                "related_docs": list(context_info.get("related_docs", [])),
+                "related_chunks": [
+                    _serialize_chunk_obj(ch) for ch in context_info.get("related_chunks", [])
+                ],
+            }
             try:
-                await store_summary(
+                cache_ok = await store_summary(
                     document_id=document_id,
                     summary_type=summary_type,
                     domain_classification=domain_classification_data,
                     summary_content=final_summary,
-                    context_info=context_info,
+                    context_info=safe_context_info,
                     metadata=metadata
                 )
-                logger.info(f"Cached summary for document {document_id} ({summary_type})")
+                metadata["cache_saved"] = bool(cache_ok)
+                if cache_ok:
+                    logger.info(f"Cached summary for document {document_id} ({summary_type})")
+                else:
+                    logger.warning(f"store_summary returned False for document {document_id} ({summary_type})")
             except Exception as cache_error:
+                metadata["cache_saved"] = False
+                metadata["cache_error"] = str(cache_error)
                 logger.warning(f"Failed to cache summary: {cache_error}")
                 # Don't fail the request if caching fails
             
