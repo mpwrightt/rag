@@ -2632,6 +2632,58 @@ export default function DocumentsPage() {
                             const t = (s || '').trim();
                             return t.startsWith('{') || t.startsWith('[');
                           };
+                          // Utilities to render structured content with titles/subtitles
+                          const titleize = (k: string) =>
+                            (k || '')
+                              .replace(/_/g, ' ')
+                              .replace(/\s+/g, ' ')
+                              .trim()
+                              .replace(/\b\w/g, (c) => c.toUpperCase());
+                          const renderAny = (v: any): React.ReactNode => {
+                            if (v == null) return null;
+                            if (typeof v === 'string') {
+                              return <Markdown>{cleanText(v)}</Markdown>;
+                            }
+                            if (Array.isArray(v)) {
+                              return (
+                                <ul className="list-disc ml-6 space-y-1">
+                                  {v.map((it, idx) => (
+                                    <li key={idx} className="whitespace-pre-wrap">
+                                      {typeof it === 'string' ? cleanText(it) : (typeof it === 'object' ? JSON.stringify(it) : String(it))}
+                                    </li>
+                                  ))}
+                                </ul>
+                              );
+                            }
+                            if (typeof v === 'object') {
+                              return renderObjectSections(v as Record<string, any>);
+                            }
+                            return <>{String(v)}</>;
+                          };
+                          const renderObjectSections = (obj: Record<string, any>): React.ReactNode => {
+                            const entries = Object.entries(obj || {});
+                            if (!entries.length) return null;
+                            return (
+                              <div className="space-y-4">
+                                {entries.map(([k, v]) => (
+                                  <div key={k}>
+                                    <h5 className="font-semibold mb-2">{titleize(k)}</h5>
+                                    <div className="prose prose-sm max-w-none dark:prose-invert break-words whitespace-pre-wrap">
+                                      {renderAny(v)}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            );
+                          };
+                          const renderMaybeStructuredString = (s: string): React.ReactNode => {
+                            const cleaned = cleanText(s);
+                            const parsed = looksLikeJson(cleaned) ? tryParseJson(cleaned) : null;
+                            if (parsed && typeof parsed === 'object') {
+                              return renderObjectSections(parsed as Record<string, any>);
+                            }
+                            return <Markdown>{cleaned}</Markdown>;
+                          };
                           const stripCodeFences = (s: string) => {
                             const t = (s || '').trim();
                             if (t.startsWith('```') && t.endsWith('```')) {
@@ -2865,25 +2917,29 @@ export default function DocumentsPage() {
                                       Executive Overview
                                     </h4>
                                     {(() => {
-                                      let text = extractText(parsedSummary.executive_overview);
-                                      // If truncated with ... but full_text exists, prefer the full_text
-                                      if (text && text.trim().endsWith('...') && parsedSummary.full_text) {
-                                        const ft = extractText(parsedSummary.full_text);
-                                        if (ft && ft.length > text.length) text = ft;
+                                      const val = parsedSummary.executive_overview;
+                                      if (typeof val === 'string') {
+                                        return (
+                                          <div className="prose prose-sm max-w-none dark:prose-invert break-words whitespace-pre-wrap">
+                                            {renderMaybeStructuredString(val)}
+                                          </div>
+                                        );
                                       }
-                                      // Nuclear fallback: extract the value under "executive_overview" from a JSON-looking blob
-                                      if (text && text.trim().startsWith('{') && text.includes('"executive_overview"')) {
-                                        const s = text;
-                                        const m = s.match(/\"executive_overview\"\s*:\s*\"([\s\S]*?)\"/);
-                                        if (m && m[1]) {
-                                          try { text = JSON.parse(`"${m[1]}"`); } catch { text = m[1].replace(/\\n/g, '\n'); }
-                                        }
+                                      if (Array.isArray(val)) {
+                                        return (
+                                          <div className="text-sm break-words">
+                                            <ul className="list-disc ml-6 space-y-1">
+                                              {val.map((v: any, i: number) => (
+                                                <li key={i} className="whitespace-pre-wrap">{typeof v === 'string' ? cleanText(v) : JSON.stringify(v)}</li>
+                                              ))}
+                                            </ul>
+                                          </div>
+                                        );
                                       }
-                                      return (
-                                        <div className="text-sm max-w-none break-words whitespace-pre-wrap leading-relaxed">
-                                          {text || ''}
-                                        </div>
-                                      );
+                                      if (val && typeof val === 'object') {
+                                        return <>{renderObjectSections(val as Record<string, any>)}</>;
+                                      }
+                                      return null;
                                     })()}
                                   </div>
                                 )}
@@ -3031,45 +3087,31 @@ export default function DocumentsPage() {
                                       <FileText className="w-5 h-5" />
                                       Full Analysis
                                     </h4>
-                                    {typeof parsedSummary.full_text === 'string' && looksLikeJson(parsedSummary.full_text) ? (
-                                      (() => {
-                                        const p = tryParseJson(parsedSummary.full_text as string);
-                                        if (p && typeof p === 'object') {
-                                          const entries = Array.isArray(p)
-                                            ? (p as any[]).map((v, i) => [i.toString(), v] as [string, any])
-                                            : Object.entries(p as Record<string, any>);
-                                          return (
-                                            <div className="text-sm break-words">
-                                              <ul className="list-disc ml-6 space-y-1">
-                                                {entries.map(([k, v]) => (
-                                                  <li key={k} className="whitespace-pre-wrap">
-                                                    <span className="font-medium">{k}:</span> {typeof v === 'string' ? cleanText(v) : JSON.stringify(v)}
-                                                  </li>
-                                                ))}
-                                              </ul>
-                                            </div>
-                                          );
-                                        }
-                                        // Fallback: try to extract "full_text" field from JSON-like blob
-                                        const s = cleanText(parsedSummary.full_text as string);
-                                        const m = s.match(/\"full_text\"\s*:\s*\"([\s\S]*?)\"/);
-                                        if (m && m[1]) {
-                                          let ft = m[1];
-                                          try { ft = JSON.parse(`"${m[1]}"`); } catch { ft = m[1].replace(/\\n/g, '\n'); }
-                                          return (
-                                            <div className="text-sm max-w-none break-words whitespace-pre-wrap leading-relaxed">{ft}</div>
-                                          );
-                                        }
-                                        // Final fallback to cleaned plain text
+                                    {(() => {
+                                      const val = parsedSummary.full_text;
+                                      if (typeof val === 'string') {
                                         return (
-                                          <div className="text-sm max-w-none break-words whitespace-pre-wrap leading-relaxed">{s}</div>
+                                          <div className="prose prose-sm max-w-none dark:prose-invert break-words whitespace-pre-wrap">
+                                            {renderMaybeStructuredString(val)}
+                                          </div>
                                         );
-                                      })()
-                                    ) : (
-                                      <div className="text-sm max-w-none break-words whitespace-pre-wrap leading-relaxed">
-                                        {typeof parsedSummary.full_text === 'string' ? cleanText(parsedSummary.full_text) : String(parsedSummary.full_text)}
-                                      </div>
-                                    )}
+                                      }
+                                      if (Array.isArray(val)) {
+                                        return (
+                                          <div className="text-sm break-words">
+                                            <ul className="list-disc ml-6 space-y-1">
+                                              {val.map((v: any, i: number) => (
+                                                <li key={i} className="whitespace-pre-wrap">{typeof v === 'string' ? cleanText(v) : JSON.stringify(v)}</li>
+                                              ))}
+                                            </ul>
+                                          </div>
+                                        );
+                                      }
+                                      if (val && typeof val === 'object') {
+                                        return <>{renderObjectSections(val as Record<string, any>)}</>;
+                                      }
+                                      return null;
+                                    })()}
                                   </div>
                                 )}
                               </>
