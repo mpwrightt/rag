@@ -12,6 +12,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
 import json
 import hashlib
+import re
 
 from .agent import rag_agent, AgentDependencies
 from .db_utils import (
@@ -588,19 +589,55 @@ Ensure the summary is comprehensive yet concise, suitable for executive review.
         try:
             deps = AgentDependencies(session_id=f"final_summary_{document['id']}")
             result = await rag_agent.run(final_prompt, deps=deps)
-            final_response = result.data
-            
-            # Try to parse as JSON, fallback to structured text
+            final_response = result.data or ""
+
+            # Helper: try to parse loose JSON (strip code fences, isolate outer braces)
+            def try_parse_json_loose(s: str):
+                if not s:
+                    return None
+                t = s.strip()
+                # Strip markdown code fences
+                if t.startswith("```") and t.endswith("```"):
+                    t = re.sub(r"^```[a-zA-Z]*\n?", "", t)
+                    t = re.sub(r"```$", "", t)
+                    t = t.strip()
+                # Isolate substring from first '{' to last '}'
+                if '{' in t and '}' in t:
+                    start = t.find('{')
+                    end = t.rfind('}') + 1
+                    candidate = t[start:end]
+                    try:
+                        return json.loads(candidate)
+                    except Exception:
+                        pass
+                # Direct parse attempt
+                try:
+                    return json.loads(t)
+                except Exception:
+                    return None
+
+            # First, attempt strict and then loose JSON parsing
+            parsed = None
             try:
-                summary_json = json.loads(final_response)
-                return summary_json
-            except json.JSONDecodeError:
-                # Fallback to text-based summary
-                return {
-                    "executive_overview": final_response[:1000] + "..." if len(final_response) > 1000 else final_response,
-                    "full_text": final_response,
-                    "format": "text"
-                }
+                parsed = json.loads(final_response)
+            except Exception:
+                parsed = try_parse_json_loose(final_response)
+
+            if isinstance(parsed, dict):
+                return parsed
+
+            # Fallback to text-based summary without hard truncation
+            # Executive overview: first paragraph (or first 800 chars), no ellipsis
+            text = final_response.strip()
+            first_paragraph = text.split("\n\n", 1)[0] if text else ""
+            if not first_paragraph:
+                first_paragraph = text[:1200]
+
+            return {
+                "executive_overview": first_paragraph,
+                "full_text": text,
+                "format": "text"
+            }
                 
         except Exception as e:
             logger.error(f"Final summary generation failed: {e}")

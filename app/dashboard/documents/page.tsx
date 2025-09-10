@@ -2642,6 +2642,39 @@ export default function DocumentsPage() {
                             'conclusion',
                             'full_text',
                           ]);
+                          const extractText = (val: any): string => {
+                            if (!val) return '';
+                            if (typeof val === 'string') {
+                              const s = cleanText(val);
+                              // If the string itself looks like JSON, parse and extract
+                              if (looksLikeJson(s)) {
+                                const parsed = tryParseJson(s);
+                                if (parsed) return extractText(parsed);
+                              }
+                              return s;
+                            }
+                            if (Array.isArray(val)) return val.map(extractText).filter(Boolean).join('\n');
+                            if (typeof val === 'object') {
+                              // Prefer known keys
+                              for (const k of ['text', 'executive_overview', 'summary', 'content', 'value']) {
+                                if (typeof (val as any)[k] === 'string') return cleanText((val as any)[k]);
+                              }
+                              // If object contains a JSON-like string, parse and recurse
+                              const onlyKeys = Object.keys(val);
+                              if (onlyKeys.length === 1 && typeof (val as any)[onlyKeys[0]] === 'string' && looksLikeJson((val as any)[onlyKeys[0]])) {
+                                const parsed = tryParseJson((val as any)[onlyKeys[0]]);
+                                if (parsed) return extractText(parsed);
+                              }
+                              // Join stringy values
+                              const parts: string[] = [];
+                              for (const [k, v] of Object.entries(val as Record<string, any>)) {
+                                const t = extractText(v);
+                                if (t) parts.push(t);
+                              }
+                              return parts.join('\n');
+                            }
+                            return String(val);
+                          };
                           // Recursively search shallowly for an object that contains canonical summary keys
                           const findCanonical = (obj: any, depth = 0): any | null => {
                             if (!obj || typeof obj !== 'object' || depth > 3) return null;
@@ -2676,18 +2709,37 @@ export default function DocumentsPage() {
                                 parsedSummary = maybe;
                               }
                             } catch (e) {
-                              // If parsing fails, treat as markdown text
-                              return (
-                                <div className="bg-background border rounded-lg p-6">
-                                  <h4 className="font-semibold mb-4 flex items-center gap-2">
-                                    <FileText className="w-5 h-5" />
-                                    Document Summary
-                                  </h4>
-                                  <div className="prose prose-sm max-w-none dark:prose-invert break-words whitespace-pre-wrap">
-                                    <Markdown>{parsedSummary}</Markdown>
+                              // Try to extract structured fields from JSON-like text
+                              const s = String(parsedSummary);
+                              const getField = (key: string) => {
+                                const re = new RegExp(`\\"${key}\\"\\s*:\\s*\\"([\\s\\S]*?)\\"`);
+                                const m = s.match(re);
+                                if (m && m[1]) {
+                                  try { return JSON.parse(`"${m[1]}"`); } catch { return m[1].replace(/\\n/g,'\n'); }
+                                }
+                                return '';
+                              };
+                              const eo = getField('executive_overview');
+                              const ft = getField('full_text');
+                              if (eo || ft) {
+                                parsedSummary = {
+                                  ...(eo ? { executive_overview: eo } : {}),
+                                  ...(ft ? { full_text: ft } : {}),
+                                } as any;
+                              } else {
+                                // Fallback: render as markdown text block
+                                return (
+                                  <div className="bg-background border rounded-lg p-6">
+                                    <h4 className="font-semibold mb-4 flex items-center gap-2">
+                                      <FileText className="w-5 h-5" />
+                                      Document Summary
+                                    </h4>
+                                    <div className="prose prose-sm max-w-none dark:prose-invert break-words whitespace-pre-wrap">
+                                      <Markdown>{s}</Markdown>
+                                    </div>
                                   </div>
-                                </div>
-                              );
+                                );
+                              }
                             }
                           }
                           
@@ -2770,19 +2822,19 @@ export default function DocumentsPage() {
                                       <Target className="w-5 h-5" />
                                       Executive Overview
                                     </h4>
-                                    {typeof parsedSummary.executive_overview === 'string' ? (
-                                      <div className="prose prose-sm max-w-none dark:prose-invert break-words whitespace-pre-wrap">
-                                        <Markdown>{cleanText(parsedSummary.executive_overview)}</Markdown>
-                                      </div>
-                                    ) : parsedSummary.executive_overview && typeof parsedSummary.executive_overview === 'object' ? (
-                                      <div className="text-sm break-words">
-                                        <ul className="list-disc ml-6 space-y-1">
-                                          {Object.entries(parsedSummary.executive_overview as Record<string, any>).map(([k, v]) => (
-                                            <li key={k} className="whitespace-pre-wrap"><span className="font-medium">{k}:</span> {typeof v === 'string' ? v : JSON.stringify(v)}</li>
-                                          ))}
-                                        </ul>
-                                      </div>
-                                    ) : null}
+                                    {(() => {
+                                      let text = extractText(parsedSummary.executive_overview);
+                                      // If truncated with ... but full_text exists, prefer the full_text
+                                      if (text && text.trim().endsWith('...') && parsedSummary.full_text) {
+                                        const ft = extractText(parsedSummary.full_text);
+                                        if (ft && ft.length > text.length) text = ft;
+                                      }
+                                      return (
+                                        <div className="prose prose-sm max-w-none dark:prose-invert break-words whitespace-pre-wrap">
+                                          <Markdown>{text || ''}</Markdown>
+                                        </div>
+                                      );
+                                    })()}
                                   </div>
                                 )}
 
@@ -2998,7 +3050,7 @@ export default function DocumentsPage() {
                   <Button 
                     variant="outline"
                     size="sm"
-                    onClick={() => handleGenerateSummary(summaryDocument.id, false)}
+                    onClick={() => handleGenerateSummary(summaryDocument.id, true)}
                     disabled={summaryLoading}
                   >
                     <RefreshCw className="w-4 h-4 mr-2" />
