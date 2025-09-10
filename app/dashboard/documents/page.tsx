@@ -893,10 +893,10 @@ function UploadProgressCard({ upload }: { upload: UploadProgress }) {
           </div>
         </div>
         
-        {upload.status !== 'complete' && (
+        {upload.status === 'uploading' && (
           <div className="space-y-2">
             <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Progress</span>
+              <span className="text-muted-foreground">Upload</span>
               <span className="font-medium">{upload.progress}%</span>
             </div>
             <Progress value={upload.progress} className="h-2" />
@@ -937,6 +937,20 @@ export default function DocumentsPage() {
   const [summaryDetailsOpen, setSummaryDetailsOpen] = useState(false)
   const [downloadFormat, setDownloadFormat] = useState<'md' | 'txt' | 'json'>('md')
   const [summaryJobId, setSummaryJobId] = useState<string | null>(null)
+
+  // Debug panel state
+  const [debugOpen, setDebugOpen] = useState(false)
+  const [debugLogs, setDebugLogs] = useState<string[]>([])
+  const pushDebug = (msg: string) => {
+    try {
+      const ts = new Date()
+      const hh = String(ts.getHours()).padStart(2, '0')
+      const mm = String(ts.getMinutes()).padStart(2, '0')
+      const ss = String(ts.getSeconds()).padStart(2, '0')
+      const line = `[${hh}:${mm}:${ss}] ${msg}`
+      setDebugLogs(prev => [...prev, line].slice(-300))
+    } catch {}
+  }
   const [summaryProgress, setSummaryProgress] = useState<string | null>(null)
   const [summaryPercent, setSummaryPercent] = useState<number | null>(null)
   const [summaryETA, setSummaryETA] = useState<string | null>(null)
@@ -1276,9 +1290,13 @@ export default function DocumentsPage() {
         // Server does not have /upload_async yet; use synchronous /upload
         const resSync = await fetch(`${API_BASE}/upload`, { method: 'POST', body: fd })
         if (!resSync.ok) throw new Error(`fallback /upload failed: ${resSync.status}`)
+        try {
+          console.log(`[upload] fallback sync /upload -> ${resSync.status} ${resSync.ok ? 'ok' : 'not ok'}`)
+        } catch {}
         onProgress(100)
         return null
       } else if (!resAsync.ok) {
+        console.error(`[upload] fallback /upload_async failed: ${resAsync.status}`)
         throw new Error(`fallback upload_async failed: ${resAsync.status}`)
       } else {
         // Async path returns 202 with a job_id
@@ -1286,6 +1304,7 @@ export default function DocumentsPage() {
         try {
           const j = await resAsync.json()
           jobId = j?.job_id || null
+          console.log(`[upload] fallback /upload_async queued -> job_id=${jobId}`)
         } catch {}
         onProgress(100)
         return jobId
@@ -1305,6 +1324,10 @@ export default function DocumentsPage() {
     }
     if (!initRes.ok) throw new Error(`initiate failed: ${initRes.status}`)
     const { upload_id } = await initRes.json()
+    try {
+      console.log(`[multipart] initiated upload_id=${upload_id}, parts=${total_parts}, chunkMB=${CHUNK_SIZE / 1024 / 1024}`)
+    } catch {}
+    try { pushDebug(`[multipart] initiated upload_id=${upload_id}, parts=${total_parts}, chunkMB=${CHUNK_SIZE / 1024 / 1024}`) } catch {}
 
     // 2) Build parts
     const parts: { index: number, blob: Blob }[] = []
@@ -1332,6 +1355,12 @@ export default function DocumentsPage() {
       if (!r.ok) throw new Error(`part ${p.index} failed: ${r.status}`)
       uploaded += 1
       onProgress(Math.floor((uploaded / parts.length) * 100))
+      if (uploaded % Math.max(1, Math.floor(parts.length / 10)) === 0 || uploaded === parts.length) {
+        try {
+          console.log(`[multipart] uploaded part ${p.index} (${uploaded}/${parts.length}) -> ${Math.floor((uploaded / parts.length) * 100)}%`)
+        } catch {}
+        try { pushDebug(`[multipart] uploaded part ${p.index} (${uploaded}/${parts.length}) -> ${Math.floor((uploaded / parts.length) * 100)}%`) } catch {}
+      }
     }
 
     // Simple promise pool
@@ -1355,8 +1384,13 @@ export default function DocumentsPage() {
     // Try to extract job_id for background ingestion
     try {
       const data = await compRes.json()
-      return data?.job_id || null
+      const jobId = data?.job_id || null
+      console.log(`[multipart] complete -> status=${compRes.status}, job_id=${jobId}`)
+      try { pushDebug(`[multipart] complete -> status=${compRes.status}, job_id=${jobId || 'none'}`) } catch {}
+      return jobId
     } catch {
+      try { console.log('[multipart] complete -> no JSON body returned') } catch {}
+      try { pushDebug('[multipart] complete -> no JSON body returned') } catch {}
       return null
     }
   }
@@ -1366,6 +1400,7 @@ export default function DocumentsPage() {
     // Cap polling to ~5 minutes
     const started = Date.now()
     const timeoutMs = Math.max(1, INGEST_POLL_TIMEOUT_MIN) * 60 * 1000
+    let attempt = 0
     while (Date.now() - started < timeoutMs) {
       try {
         const r = await fetch(`${API_BASE}/ingest/jobs/${encodeURIComponent(jobId)}/result`, {
@@ -1376,6 +1411,19 @@ export default function DocumentsPage() {
           setUploadProgress(prev => prev.map(u =>
             u.id === localId ? { ...u, status: 'processing' as const } : u
           ))
+          attempt += 1
+          // Also try to fetch status for stage visibility in console
+          try {
+            const rs = await fetch(`${API_BASE}/ingest/jobs/${encodeURIComponent(jobId)}/status`)
+            if (rs.ok) {
+              const js = await rs.json()
+              console.log(`[ingest] job_id=${jobId} running: stage=${js?.stage || 'unknown'} elapsed=${Math.round((Date.now() - started)/1000)}s attempt=${attempt}`)
+              try { pushDebug(`[ingest] job running: stage=${js?.stage || 'unknown'} elapsed=${Math.round((Date.now() - started)/1000)}s`) } catch {}
+            } else {
+              console.log(`[ingest] job_id=${jobId} running (no stage). elapsed=${Math.round((Date.now() - started)/1000)}s attempt=${attempt}`)
+              try { pushDebug(`[ingest] job running (no stage) elapsed=${Math.round((Date.now() - started)/1000)}s`) } catch {}
+            }
+          } catch {}
           await new Promise(res => setTimeout(res, 1500))
           continue
         }
@@ -1384,6 +1432,8 @@ export default function DocumentsPage() {
           setUploadProgress(prev => prev.map(u =>
             u.id === localId ? { ...u, status: 'complete' as const, progress: 100 } : u
           ))
+          try { console.log(`[ingest] job_id=${jobId} complete`) } catch {}
+          try { pushDebug('[ingest] job complete') } catch {}
           // Refresh list now that ingestion completed
           await fetchDocumentsPage(1)
           return
@@ -1393,9 +1443,13 @@ export default function DocumentsPage() {
         setUploadProgress(prev => prev.map(u =>
           u.id === localId ? { ...u, status: 'error' as const, error: errTxt || `Job error: ${r.status}` } : u
         ))
+        try { console.error(`[ingest] job_id=${jobId} error -> ${r.status} ${errTxt}`) } catch {}
+        try { pushDebug(`[ingest] job error -> ${r.status} ${errTxt || ''}`) } catch {}
         return
       } catch (e: any) {
         // Transient fetch error, continue polling
+        try { console.warn(`[ingest] job_id=${jobId} transient error, retrying:`, e?.message || e) } catch {}
+        try { pushDebug(`[ingest] transient error, will retry: ${e?.message || e}`) } catch {}
         await new Promise(res => setTimeout(res, 1500))
       }
     }
@@ -1403,6 +1457,8 @@ export default function DocumentsPage() {
     setUploadProgress(prev => prev.map(u =>
       u.id === localId ? { ...u, status: 'error' as const, error: 'Job timed out' } : u
     ))
+    try { console.error(`[ingest] job_id=${jobId} timed out after ${Math.round((Date.now() - started)/1000)}s`) } catch {}
+    try { pushDebug(`[ingest] job timed out after ${Math.round((Date.now() - started)/1000)}s`) } catch {}
   }
 
   const handleFileUpload = async (files: FileList | null) => {
@@ -1435,20 +1491,25 @@ export default function DocumentsPage() {
             if (jobId) {
               // Background ingestion now running
               setUploadProgress(prev => prev.map(u =>
-                u.id === localId ? { ...u, status: 'processing' as const } : u
+                u.id === localId ? { ...u, status: 'processing' as const, progress: 0 } : u
               ))
+              try { console.log(`[ingest] queued multipart job_id=${jobId} for ${f.name}`) } catch {}
+              try { pushDebug(`[ingest] queued job for ${f.name} (job_id=${jobId})`) } catch {}
               await pollIngestJob(jobId, localId)
             } else {
               // Synchronous path already complete
               setUploadProgress(prev => prev.map(u =>
                 u.id === localId ? { ...u, status: 'complete' as const, progress: 100 } : u
               ))
+              try { console.log(`[upload] multipart fallback sync complete for ${f.name}`) } catch {}
+              try { pushDebug(`[upload] multipart fallback sync complete for ${f.name}`) } catch {}
               await fetchDocumentsPage(1)
             }
           } catch (err: any) {
             setUploadProgress(prev => prev.map(u =>
               u.id === localId ? { ...u, status: 'error' as const, error: err?.message || 'Upload failed' } : u
             ))
+            try { console.error(`[upload] multipart failed for ${f.name}:`, err) } catch {}
           }
           continue
         }
@@ -1471,13 +1532,17 @@ export default function DocumentsPage() {
             })
             if (jobId) {
               setUploadProgress(prev => prev.map(u =>
-                u.id === localId ? { ...u, status: 'processing' as const } : u
+                u.id === localId ? { ...u, status: 'processing' as const, progress: 0 } : u
               ))
+              try { console.log(`[ingest] queued job_id=${jobId} (escalated to multipart) for ${f.name}`) } catch {}
+              try { pushDebug(`[ingest] escalated to multipart, queued job for ${f.name} (job_id=${jobId})`) } catch {}
               await pollIngestJob(jobId, localId)
             } else {
               setUploadProgress(prev => prev.map(u =>
                 u.id === localId ? { ...u, status: 'complete' as const, progress: 100 } : u
               ))
+              try { console.log(`[upload] escalated multipart sync complete for ${f.name}`) } catch {}
+              try { pushDebug(`[upload] escalated multipart sync complete for ${f.name}`) } catch {}
               await fetchDocumentsPage(1)
             }
             continue
@@ -1486,6 +1551,7 @@ export default function DocumentsPage() {
             setUploadProgress(prev => prev.map(u =>
               u.id === localId ? { ...u, status: 'error' as const, error: `Upload failed: ${res.status}` } : u
             ))
+            try { console.error(`[upload] single request failed for ${f.name}: ${res.status}`) } catch {}
             continue
           }
           // Success path: distinguish between async and sync
@@ -1497,14 +1563,18 @@ export default function DocumentsPage() {
             } catch {}
             if (jobId) {
               setUploadProgress(prev => prev.map(u =>
-                u.id === localId ? { ...u, status: 'processing' as const } : u
+                u.id === localId ? { ...u, status: 'processing' as const, progress: 0 } : u
               ))
+              try { console.log(`[ingest] queued job_id=${jobId} (upload_async) for ${f.name}`) } catch {}
+              try { pushDebug(`[ingest] queued job (upload_async) for ${f.name} (job_id=${jobId})`) } catch {}
               await pollIngestJob(jobId, localId)
             } else {
               // Treat as complete if no job returned
               setUploadProgress(prev => prev.map(u =>
                 u.id === localId ? { ...u, status: 'complete' as const, progress: 100 } : u
               ))
+              try { console.log(`[upload] upload_async returned 202 without job_id, treating as complete for ${f.name}`) } catch {}
+              try { pushDebug(`[upload] upload_async 202 without job_id; treated as complete for ${f.name}`) } catch {}
               await fetchDocumentsPage(1)
             }
           } else {
@@ -1512,6 +1582,7 @@ export default function DocumentsPage() {
             setUploadProgress(prev => prev.map(u =>
               u.id === localId ? { ...u, status: 'complete' as const, progress: 100 } : u
             ))
+            try { console.log(`[upload] sync /upload complete for ${f.name}`) } catch {}
             await fetchDocumentsPage(1)
           }
         } catch (err: any) {
@@ -1523,13 +1594,17 @@ export default function DocumentsPage() {
           })
           if (jobId) {
             setUploadProgress(prev => prev.map(u =>
-              u.id === localId ? { ...u, status: 'processing' as const } : u
+              u.id === localId ? { ...u, status: 'processing' as const, progress: 0 } : u
             ))
+            try { console.log(`[ingest] queued job_id=${jobId} (network error -> multipart) for ${f.name}`) } catch {}
+            try { pushDebug(`[ingest] network error -> switched to multipart; queued job for ${f.name} (job_id=${jobId})`) } catch {}
             await pollIngestJob(jobId, localId)
           } else {
             setUploadProgress(prev => prev.map(u =>
               u.id === localId ? { ...u, status: 'complete' as const, progress: 100 } : u
             ))
+            try { console.log(`[upload] multipart recovery sync complete for ${f.name}`) } catch {}
+            try { pushDebug(`[upload] multipart recovery sync complete for ${f.name}`) } catch {}
             await fetchDocumentsPage(1)
           }
           continue

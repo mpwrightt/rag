@@ -2056,6 +2056,7 @@ async def upload_document_async(file: UploadFile = File(...)):
             "result": None,
             "filename": original_name,
             "size": size_bytes,
+            "stage": "queued",
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat(),
         }
@@ -2072,6 +2073,14 @@ async def upload_document_async(file: UploadFile = File(...)):
                 except Exception:
                     pass
 
+                # Stage: converting
+                try:
+                    job = INGEST_JOBS.get(job_id)
+                    if job is not None:
+                        job["stage"] = "converting"
+                        job["updated_at"] = datetime.utcnow().isoformat()
+                except Exception:
+                    pass
                 # Convert to Markdown
                 try:
                     md_text, conv_meta = convert_to_markdown(str(temp_file_path))
@@ -2102,6 +2111,15 @@ async def upload_document_async(file: UploadFile = File(...)):
                 md_path = Path(staging_dir) / md_name
                 with open(md_path, 'w', encoding='utf-8') as f_md:
                     f_md.write(md_text)
+
+                # Stage: converted
+                try:
+                    job = INGEST_JOBS.get(job_id)
+                    if job is not None:
+                        job["stage"] = "converted"
+                        job["updated_at"] = datetime.utcnow().isoformat()
+                except Exception:
+                    pass
 
                 # Pre-ingestion diagnostics
                 found_md = sorted(glob.glob(str(Path(staging_dir) / "**/*.md"), recursive=True))
@@ -2266,6 +2284,7 @@ async def complete_multipart_upload(upload_id: str):
             "error": None,
             "result": None,
             "filename": filename,
+            "stage": "queued",
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat(),
         }
@@ -2280,6 +2299,14 @@ async def complete_multipart_upload(upload_id: str):
                         job["updated_at"] = datetime.utcnow().isoformat()
                 except Exception:
                     pass
+                # Stage: converting
+                try:
+                    job = INGEST_JOBS.get(job_id)
+                    if job is not None:
+                        job["stage"] = "converting"
+                        job["updated_at"] = datetime.utcnow().isoformat()
+                except Exception:
+                    pass
                 # Convert to markdown
                 md_text, conv_meta = convert_to_markdown(str(assembled_path))
                 if not md_text or not md_text.strip():
@@ -2288,6 +2315,7 @@ async def complete_multipart_upload(upload_id: str):
                         job = INGEST_JOBS.get(job_id)
                         if job is not None:
                             job["status"] = "error"
+                            job["stage"] = "error"
                             job["error"] = "no_text_extracted"
                             job["updated_at"] = datetime.utcnow().isoformat()
                     except Exception:
@@ -2312,13 +2340,22 @@ async def complete_multipart_upload(upload_id: str):
                     documents_folder=staging_dir,
                     clean_before_ingest=False,
                 )
+                # Stage: ingesting
+                try:
+                    job = INGEST_JOBS.get(job_id)
+                    if job is not None:
+                        job["stage"] = "ingesting"
+                        job["updated_at"] = datetime.utcnow().isoformat()
+                except Exception:
+                    pass
+
                 results = await pipeline.ingest_documents()
                 ok = [r for r in results if getattr(r, "document_id", "") and len(getattr(r, "errors", []) or []) == 0]
-                logger.info("Multipart complete: %s -> %d document(s)", filename, len(ok))
                 try:
                     job = INGEST_JOBS.get(job_id)
                     if job is not None:
                         job["status"] = "done"
+                        job["stage"] = "done"
                         job["result"] = {"document_ids": [r.document_id for r in ok if r.document_id]}
                         job["updated_at"] = datetime.utcnow().isoformat()
                 except Exception:
@@ -2329,6 +2366,7 @@ async def complete_multipart_upload(upload_id: str):
                     job = INGEST_JOBS.get(job_id)
                     if job is not None:
                         job["status"] = "error"
+                        job["stage"] = "error"
                         job["error"] = str(e)
                         job["updated_at"] = datetime.utcnow().isoformat()
                 except Exception:
@@ -2359,6 +2397,7 @@ async def get_ingest_job_status(job_id: str):
     return {
         "job_id": job_id,
         "status": job.get("status"),
+        "stage": job.get("stage"),
         "error": job.get("error"),
         "result": job.get("result"),
         "filename": job.get("filename"),
@@ -2392,6 +2431,40 @@ async def get_ingest_job_result(job_id: str):
         "job_id": job_id,
         "status": status or "queued",
     })
+
+
+@app.get("/ingest/jobs")
+async def list_ingest_jobs(status: Optional[str] = None):
+    """List ingestion jobs (ephemeral, in-memory). Optional filter by status.
+
+    Query params:
+      - status: queued | running | done | error
+    """
+    try:
+        items = []
+        for jid, job in INGEST_JOBS.items():
+            if status and (job.get("status") or "").lower() != status.lower():
+                continue
+            items.append({
+                "job_id": jid,
+                "status": job.get("status"),
+                "stage": job.get("stage"),
+                "error": job.get("error"),
+                "result": job.get("result"),
+                "filename": job.get("filename"),
+                "size": job.get("size"),
+                "created_at": job.get("created_at"),
+                "updated_at": job.get("updated_at"),
+            })
+        # Sort newest first by created_at when available
+        try:
+            items.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+        except Exception:
+            pass
+        return {"jobs": items, "count": len(items)}
+    except Exception as e:
+        logger.error(f"Failed to list ingest jobs: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list ingest jobs")
 
 
 @app.post("/convert")
