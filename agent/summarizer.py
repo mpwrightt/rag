@@ -110,17 +110,28 @@ class DBRSummarizer:
             if not chunks:
                 raise ValueError(f"No chunks found for document {document_id}")
             
-            # 3. Classify document domain for expert analysis
+            # 3. Classify document domain for expert analysis (use representative sampling)
             logger.info("Classifying document domain for expert-level analysis...")
+            cls_samples = int(os.getenv("SUMMARY_CLASSIFIER_SAMPLES", "9"))
+            sample_chunks = self._select_sample_chunks(chunks, max_samples=cls_samples)
             domain_classification = await document_classifier.classify_document(
-                document, chunks[:5]  # Use first 5 chunks for classification
+                document, sample_chunks
             )
             logger.info(f"Document classified as {domain_classification.domain.value} "
                        f"(confidence: {domain_classification.confidence:.2f})")
             
-            # 4. Get RAG context if requested
+            # 4. Get RAG context if requested (auto-disable for very large docs)
             context_info = {}
-            if include_context:
+            auto_disable_context = os.getenv("SUMMARY_DISABLE_CONTEXT_FOR_LARGE", "1").strip() in {"1", "true", "yes"}
+            context_threshold = int(os.getenv("SUMMARY_CONTEXT_CHUNK_THRESHOLD", "1200"))
+            effective_include_context = include_context
+            if auto_disable_context and len(chunks) > context_threshold:
+                logger.info(
+                    f"Context disabled automatically: {len(chunks)} chunks > threshold {context_threshold}."
+                )
+                effective_include_context = False
+
+            if effective_include_context:
                 context_info = await self._get_rag_context(
                     document, chunks[:5], context_queries  # Use first 5 chunks for context queries
                 )
@@ -233,6 +244,27 @@ class DBRSummarizer:
         except Exception as e:
             logger.error(f"DBR summarization failed: {e}")
             raise
+    
+    def _select_sample_chunks(self, chunks: List[Dict[str, Any]], max_samples: int = 9) -> List[Dict[str, Any]]:
+        """
+        Evenly sample up to max_samples chunks across the document to represent
+        beginning, middle, and end content for more stable classification.
+        """
+        if not chunks:
+            return []
+        if len(chunks) <= max_samples:
+            return chunks
+        # Evenly spaced indices from 0 to len(chunks)-1
+        step = (len(chunks) - 1) / max(1, (max_samples - 1))
+        indices = [int(round(i * step)) for i in range(max_samples)]
+        # Deduplicate while preserving order
+        seen = set()
+        result = []
+        for idx in indices:
+            if idx not in seen:
+                seen.add(idx)
+                result.append(chunks[idx])
+        return result
     
     async def _get_rag_context(
         self,

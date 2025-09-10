@@ -155,13 +155,23 @@ class DocumentClassifier:
             title = document.get('title', '')
             filename = document.get('name', '')
             
-            # Get sample content (first 2000 chars from chunks)
+            # Get sample content (representative across provided chunks, up to ~3500 chars)
             sample_content = ""
-            for chunk in sample_chunks[:5]:
-                content = chunk.get('content', '')
-                sample_content += content[:400] + " "
-                if len(sample_content) > 2000:
-                    break
+            if sample_chunks:
+                # Evenly sample up to 10 chunks
+                max_take = min(10, len(sample_chunks))
+                if max_take == len(sample_chunks):
+                    chosen = sample_chunks
+                else:
+                    step = (len(sample_chunks) - 1) / max(1, (max_take - 1))
+                    indices = {int(round(i * step)) for i in range(max_take)}
+                    chosen = [sample_chunks[i] for i in sorted(indices)]
+                for ch in chosen:
+                    content = ch.get('content', '')
+                    if content:
+                        sample_content += (content[:800] + " ")
+                        if len(sample_content) > 3500:
+                            break
             
             # Combine text for analysis
             analysis_text = f"{title} {filename} {sample_content}".lower()
@@ -194,20 +204,55 @@ class DocumentClassifier:
             
             best_domain = max(domain_scores.keys(), key=lambda k: domain_scores[k])
             best_score = domain_scores[best_domain]
+            # Find second-best score for margin-based confidence
+            scores_sorted = sorted(domain_scores.values(), reverse=True)
+            second_score = scores_sorted[1] if len(scores_sorted) > 1 else 0.0
             total_score = sum(domain_scores.values())
-            
-            # Calculate confidence
-            confidence = min(best_score / (total_score + 1), 0.95)
-            
-            # If confidence is too low, use AI classification
-            if confidence < 0.3:
-                return await self._ai_classify_document(document, sample_content)
-            
+
+            # Margin-based confidence emphasizing separation from runner-up
+            margin = max(0.0, best_score - second_score)
+            denom = max(1.0, best_score + second_score)
+            margin_conf = margin / denom  # in [0,1]
+            # Also normalize by share of total
+            share_conf = best_score / max(1.0, total_score)
+            # Combine and cap within [0.5, 0.95]
+            confidence = max(0.5, min(0.95, 0.6 * margin_conf + 0.4 * share_conf))
+
+            # Boost floor if many matched keywords
+            kw_count = len(matched_keywords[best_domain])
+            if kw_count >= 8:
+                confidence = max(confidence, 0.7)
+            elif kw_count >= 5:
+                confidence = max(confidence, 0.65)
+
+            # If confidence still borderline, request AI corroboration
+            if confidence < 0.6:
+                ai_cls = await self._ai_classify_document(document, sample_content)
+                if ai_cls.domain == best_domain:
+                    confidence = max(confidence, ai_cls.confidence, 0.7)
+                    return DomainClassification(
+                        domain=best_domain,
+                        confidence=confidence,
+                        reasoning=f"Keyword classification corroborated by AI. {kw_count} keywords matched.",
+                        keywords=matched_keywords[best_domain][:10]
+                    )
+                else:
+                    # Prefer AI domain if it is reasonably confident
+                    if ai_cls.confidence >= 0.65:
+                        return ai_cls
+                    # Otherwise keep keyword result but note disagreement
+                    return DomainClassification(
+                        domain=best_domain,
+                        confidence=max(confidence, 0.58),
+                        reasoning=f"Keyword classification disagreed with AI; proceeding with keyword result. {kw_count} keywords matched.",
+                        keywords=matched_keywords[best_domain][:10]
+                    )
+
             return DomainClassification(
                 domain=best_domain,
                 confidence=confidence,
-                reasoning=f"Keyword analysis identified {len(matched_keywords[best_domain])} relevant terms",
-                keywords=matched_keywords[best_domain][:10]  # Top 10 keywords
+                reasoning=f"Keyword analysis identified {kw_count} relevant terms",
+                keywords=matched_keywords[best_domain][:10]
             )
             
         except Exception as e:
