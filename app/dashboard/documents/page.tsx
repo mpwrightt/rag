@@ -73,6 +73,23 @@ import { cn } from '@/lib/utils'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
+// Markdown renderer with wrapped code/pre blocks to prevent horizontal overflow
+const Markdown = ({ children }: { children: string }) => (
+  <ReactMarkdown
+    remarkPlugins={[remarkGfm]}
+    components={{
+      code: ({ children }) => (
+        <code className="whitespace-pre-wrap break-words">{String(children)}</code>
+      ),
+      pre: ({ children }) => (
+        <pre className="whitespace-pre-wrap break-words overflow-x-hidden">{children as any}</pre>
+      ),
+    }}
+  >
+    {children}
+  </ReactMarkdown>
+)
+
 // Backend API base URL
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8058'
 
@@ -2598,6 +2615,54 @@ export default function DocumentsPage() {
                         {/* Handle raw JSON string that needs parsing */}
                         {(() => {
                           let parsedSummary = summaryResult.summary;
+                          // Helpers to normalize JSON-like strings into objects and unwrap nested payloads
+                          const looksLikeJson = (s: string) => {
+                            const t = (s || '').trim();
+                            return t.startsWith('{') || t.startsWith('[');
+                          };
+                          const tryParseJson = (s: string) => {
+                            try { return JSON.parse(s); } catch { return null; }
+                          };
+                          const cleanText = (s: string) => {
+                            if (typeof s !== 'string') return s as unknown as string;
+                            const t = s.trim();
+                            // If wrapped in quotes (JSON-style), try to unescape
+                            if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) {
+                              try { return JSON.parse(t as string); } catch { /* ignore */ }
+                            }
+                            // Replace common escaped sequences
+                            return t.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+                          };
+                          const canonicalKeys = new Set([
+                            'executive_overview',
+                            'key_metrics',
+                            'major_highlights',
+                            'challenges_and_risks',
+                            'opportunities_and_recommendations',
+                            'conclusion',
+                            'full_text',
+                          ]);
+                          // Recursively search shallowly for an object that contains canonical summary keys
+                          const findCanonical = (obj: any, depth = 0): any | null => {
+                            if (!obj || typeof obj !== 'object' || depth > 3) return null;
+                            const keys = Object.keys(obj);
+                            if (keys.some(k => canonicalKeys.has(k))) return obj;
+                            for (const k of keys) {
+                              const v = (obj as any)[k];
+                              // Try to parse JSON-looking strings during traversal
+                              if (typeof v === 'string' && looksLikeJson(v)) {
+                                const jp = tryParseJson(v);
+                                if (jp && typeof jp === 'object') {
+                                  const found = findCanonical(jp, depth + 1);
+                                  if (found) return found;
+                                }
+                              } else if (v && typeof v === 'object') {
+                                const found = findCanonical(v, depth + 1);
+                                if (found) return found;
+                              }
+                            }
+                            return null;
+                          };
                           
                           // If it's a string that looks like JSON, try to parse it
                           if (typeof parsedSummary === 'string') {
@@ -2619,17 +2684,62 @@ export default function DocumentsPage() {
                                     Document Summary
                                   </h4>
                                   <div className="prose prose-sm max-w-none dark:prose-invert break-words whitespace-pre-wrap">
-                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                      {parsedSummary}
-                                    </ReactMarkdown>
+                                    <Markdown>{parsedSummary}</Markdown>
                                   </div>
                                 </div>
                               );
                             }
                           }
                           
+                          // If string still looks like JSON, try a final parse
+                          if (typeof parsedSummary === 'string' && looksLikeJson(parsedSummary)) {
+                            const reparsed = tryParseJson(parsedSummary);
+                            if (reparsed) parsedSummary = reparsed;
+                          }
+
                           // Handle structured JSON summary
                           if (typeof parsedSummary === 'object' && parsedSummary !== null) {
+                            // If executive_overview is a JSON string containing the full summary, unwrap it
+                            if (typeof (parsedSummary as any).executive_overview === 'string' && looksLikeJson((parsedSummary as any).executive_overview)) {
+                              const nested = tryParseJson((parsedSummary as any).executive_overview as string);
+                              if (nested && typeof nested === 'object' && Object.keys(nested).some(k => canonicalKeys.has(k))) {
+                                parsedSummary = nested;
+                              }
+                            }
+                            // If executive_overview is an OBJECT that itself looks like the full summary, unwrap it
+                            if (typeof (parsedSummary as any).executive_overview === 'object' && (parsedSummary as any).executive_overview) {
+                              const eo = (parsedSummary as any).executive_overview as any;
+                              if (eo && typeof eo === 'object' && Object.keys(eo).some((k) => canonicalKeys.has(k))) {
+                                parsedSummary = eo;
+                              }
+                            }
+                            // If full_text is a JSON string containing the full summary, unwrap it
+                            if (typeof (parsedSummary as any).full_text === 'string' && looksLikeJson((parsedSummary as any).full_text)) {
+                              const nestedFt = tryParseJson((parsedSummary as any).full_text as string);
+                              if (nestedFt && typeof nestedFt === 'object' && Object.keys(nestedFt).some(k => canonicalKeys.has(k))) {
+                                parsedSummary = nestedFt;
+                              }
+                            }
+                            // If full_text is an OBJECT that itself looks like the full summary, unwrap
+                            if (typeof (parsedSummary as any).full_text === 'object' && (parsedSummary as any).full_text) {
+                              const ft = (parsedSummary as any).full_text as any;
+                              if (ft && typeof ft === 'object' && Object.keys(ft).some((k) => canonicalKeys.has(k))) {
+                                parsedSummary = ft;
+                              }
+                            }
+                            // If summary is wrapped again under a known key, unwrap
+                            const keys = Object.keys(parsedSummary as any);
+                            if (keys.length === 1) {
+                              const only = (parsedSummary as any)[keys[0]];
+                              if (typeof only === 'string' && looksLikeJson(only)) {
+                                const nested2 = tryParseJson(only);
+                                if (nested2 && typeof nested2 === 'object' && Object.keys(nested2).some(k => canonicalKeys.has(k))) {
+                                  parsedSummary = nested2;
+                                }
+                              } else if (only && typeof only === 'object' && Object.keys(only).some((k: string) => canonicalKeys.has(k))) {
+                                parsedSummary = only;
+                              }
+                            }
                             // If we received an array, flatten to bullets under Full Analysis
                             if (Array.isArray(parsedSummary)) {
                               return (
@@ -2648,6 +2758,10 @@ export default function DocumentsPage() {
                                 </div>
                               )
                             }
+                            // Final attempt: find canonical object anywhere within
+                            const canonical = findCanonical(parsedSummary);
+                            if (canonical) parsedSummary = canonical;
+
                             return (
                               <>
                                 {parsedSummary.executive_overview && (
@@ -2656,11 +2770,19 @@ export default function DocumentsPage() {
                                       <Target className="w-5 h-5" />
                                       Executive Overview
                                     </h4>
-                                    <div className="prose prose-sm max-w-none dark:prose-invert break-words whitespace-pre-wrap">
-                                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                        {parsedSummary.executive_overview}
-                                      </ReactMarkdown>
-                                    </div>
+                                    {typeof parsedSummary.executive_overview === 'string' ? (
+                                      <div className="prose prose-sm max-w-none dark:prose-invert break-words whitespace-pre-wrap">
+                                        <Markdown>{cleanText(parsedSummary.executive_overview)}</Markdown>
+                                      </div>
+                                    ) : parsedSummary.executive_overview && typeof parsedSummary.executive_overview === 'object' ? (
+                                      <div className="text-sm break-words">
+                                        <ul className="list-disc ml-6 space-y-1">
+                                          {Object.entries(parsedSummary.executive_overview as Record<string, any>).map(([k, v]) => (
+                                            <li key={k} className="whitespace-pre-wrap"><span className="font-medium">{k}:</span> {typeof v === 'string' ? v : JSON.stringify(v)}</li>
+                                          ))}
+                                        </ul>
+                                      </div>
+                                    ) : null}
                                   </div>
                                 )}
 
@@ -2678,11 +2800,20 @@ export default function DocumentsPage() {
                                           </li>
                                         ))}
                                       </ul>
+                                    ) : typeof parsedSummary.key_metrics === 'object' ? (
+                                      <div className="text-sm break-words">
+                                        <dl className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                          {Object.entries(parsedSummary.key_metrics as Record<string, any>).map(([k, v]) => (
+                                            <div key={k} className="flex flex-col">
+                                              <dt className="font-medium">{k}</dt>
+                                              <dd className="whitespace-pre-wrap text-muted-foreground">{typeof v === 'string' ? v : JSON.stringify(v)}</dd>
+                                            </div>
+                                          ))}
+                                        </dl>
+                                      </div>
                                     ) : (
                                       <div className="prose prose-sm max-w-none dark:prose-invert break-words whitespace-pre-wrap">
-                                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                          {parsedSummary.key_metrics}
-                                        </ReactMarkdown>
+                                        <Markdown>{cleanText(parsedSummary.key_metrics)}</Markdown>
                                       </div>
                                     )}
                                   </div>
@@ -2702,11 +2833,17 @@ export default function DocumentsPage() {
                                           </li>
                                         ))}
                                       </ul>
+                                    ) : typeof parsedSummary.major_highlights === 'object' ? (
+                                      <div className="text-sm break-words">
+                                        <ul className="list-disc ml-6 space-y-1">
+                                          {Object.entries(parsedSummary.major_highlights as Record<string, any>).map(([k, v]) => (
+                                            <li key={k} className="whitespace-pre-wrap"><span className="font-medium">{k}:</span> {typeof v === 'string' ? v : JSON.stringify(v)}</li>
+                                          ))}
+                                        </ul>
+                                      </div>
                                     ) : (
                                       <div className="prose prose-sm max-w-none dark:prose-invert break-words whitespace-pre-wrap">
-                                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                          {parsedSummary.major_highlights}
-                                        </ReactMarkdown>
+                                        <Markdown>{cleanText(parsedSummary.major_highlights)}</Markdown>
                                       </div>
                                     )}
                                   </div>
@@ -2726,11 +2863,17 @@ export default function DocumentsPage() {
                                           </li>
                                         ))}
                                       </ul>
+                                    ) : typeof parsedSummary.challenges_and_risks === 'object' ? (
+                                      <div className="text-sm break-words">
+                                        <ul className="list-disc ml-6 space-y-1">
+                                          {Object.entries(parsedSummary.challenges_and_risks as Record<string, any>).map(([k, v]) => (
+                                            <li key={k} className="whitespace-pre-wrap"><span className="font-medium">{k}:</span> {typeof v === 'string' ? v : JSON.stringify(v)}</li>
+                                          ))}
+                                        </ul>
+                                      </div>
                                     ) : (
                                       <div className="prose prose-sm max-w-none dark:prose-invert break-words whitespace-pre-wrap">
-                                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                          {parsedSummary.challenges_and_risks}
-                                        </ReactMarkdown>
+                                        <Markdown>{cleanText(parsedSummary.challenges_and_risks)}</Markdown>
                                       </div>
                                     )}
                                   </div>
@@ -2750,11 +2893,17 @@ export default function DocumentsPage() {
                                           </li>
                                         ))}
                                       </ul>
+                                    ) : typeof parsedSummary.opportunities_and_recommendations === 'object' ? (
+                                      <div className="text-sm break-words">
+                                        <ul className="list-disc ml-6 space-y-1">
+                                          {Object.entries(parsedSummary.opportunities_and_recommendations as Record<string, any>).map(([k, v]) => (
+                                            <li key={k} className="whitespace-pre-wrap"><span className="font-medium">{k}:</span> {typeof v === 'string' ? v : JSON.stringify(v)}</li>
+                                          ))}
+                                        </ul>
+                                      </div>
                                     ) : (
                                       <div className="prose prose-sm max-w-none dark:prose-invert break-words whitespace-pre-wrap">
-                                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                          {parsedSummary.opportunities_and_recommendations}
-                                        </ReactMarkdown>
+                                        <Markdown>{cleanText(parsedSummary.opportunities_and_recommendations)}</Markdown>
                                       </div>
                                     )}
                                   </div>
@@ -2780,24 +2929,60 @@ export default function DocumentsPage() {
                                       <FileText className="w-5 h-5" />
                                       Full Analysis
                                     </h4>
-                                    <div className="prose prose-sm max-w-none dark:prose-invert break-words whitespace-pre-wrap">
-                                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                        {parsedSummary.full_text}
-                                      </ReactMarkdown>
-                                    </div>
+                                    {typeof parsedSummary.full_text === 'string' && looksLikeJson(parsedSummary.full_text) ? (
+                                      (() => {
+                                        const p = tryParseJson(parsedSummary.full_text as string);
+                                        if (p && typeof p === 'object') {
+                                          const entries = Array.isArray(p)
+                                            ? (p as any[]).map((v, i) => [i.toString(), v] as [string, any])
+                                            : Object.entries(p as Record<string, any>);
+                                          return (
+                                            <div className="text-sm break-words">
+                                              <ul className="list-disc ml-6 space-y-1">
+                                                {entries.map(([k, v]) => (
+                                                  <li key={k} className="whitespace-pre-wrap">
+                                                    <span className="font-medium">{k}:</span> {typeof v === 'string' ? cleanText(v) : JSON.stringify(v)}
+                                                  </li>
+                                                ))}
+                                              </ul>
+                                            </div>
+                                          );
+                                        }
+                                        // Fallback to cleaned markdown
+                                        return (
+                                          <div className="prose prose-sm max-w-none dark:prose-invert break-words whitespace-pre-wrap">
+                                            <Markdown>{cleanText(parsedSummary.full_text as string)}</Markdown>
+                                          </div>
+                                        );
+                                      })()
+                                    ) : (
+                                      <div className="prose prose-sm max-w-none dark:prose-invert break-words whitespace-pre-wrap">
+                                        <Markdown>{typeof parsedSummary.full_text === 'string' ? cleanText(parsedSummary.full_text) : String(parsedSummary.full_text)}</Markdown>
+                                      </div>
+                                    )}
                                   </div>
                                 )}
                               </>
                             );
                           }
                           
-                          // Fallback for other types
+                          // Fallback for other types: render as readable list instead of raw JSON
                           return (
                             <div className="bg-background border rounded-lg p-6">
                               <h4 className="font-semibold mb-4">Summary</h4>
-                              <pre className="whitespace-pre-wrap break-words text-sm bg-muted p-4 rounded overflow-x-hidden">
-                                {JSON.stringify(parsedSummary, null, 2)}
-                              </pre>
+                              {typeof parsedSummary === 'string' ? (
+                                <div className="prose prose-sm max-w-none dark:prose-invert break-words whitespace-pre-wrap">
+                                  <Markdown>{parsedSummary}</Markdown>
+                                </div>
+                              ) : (
+                                <div className="text-sm break-words">
+                                  <ul className="list-disc ml-6 space-y-1">
+                                    {Object.entries(parsedSummary as Record<string, any>).map(([k, v]) => (
+                                      <li key={k} className="whitespace-pre-wrap"><span className="font-medium">{k}:</span> {typeof v === 'string' ? v : JSON.stringify(v)}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
                             </div>
                           );
                         })()}
