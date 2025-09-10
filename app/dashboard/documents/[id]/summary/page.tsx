@@ -316,7 +316,10 @@ export default function DocumentSummaryPage() {
       </Card>
 
       {/* Mobile sticky action bar */}
-      <div className="sm:hidden fixed bottom-0 left-0 right-0 z-40 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 p-2">
+      <div
+        className="sm:hidden fixed bottom-0 left-0 right-0 z-40 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 p-2"
+        style={{ bottom: 'calc(env(safe-area-inset-bottom) + 12px)' }}
+      >
         <div className="grid grid-cols-3 gap-2">
           <Button variant="outline" size="sm" onClick={loadCached} disabled={loadingSummary} className="truncate">
             <RefreshCw className="w-4 h-4 mr-1" /> Cached
