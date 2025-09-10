@@ -1919,16 +1919,14 @@ async def upload_document(file: UploadFile = File(...)):
             # Pre-ingestion diagnostics: list markdown files in staging
             found_md = sorted(glob.glob(str(Path(temp_dir) / "**/*.md"), recursive=True))
 
-            # Create ingestion configuration
+            # Create ingestion configuration (only supported fields)
             config = IngestionConfig(
-                chunk_size=int(os.getenv("CHUNK_SIZE", 800)),
-                chunk_overlap=int(os.getenv("CHUNK_OVERLAP", 150)),
-                max_chunk_size=int(os.getenv("MAX_CHUNK_SIZE", 1500)),
-                embedding_model=os.getenv("EMBEDDING_MODEL", "text-embedding-004"),
-                vector_dimension=int(os.getenv("VECTOR_DIMENSION", 768)),
-                llm_choice=os.getenv("INGESTION_LLM_CHOICE", os.getenv("LLM_CHOICE", "gemini-1.5-flash")),
-                enable_graph=True,
-                clean_before_ingest=False
+                chunk_size=int(os.getenv("CHUNK_SIZE", "800")),
+                chunk_overlap=int(os.getenv("CHUNK_OVERLAP", "150")),
+                max_chunk_size=int(os.getenv("MAX_CHUNK_SIZE", "1500")),
+                use_semantic_splitting=os.getenv("USE_SEMANTIC_SPLITTING", "1") not in ("0", "false", "False"),
+                extract_entities=os.getenv("EXTRACT_ENTITIES", "1") not in ("0", "false", "False"),
+                skip_graph_building=os.getenv("INGESTION_SKIP_GRAPH_BUILDING", "0") in ("1", "true", "True"),
             )
             
             # Initialize ingestion pipeline
@@ -1938,8 +1936,15 @@ async def upload_document(file: UploadFile = File(...)):
                 clean_before_ingest=False
             )
             
-            # Process the document
-            results = await pipeline.ingest_documents()
+            # Process the document with optional global timeout
+            try:
+                global_timeout = float(os.getenv("INGEST_GLOBAL_TIMEOUT", "0"))
+            except Exception:
+                global_timeout = 0.0
+            if global_timeout > 0:
+                results = await asyncio.wait_for(pipeline.ingest_documents(), timeout=global_timeout)
+            else:
+                results = await pipeline.ingest_documents()
 
             # Check if results were successful (successful if document_id is not empty and no errors)
             successful_results = [r for r in results if r.document_id and len(r.errors) == 0]

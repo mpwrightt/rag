@@ -1258,6 +1258,7 @@ export default function DocumentsPage() {
   const LARGE_FILE_THRESHOLD = Number(process.env.NEXT_PUBLIC_LARGE_UPLOAD_MB || '5') * 1024 * 1024 // 5MB default
   const CHUNK_SIZE = Number(process.env.NEXT_PUBLIC_UPLOAD_CHUNK_MB || '2') * 1024 * 1024 // 2MB per part
   const MAX_CONCURRENCY = Number(process.env.NEXT_PUBLIC_UPLOAD_CONCURRENCY || '4') // 4 parallel part uploads
+  const INGEST_POLL_TIMEOUT_MIN = Number(process.env.NEXT_PUBLIC_INGEST_POLL_TIMEOUT_MINUTES || '20')
 
   // Upload a large file in parallel parts using the multipart endpoints
   // Returns a job_id string when background ingestion is started, or null when fully synchronous
@@ -1364,7 +1365,7 @@ export default function DocumentsPage() {
   async function pollIngestJob(jobId: string, localId: string) {
     // Cap polling to ~5 minutes
     const started = Date.now()
-    const timeoutMs = 5 * 60 * 1000
+    const timeoutMs = Math.max(1, INGEST_POLL_TIMEOUT_MIN) * 60 * 1000
     while (Date.now() - started < timeoutMs) {
       try {
         const r = await fetch(`${API_BASE}/ingest/jobs/${encodeURIComponent(jobId)}/result`, {
