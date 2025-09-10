@@ -2482,14 +2482,16 @@ export default function DocumentsPage() {
           
           {summaryDocument && (
             <div className="flex flex-col flex-1 overflow-hidden">
-              {/* Document Info */}
-              <div className="border-b pb-4 mb-4 flex-shrink-0">
-                <h3 className="font-semibold text-lg truncate">{summaryDocument.title || summaryDocument.name}</h3>
-                <p className="text-sm text-muted-foreground">
-                  {summaryDocument.type?.toUpperCase()} • {formatSizeMB(summaryDocument.size)} • 
-                  {summaryDocument.chunk_count ? ` ${summaryDocument.chunk_count} chunks` : ''}
-                </p>
-              </div>
+              {/* Document Info (collapsible) */}
+              {summaryDetailsOpen && (
+                <div className="border-b pb-4 mb-4 flex-shrink-0">
+                  <h3 className="font-semibold text-lg truncate">{summaryDocument.title || summaryDocument.name}</h3>
+                  <p className="text-sm text-muted-foreground">
+                    {summaryDocument.type?.toUpperCase()} • {formatSizeMB(summaryDocument.size)} • 
+                    {summaryDocument.chunk_count ? ` ${summaryDocument.chunk_count} chunks` : ''}
+                  </p>
+                </div>
+              )}
 
               {/* Loading State */}
               {summaryLoading && (
@@ -2632,6 +2634,25 @@ export default function DocumentsPage() {
                             const t = (s || '').trim();
                             return t.startsWith('{') || t.startsWith('[');
                           };
+                          // Strip Markdown code fences from strings (```lang ... ```)
+                          const stripCodeFences = (s: string) => {
+                            const t = (s || '').trim();
+                            if (t.startsWith('```') && t.endsWith('```')) {
+                              const withoutStart = t.replace(/^```[a-zA-Z0-9_-]*\n?/, '');
+                              return withoutStart.replace(/```$/, '').trim();
+                            }
+                            return t;
+                          };
+                          // Remove uniform indentation to prevent Markdown from treating text as code block
+                          const dedent = (s: string) => {
+                            const lines = (s || '').replace(/\r\n/g, '\n').split('\n');
+                            const contentLines = lines.filter(l => l.trim().length > 0);
+                            if (contentLines.length === 0) return s || '';
+                            const indents = contentLines.map(l => (l.match(/^\s*/)?.[0].length ?? 0));
+                            const minIndent = Math.min(...indents);
+                            if (minIndent === 0) return s || '';
+                            return lines.map(l => l.startsWith(' '.repeat(minIndent)) ? l.slice(minIndent) : l).join('\n');
+                          };
                           // Utilities to render structured content with titles/subtitles
                           const titleize = (k: string) =>
                             (k || '')
@@ -2683,25 +2704,6 @@ export default function DocumentsPage() {
                               return renderObjectSections(parsed as Record<string, any>);
                             }
                             return <Markdown>{cleaned}</Markdown>;
-                          };
-                          const stripCodeFences = (s: string) => {
-                            const t = (s || '').trim();
-                            if (t.startsWith('```') && t.endsWith('```')) {
-                              // Remove opening fence with optional language
-                              const withoutStart = t.replace(/^```[a-zA-Z0-9_-]*\n?/, '');
-                              return withoutStart.replace(/```$/, '').trim();
-                            }
-                            return t;
-                          };
-                          const dedent = (s: string) => {
-                            const lines = (s || '').replace(/\r\n/g, '\n').split('\n');
-                            // Ignore leading/trailing empty lines for indent calc
-                            const contentLines = lines.filter(l => l.trim().length > 0);
-                            if (contentLines.length === 0) return s || '';
-                            const indents = contentLines.map(l => (l.match(/^\s*/)?.[0].length ?? 0));
-                            const minIndent = Math.min(...indents);
-                            if (minIndent === 0) return s || '';
-                            return lines.map(l => l.startsWith(' '.repeat(minIndent)) ? l.slice(minIndent) : l).join('\n');
                           };
                           const tryParseJson = (s: string) => {
                             try { return JSON.parse(s); } catch {}
