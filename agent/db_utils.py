@@ -728,26 +728,46 @@ async def list_collections_db(
 
 async def delete_document(document_id: str) -> bool:
     """
-    Delete document by ID. This will cascade delete all associated chunks.
+    Delete a document and all related data.
+    This performs a best-effort full cleanup:
+    - Cancels and deletes summary_jobs for the document
+    - Deletes the document row (DB will cascade to chunks, summaries, collection links, etc.)
     
     Args:
         document_id: Document UUID
-        
     Returns:
         True if document was deleted, False if not found
     """
     async with db_pool.acquire() as conn:
-        result = await conn.execute(
-            """
-            DELETE FROM documents 
-            WHERE id = $1::uuid
-            """,
-            document_id
-        )
-        
-        # Extract the number of rows affected from the result string
-        rows_affected = int(result.split()[-1]) if result and result.startswith("DELETE") else 0
-        return rows_affected > 0
+        async with conn.transaction():
+            # Cancel any running/queued summary jobs and remove all jobs for this document
+            try:
+                await conn.execute(
+                    """
+                    UPDATE summary_jobs
+                    SET cancelled = TRUE, status = 'cancelled', updated_at = NOW()
+                    WHERE document_id = $1::uuid AND status IN ('queued','running')
+                    """,
+                    document_id,
+                )
+                await conn.execute(
+                    "DELETE FROM summary_jobs WHERE document_id = $1::uuid",
+                    document_id,
+                )
+            except Exception:
+                # Do not abort the deletion if the summary_jobs table is missing
+                logger.warning("Failed to cleanup summary_jobs for document %s", document_id)
+            
+            # Delete the document itself (cascades will remove related rows where FKs exist)
+            result = await conn.execute(
+                """
+                DELETE FROM documents 
+                WHERE id = $1::uuid
+                """,
+                document_id,
+            )
+            rows_affected = int(result.split()[-1]) if result and result.startswith("DELETE") else 0
+            return rows_affected > 0
 
 
 async def create_collection_db(

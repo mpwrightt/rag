@@ -1309,9 +1309,32 @@ export default function DocumentsPage() {
     handleFileUpload(files)
   }
 
-  const handleDeleteDocument = (id: string) => {
-    setDocuments(prev => prev.filter(doc => doc.id !== id))
-    setSelectedDocuments(prev => prev.filter(docId => docId !== id))
+  const handleDeleteDocument = async (id: string) => {
+    const doc = documents.find(d => d.id === id)
+    const name = doc?.title || doc?.name || id
+    const ok = typeof window !== 'undefined' ? window.confirm(`Delete "${name}" and all derived data (chunks, summaries, jobs)?`) : true
+    if (!ok) return
+    try {
+      const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: { 'bypass-tunnel-reminder': 'true' }
+      })
+      if (!res.ok) {
+        const txt = await res.text().catch(() => '')
+        throw new Error(`Delete failed: ${res.status} ${txt}`)
+      }
+      // Optimistic UI update
+      setDocuments(prev => prev.filter(doc => doc.id !== id))
+      setSelectedDocuments(prev => prev.filter(docId => docId !== id))
+    } catch (e) {
+      console.error('Delete error', e)
+      if (typeof window !== 'undefined') alert('Failed to delete document. Please try again.')
+    }
+  }
+
+  const handleEditDocument = (id: string) => {
+    // TODO: implement edit details UI
+    console.log('Edit document requested', id)
   }
 
   const handleToggleStar = (id: string) => {
@@ -1634,10 +1657,29 @@ export default function DocumentsPage() {
 
   // Removed incremental load-more handler in favor of page-based controls
 
-  const handleBulkDelete = () => {
-    setDocuments(prev => prev.filter(doc => !selectedDocuments.includes(doc.id)))
+  const handleBulkDelete = async () => {
+    if (selectedDocuments.length === 0) return
+    const ok = typeof window !== 'undefined' ? window.confirm(`Delete ${selectedDocuments.length} documents and all derived data?`) : true
+    if (!ok) return
+    const ids = [...selectedDocuments]
+    const failures: string[] = []
+    for (const id of ids) {
+      try {
+        const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(id)}`, {
+          method: 'DELETE',
+          headers: { 'bypass-tunnel-reminder': 'true' }
+        })
+        if (!res.ok) throw new Error(String(res.status))
+      } catch (e) {
+        failures.push(id)
+      }
+    }
+    setDocuments(prev => prev.filter(doc => !ids.includes(doc.id)))
     setSelectedDocuments([])
     setShowBulkActions(false)
+    if (failures.length > 0 && typeof window !== 'undefined') {
+      alert(`Failed to delete ${failures.length} document(s). Please refresh and try again.`)
+    }
   }
 
   const handleBulkStar = () => {
@@ -2030,7 +2072,7 @@ export default function DocumentsPage() {
               <DocumentCard
                 key={document.id}
                 document={document}
-                onEdit={handleDeleteDocument}
+                onEdit={handleEditDocument}
                 onDelete={handleDeleteDocument}
                 onToggleStar={handleToggleStar}
                 onPreview={handlePreview}

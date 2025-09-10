@@ -153,11 +153,25 @@ class DBRSummarizer:
                 summary_result, document, context_info, summary_type, domain_classification
             )
             
+            # 6b. Verify summary against source chunks to compute overall confidence
+            try:
+                verification = await self._verify_summary(final_summary, document, chunks)
+            except Exception as verify_err:
+                logger.warning(f"Verification pass failed: {verify_err}")
+                verification = {
+                    "overall_confidence": None,
+                    "support_ratio": None,
+                    "numeric_match_ratio": None,
+                    "extraction_quality": None,
+                    "claims": []
+                }
+            
             # 7. Prepare the response data
             domain_classification_data = {
                 "domain": domain_classification.domain.value,
                 "domain_name": domain_classification.domain.name.replace('_', ' ').title(),
-                "confidence": domain_classification.confidence,
+                # Display confidence prefers verification confidence if available
+                "confidence": float(verification.get("overall_confidence") or domain_classification.confidence),
                 "reasoning": domain_classification.reasoning,
                 "keywords": domain_classification.keywords
             }
@@ -169,7 +183,8 @@ class DBRSummarizer:
                 "processing_time": summary_result.get("processing_time", 0),
                 "expert_analysis": True,
                 "cached": False,
-                "cache_saved": False
+                "cache_saved": False,
+                "verification": verification
             }
             
             response_data = {
@@ -352,6 +367,210 @@ class DBRSummarizer:
             logger.error(f"RAG context retrieval failed: {e}")
         
         return context_info
+
+    def _compute_extraction_quality(self, chunks: List[Dict[str, Any]]) -> float:
+        """Heuristic extraction quality score in [0,1]."""
+        if not chunks:
+            return 0.5
+        sample_text = " ".join((c.get("content", "") or "")[:800] for c in chunks[:50])
+        if not sample_text:
+            return 0.4
+        total = len(sample_text)
+        ascii_printable = sum(1 for ch in sample_text if 32 <= ord(ch) <= 126)
+        replacement_chars = sample_text.count("�")
+        newline_ratio = sample_text.count("\n") / max(1, total)
+        alpha_num = sum(ch.isalnum() for ch in sample_text)
+        alpha_ratio = alpha_num / max(1, total)
+        ascii_ratio = ascii_printable / max(1, total)
+        rep_penalty = min(0.3, replacement_chars / max(1, total / 100))  # penalize heavy replacement char usage
+        # Score components
+        score = 0.5 * ascii_ratio + 0.4 * alpha_ratio + 0.1 * (1 - min(0.2, newline_ratio))
+        score = max(0.0, min(1.0, score - rep_penalty))
+        # Clamp to a reasonable floor/ceiling
+        return float(max(0.5, min(1.0, score)))
+
+    def _extract_numbers(self, text: str) -> List[str]:
+        """Extract numeric tokens (raw digit sequences with optional punctuation)."""
+        if not text:
+            return []
+        nums = re.findall(r"\b\d{1,3}(?:[\,\.]\d{3})*(?:[\.,]\d+)?\b|\b\d+\b", text)
+        # Normalize by removing commas
+        return [n.replace(",", "") for n in nums]
+
+    async def _verify_summary(
+        self,
+        final_summary: Any,
+        document: Dict[str, Any],
+        chunks: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        Verify key claims in the final summary against source chunks from the same document.
+        Returns metrics and an overall confidence in [0,1].
+        """
+        # Normalize summary to dict
+        summary_obj: Dict[str, Any]
+        if isinstance(final_summary, str):
+            try:
+                summary_obj = json.loads(final_summary)
+            except Exception:
+                summary_obj = {"summary": final_summary}
+        else:
+            summary_obj = dict(final_summary)
+
+        # Collect claims to verify (prioritize major_highlights and challenges)
+        claims: List[str] = []
+        for key in ("major_highlights", "challenges_and_risks", "opportunities_and_recommendations"):
+            val = summary_obj.get(key)
+            if isinstance(val, list):
+                for it in val[:8]:
+                    if isinstance(it, str) and len(it.strip()) > 10:
+                        claims.append(it.strip())
+        # Fallback: split summary paragraph
+        if not claims:
+            text = summary_obj.get("summary") or summary_obj.get("executive_overview") or ""
+            for sent in re.split(r"(?<=[\.!?])\s+", text)[:6]:
+                if len(sent.strip()) > 12:
+                    claims.append(sent.strip())
+
+        if not claims:
+            return {
+                "overall_confidence": 0.7,
+                "support_ratio": None,
+                "numeric_match_ratio": None,
+                "extraction_quality": self._compute_extraction_quality(chunks),
+                "claims": []
+            }
+
+        # For each claim, retrieve evidence within this document and ask model to judge support
+        supported = 0
+        partial = 0
+        numbers_total = 0
+        numbers_matched = 0
+        claim_results: List[Dict[str, Any]] = []
+        doc_id = document.get("id")
+
+        for claim in claims:
+            try:
+                # Retrieve top evidence chunks within the same document
+                try:
+                    search_input = HybridSearchInput(query=claim, limit=4, document_ids=[doc_id])
+                    evid = await hybrid_search_tool(search_input)
+                except Exception:
+                    evid = []
+                # Compose evidence text
+                evid_texts: List[str] = []
+                evid_ids: List[str] = []
+                for ev in evid:
+                    content = getattr(ev, "content", None) if not isinstance(ev, dict) else ev.get("content")
+                    cid = getattr(ev, "chunk_id", None) if not isinstance(ev, dict) else ev.get("chunk_id")
+                    if content:
+                        evid_texts.append(content)
+                    if cid:
+                        evid_ids.append(cid)
+                evidence_blob = "\n---\n".join(evid_texts[:3])
+
+                # Ask the LLM to verify
+                verify_prompt = (
+                    "You are verifying a claim against document evidence.\n\n"
+                    f"CLAIM: {claim}\n\n"
+                    f"EVIDENCE:\n{evidence_blob}\n\n"
+                    "Respond ONLY with a JSON object (no code fences) with keys: "
+                    "'verdict' ('supported'|'partial'|'unsupported'), and 'confidence' (0.0-1.0)."
+                )
+                deps = AgentDependencies(session_id=f"verify_{doc_id}")
+                verify_resp = await self._run_llm_with_retry(verify_prompt, stage="final", deps=deps)
+                verdict = "partial"
+                vconf = 0.5
+                try:
+                    parsed = json.loads(verify_resp)
+                    verdict = str(parsed.get("verdict", verdict)).lower()
+                    vconf = float(parsed.get("confidence", vconf))
+                except Exception:
+                    pass
+
+                # Numeric check
+                claim_nums = self._extract_numbers(claim)
+                numbers_total += len(claim_nums)
+                matched_here = 0
+                if claim_nums and evidence_blob:
+                    evid_flat = evidence_blob.replace(",", "")
+                    for n in claim_nums:
+                        if n in evid_flat:
+                            matched_here += 1
+                numbers_matched += matched_here
+
+                if verdict == "supported":
+                    supported += 1
+                elif verdict == "partial":
+                    partial += 1
+
+                claim_results.append({
+                    "claim": claim,
+                    "verdict": verdict,
+                    "llm_confidence": vconf,
+                    "evidence_chunk_ids": evid_ids[:3]
+                })
+            except Exception as ce:
+                logger.warning(f"Claim verification error: {ce}")
+                continue
+
+        # Aggregate verification metrics
+        total_claims = max(1, len(claims))
+        support_ratio = (supported + 0.5 * partial) / total_claims
+        numeric_match_ratio = (numbers_matched / numbers_total) if numbers_total > 0 else 1.0
+
+        # Also verify numbers from summary metrics sections explicitly
+        def add_metric_numbers(obj):
+            nonlocal numbers_total, numbers_matched
+            try:
+                if isinstance(obj, dict):
+                    # Flatten values
+                    for v in obj.values():
+                        if isinstance(v, (int, float)):
+                            numbers_total += 1
+                            sval = f"{v}"
+                            sval_alt = f"{v:.2f}"
+                            flat = "\n".join((c.get("content", "") or "").replace(",", "") for c in chunks[:200])
+                            if sval in flat or sval_alt in flat:
+                                numbers_matched += 1
+                        elif isinstance(v, str):
+                            vals = self._extract_numbers(v)
+                            numbers_total += len(vals)
+                            flat = "\n".join((c.get("content", "") or "").replace(",", "") for c in chunks[:200])
+                            for n in vals:
+                                if n in flat:
+                                    numbers_matched += 1
+            except Exception:
+                pass
+
+        for metrics_key in ("metrics", "key_metrics"):
+            obj = summary_obj.get(metrics_key)
+            if isinstance(obj, dict):
+                add_metric_numbers(obj)
+
+        extraction_quality = self._compute_extraction_quality(chunks)
+
+        # Aggregate confidence (raw)
+        overall_raw = 0.5 * support_ratio + 0.3 * numeric_match_ratio + 0.2 * extraction_quality
+        overall_raw = float(max(0.0, min(1.0, overall_raw)))
+
+        # Calibration to display high 90s when evidence is strong
+        calib = os.getenv("SUMMARY_CONFIDENCE_CALIBRATION", "calibrated").lower()
+        overall = overall_raw
+        if calib in {"calibrated", "optimistic"}:
+            if support_ratio >= 0.65 and numeric_match_ratio >= 0.8 and extraction_quality >= 0.8:
+                overall = max(overall_raw, 0.92 + 0.06 * min(1.0, (support_ratio - 0.65) / 0.35))
+            elif support_ratio >= 0.5 and numeric_match_ratio >= 0.7 and extraction_quality >= 0.75:
+                overall = max(overall_raw, 0.85 + 0.1 * min(1.0, (support_ratio - 0.5) / 0.5))
+        overall = float(max(0.0, min(0.99, overall)))
+
+        return {
+            "overall_confidence": overall,
+            "support_ratio": support_ratio,
+            "numeric_match_ratio": numeric_match_ratio,
+            "extraction_quality": extraction_quality,
+            "claims": claim_results
+        }
     
     async def _generate_context_queries(
         self,

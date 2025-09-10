@@ -6,6 +6,8 @@ from __future__ import annotations
 import os
 import io
 import logging
+import re
+import unicodedata
 from pathlib import Path
 from typing import Tuple, Dict, Any
 
@@ -26,6 +28,33 @@ def _read_text(path: str, encodings=("utf-8", "latin-1")) -> str:
             return f.read().decode("utf-8", errors="ignore")
     except Exception:
         return ""
+
+
+def _normalize_text(text: str) -> str:
+    """Normalize extracted text to improve downstream accuracy.
+    - Unicode normalize (NFKC) to fix ligatures, fancy punctuation
+    - Remove spurious control chars / replacement glyphs
+    - Fix hyphenation across line breaks
+    - Collapse excessive whitespace while preserving paragraphs
+    """
+    if not text:
+        return ""
+    t = unicodedata.normalize("NFKC", text)
+    # Remove BOM and replacement characters
+    t = t.replace("\ufeff", "").replace("�", "")
+    # Normalize newlines
+    t = t.replace("\r\n", "\n").replace("\r", "\n")
+    # De-hyphenate line-break hyphenation: "com-\npany" -> "company"
+    t = re.sub(r"-\s*\n\s*", "", t)
+    # Merge lines that were wrapped mid-sentence: single newline between non-blank lines -> space
+    t = re.sub(r"(?<=\S)\n(?=\S)", " ", t)
+    # Collapse multiple blank lines to max two
+    t = re.sub(r"\n{3,}", "\n\n", t)
+    # Remove stray control chars except tab/newline
+    t = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", t)
+    # Collapse runs of spaces
+    t = re.sub(r"[ \t]{2,}", " ", t)
+    return t.strip()
 
 
 def convert_to_markdown(file_path: str) -> Tuple[str, Dict[str, Any]]:
@@ -52,11 +81,31 @@ def convert_to_markdown(file_path: str) -> Tuple[str, Dict[str, Any]]:
                 from pdfminer.high_level import extract_text
                 text = extract_text(str(p)) or ""
                 if text.strip():
-                    return text, meta
+                    return _normalize_text(text), meta
                 else:
                     logger.warning("PDF conversion via pdfminer returned empty text for %s", p.name)
             except Exception as e:
                 logger.warning("PDF conversion failed via pdfminer: %s", e)
+
+            # Second attempt: PyMuPDF (fitz) if available
+            try:
+                import fitz  # PyMuPDF
+                try:
+                    doc = fitz.open(str(p))
+                    pages_text = []
+                    for idx, page in enumerate(doc):
+                        if idx >= 50:  # cap pages for very large PDFs
+                            break
+                        pages_text.append(page.get_text("text") or "")
+                    doc.close()
+                    text = "\n\n".join(pages_text)
+                    if text.strip():
+                        return _normalize_text(text), {**meta, "note": "pymupdf_fallback"}
+                except Exception as e2:
+                    logger.warning("PyMuPDF extraction failed: %s", e2)
+            except Exception:
+                # PyMuPDF not installed
+                pass
 
             # Optional OCR fallback if enabled
             if os.getenv("OCR_PDF", "0").lower() in {"1", "true", "yes", "on"}:
@@ -81,14 +130,14 @@ def convert_to_markdown(file_path: str) -> Tuple[str, Dict[str, Any]]:
                             if txt and txt.strip():
                                 ocr_pages.append(txt)
                         if ocr_pages:
-                            return "\n\n".join(ocr_pages), {**meta, "note": "ocr_fallback"}
+                            return _normalize_text("\n\n".join(ocr_pages)), {**meta, "note": "ocr_fallback"}
                         else:
                             logger.warning("OCR produced no text for %s", p.name)
                     except Exception as e:
                         logger.warning("OCR fallback failed: %s", e)
 
             # Final fallback: try raw decode
-            return _read_text(str(p)), {**meta, "warning": "pdf extraction failed; raw decode used"}
+            return _normalize_text(_read_text(str(p))), {**meta, "warning": "pdf extraction failed; raw decode used"}
 
         if ext in {"docx"}:
             try:
