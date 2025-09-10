@@ -19,10 +19,10 @@ const Markdown = ({ children }: { children: string }) => (
     remarkPlugins={[remarkGfm]}
     components={{
       code: ({ children }) => (
-        <code className="whitespace-pre-wrap break-words">{String(children)}</code>
+        <code className="whitespace-pre-wrap break-words rounded bg-muted px-1.5 py-0.5 text-[0.9em]">{String(children)}</code>
       ),
       pre: ({ children }) => (
-        <pre className="whitespace-pre-wrap break-words overflow-x-hidden">{children as any}</pre>
+        <pre className="whitespace-pre-wrap break-words overflow-x-auto rounded-md bg-muted p-3">{children as any}</pre>
       ),
     }}
   >
@@ -241,7 +241,7 @@ export default function DocumentSummaryPage() {
   }, [summary, summaryAsMarkdown, docTitle])
 
   return (
-    <div className="flex flex-col h-full p-4 sm:p-6">
+    <div className="flex flex-col min-h-screen p-4 sm:p-6">
       <div className="flex items-center gap-3 mb-4">
         <Button variant="ghost" size="sm" onClick={() => router.push('/dashboard/documents')}>
           <ArrowLeft className="w-4 h-4 mr-2" /> Back
@@ -290,7 +290,7 @@ export default function DocumentSummaryPage() {
         </Card>
       )}
 
-      <Card className="flex-1">
+      <Card className="flex-1 min-h-[50vh]">
         <CardHeader className="pb-3">
           <CardTitle className="text-base">Summary</CardTitle>
         </CardHeader>
@@ -306,8 +306,10 @@ export default function DocumentSummaryPage() {
           )}
 
           {hasSummaryContent(summary) && (
-            <div className="prose dark:prose-invert max-w-none">
-              <Markdown>{summaryAsMarkdown}</Markdown>
+            <div className="max-h-[calc(100vh-280px)] overflow-y-auto pr-1 sm:pr-2">
+              <div className="prose prose-sm sm:prose-base md:prose-lg dark:prose-invert max-w-none leading-relaxed tracking-[0.01em] break-words hyphens-auto prose-headings:scroll-mt-24 prose-p:my-3 prose-li:my-1 prose-ol:my-2 prose-ul:my-2 prose-img:rounded-md">
+                <Markdown>{summaryAsMarkdown}</Markdown>
+              </div>
             </div>
           )}
         </CardContent>
