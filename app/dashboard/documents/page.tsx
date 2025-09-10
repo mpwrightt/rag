@@ -1255,35 +1255,36 @@ export default function DocumentsPage() {
     setUploadProgress(prev => [...localUploads, ...prev])
 
     try {
-      const fd = new FormData()
-      Array.from(files).forEach(f => fd.append('files', f))
+      const fileArray = Array.from(files)
 
-      // Upload & convert on server -> Markdown -> ingest
-      const res = await fetch(`${API_BASE}/documents/upload`, {
-        method: 'POST',
-        body: fd,
-        headers: { 'bypass-tunnel-reminder': 'true' }
-      })
+      // Upload each file individually to the backend endpoint expected by FastAPI
+      for (let i = 0; i < fileArray.length; i++) {
+        const f = fileArray[i]
+        const fd = new FormData()
+        fd.append('file', f)
 
-      if (!res.ok) throw new Error(`Upload failed: ${res.status}`)
-      const data = await res.json().catch(() => ({}))
+        const res = await fetch(`${API_BASE}/upload`, {
+          method: 'POST',
+          body: fd,
+          headers: { 'bypass-tunnel-reminder': 'true' }
+        })
 
-      // Mark uploads complete
-      setUploadProgress(prev => prev.map(u =>
-        localUploads.find(l => l.id === u.id) ? { ...u, status: 'complete', progress: 100 } : u
-      ))
+        if (!res.ok) {
+          // Mark this file as error and continue with others
+          setUploadProgress(prev => prev.map(u =>
+            u.id === localUploads[i].id ? { ...u, status: 'error' as const, error: `Upload failed: ${res.status}` } : u
+          ))
+          continue
+        }
 
-      // If API returned ids, fetch details and prepend
-      const created = Array.isArray(data?.created) ? data.created : []
-      if (created.length > 0) {
-        try {
-          // Refresh first page to include new docs
-          await fetchDocumentsPage(1)
-        } catch {}
-      } else {
-        // Fallback: refresh anyway
-        await fetchDocumentsPage(1)
+        // Mark this file complete
+        setUploadProgress(prev => prev.map(u =>
+          u.id === localUploads[i].id ? { ...u, status: 'complete' as const, progress: 100 } : u
+        ))
       }
+
+      // Refresh documents after processing uploads
+      await fetchDocumentsPage(1)
     } catch (e) {
       console.error('Upload error', e)
       setUploadProgress(prev => prev.map(u =>
