@@ -118,6 +118,7 @@ function getDocText(doc: any): string | undefined {
   for (const c of direct) {
     if (typeof c === 'string' && c.trim().length > 0) return c
   }
+
   // Try common collections of text
   if (Array.isArray(doc?.chunks)) {
     const parts: string[] = []
@@ -885,6 +886,7 @@ export default function DocumentsPage() {
   const [summaryResult, setSummaryResult] = useState<any>(null)
   const [summaryError, setSummaryError] = useState<string | null>(null)
   const [summaryDetailsOpen, setSummaryDetailsOpen] = useState(false)
+  const [downloadFormat, setDownloadFormat] = useState<'md' | 'txt' | 'json'>('md')
   const [showBulkActions, setShowBulkActions] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   // Pagination state (page-based)
@@ -1356,6 +1358,125 @@ export default function DocumentsPage() {
       setSummaryError(error instanceof Error ? error.message : 'Unknown error occurred')
     } finally {
       setSummaryLoading(false)
+    }
+  }
+
+  // Build downloadable content from the current summary result
+  const handleDownloadSummary = () => {
+    if (!summaryResult || !summaryResult.summary) return
+
+    const raw = summaryResult.summary
+
+    // Helpers (minimal duplicates of the render helpers for robustness)
+    const stripCodeFences = (s: string) => {
+      const t = (s || '').trim()
+      if (t.startsWith('```') && t.endsWith('```')) {
+        const withoutStart = t.replace(/^```[a-zA-Z0-9_-]*\n?/, '')
+        return withoutStart.replace(/```$/, '').trim()
+      }
+      return t
+    }
+    const tryParseJsonLoose = (s: string) => {
+      try { return JSON.parse(s) } catch {}
+      const t = stripCodeFences(s)
+      const i = t.indexOf('{')
+      const j = t.lastIndexOf('}')
+      if (i >= 0 && j > i) {
+        const sub = t.slice(i, j + 1)
+        try { return JSON.parse(sub) } catch {}
+      }
+      return null
+    }
+    const cleanText = (s: string) => stripCodeFences(String(s || '')).replace(/\\n/g, '\n').replace(/\\t/g, '\t')
+    const titleize = (k: string) => (k || '').replace(/_/g, ' ').replace(/\s+/g, ' ').trim().replace(/\b\w/g, c => c.toUpperCase())
+
+    const toObject = (val: any): Record<string, any> => {
+      if (val && typeof val === 'object') return val as Record<string, any>
+      if (typeof val === 'string') {
+        const parsed = tryParseJsonLoose(val)
+        if (parsed && typeof parsed === 'object') return parsed as Record<string, any>
+        // Fallback: wrap as executive_overview
+        return { executive_overview: cleanText(val) }
+      }
+      return { executive_overview: String(val) }
+    }
+
+    const SECTION_ORDER = [
+      'executive_overview',
+      'key_metrics',
+      'major_highlights',
+      'challenges_and_risks',
+      'opportunities_and_recommendations',
+      'conclusion',
+      'full_text',
+    ]
+
+    const obj = toObject(raw)
+
+    const asMarkdown = () => {
+      const parts: string[] = []
+      const renderVal = (v: any): string => {
+        if (v == null) return ''
+        if (typeof v === 'string') return cleanText(v)
+        if (Array.isArray(v)) return v.map(x => `- ${typeof x === 'string' ? cleanText(x) : JSON.stringify(x)}`).join('\n')
+        if (typeof v === 'object') {
+          return Object.entries(v).map(([k2, v2]) => `### ${titleize(k2)}\n\n${renderVal(v2)}`).join('\n\n')
+        }
+        return String(v)
+      }
+      for (const key of SECTION_ORDER) {
+        if (key in obj) {
+          parts.push(`## ${titleize(key)}\n\n${renderVal(obj[key])}`)
+        }
+      }
+      // Append any other keys not in the preferred order
+      for (const [k, v] of Object.entries(obj)) {
+        if (!SECTION_ORDER.includes(k)) {
+          parts.push(`## ${titleize(k)}\n\n${renderVal(v)}`)
+        }
+      }
+      const headerTitle = summaryDocument?.title || summaryDocument?.name || 'Document Summary'
+      return `# ${headerTitle}\n\n${parts.join('\n\n')}`
+    }
+
+    const asText = () => {
+      const md = asMarkdown()
+      // Strip basic markdown markers to get a clean text export
+      return md
+        .replace(/^###\s+/gm, '')
+        .replace(/^##\s+/gm, '')
+        .replace(/^#\s+/gm, '')
+        .replace(/\*\*([^*]+)\*\*/g, '$1')
+        .replace(/\*\s+/g, '- ')
+    }
+
+    const asJson = () => JSON.stringify(obj, null, 2)
+
+    let content = ''
+    let mime = 'text/plain;charset=utf-8'
+    let ext = 'txt'
+    if (downloadFormat === 'md') { content = asMarkdown(); mime = 'text/markdown;charset=utf-8'; ext = 'md' }
+    else if (downloadFormat === 'json') { content = asJson(); mime = 'application/json;charset=utf-8'; ext = 'json' }
+    else { content = asText(); mime = 'text/plain;charset=utf-8'; ext = 'txt' }
+
+    const filenameBase = (summaryDocument?.title || summaryDocument?.name || 'document-summary')
+      .replace(/[^a-z0-9-_]+/ig, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_+|_+$/g, '')
+    const fname = `${filenameBase || 'document-summary'}.${ext}`
+
+    try {
+      const blob = new Blob([content], { type: mime })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = fname
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      console.error('Download failed', e)
     }
   }
 
@@ -2536,7 +2657,8 @@ export default function DocumentsPage() {
               {/* Summary Results */}
               {summaryResult && !summaryLoading && !summaryError && (
                 <div className="flex-1 overflow-hidden flex flex-col">
-                  {/* Summary Metadata */}
+                  {/* Summary Metadata (collapsible) */}
+                  {summaryDetailsOpen && (
                   <div className="space-y-4 mb-6 flex-shrink-0">
                     {/* Domain Classification Info */}
                     {summaryResult.domain_classification && (
@@ -2621,6 +2743,7 @@ export default function DocumentsPage() {
                       </div>
                     </div>
                   </div>
+                  )}
 
                   {/* Summary Content */}
                   {summaryResult.summary && (
@@ -3170,9 +3293,25 @@ export default function DocumentsPage() {
                     </Button>
                   )}
                 </div>
-                <Button variant="outline" onClick={() => setShowSummaryDialog(false)}>
-                  Close
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Select value={downloadFormat} onValueChange={(v) => setDownloadFormat(v as any)}>
+                    <SelectTrigger className="w-[140px]">
+                      <SelectValue placeholder="Format" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="md">Markdown (.md)</SelectItem>
+                      <SelectItem value="txt">Plain Text (.txt)</SelectItem>
+                      <SelectItem value="json">JSON (.json)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Button onClick={handleDownloadSummary} disabled={!summaryResult || !summaryResult.summary}>
+                    <Download className="w-4 h-4 mr-2" />
+                    Download
+                  </Button>
+                  <Button variant="outline" onClick={() => setShowSummaryDialog(false)}>
+                    Close
+                  </Button>
+                </div>
               </div>
             </div>
           )}
