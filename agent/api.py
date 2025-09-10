@@ -287,6 +287,9 @@ question_generator = None
 # In-memory store for multipart upload sessions (best-effort, non-persistent)
 UPLOAD_SESSIONS: Dict[str, Dict[str, Any]] = {}
 
+# In-memory ingest job tracker (ephemeral)
+INGEST_JOBS: Dict[str, Dict[str, Any]] = {}
+
 
 # Helper functions for agent execution
 async def get_or_create_session(request: ChatRequest) -> str:
@@ -2040,17 +2043,54 @@ async def upload_document_async(file: UploadFile = File(...)):
                     )
                 temp_file.write(chunk)
 
+        # Create an ingest job and return job_id immediately
+        job_id = str(uuid.uuid4())
+        INGEST_JOBS[job_id] = {
+            "status": "queued",
+            "error": None,
+            "result": None,
+            "filename": original_name,
+            "size": size_bytes,
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+
         async def _process_async_upload():
             """Background task to convert to markdown and ingest, then cleanup."""
             try:
+                # Mark running
+                try:
+                    job = INGEST_JOBS.get(job_id)
+                    if job is not None:
+                        job["status"] = "running"
+                        job["updated_at"] = datetime.utcnow().isoformat()
+                except Exception:
+                    pass
+
                 # Convert to Markdown
                 try:
                     md_text, conv_meta = convert_to_markdown(str(temp_file_path))
                 except Exception as e:
                     logger.exception("Conversion to markdown failed (async): %s", e)
+                    try:
+                        job = INGEST_JOBS.get(job_id)
+                        if job is not None:
+                            job["status"] = "error"
+                            job["error"] = f"conversion_failed: {e}"
+                            job["updated_at"] = datetime.utcnow().isoformat()
+                    except Exception:
+                        pass
                     return
                 if not md_text or not md_text.strip():
                     logger.warning("No extractable text found in async upload: %s", original_name)
+                    try:
+                        job = INGEST_JOBS.get(job_id)
+                        if job is not None:
+                            job["status"] = "error"
+                            job["error"] = "no_text_extracted"
+                            job["updated_at"] = datetime.utcnow().isoformat()
+                    except Exception:
+                        pass
                     return
 
                 md_name = f"{Path(original_name).stem}.md"
@@ -2112,6 +2152,7 @@ async def upload_document_async(file: UploadFile = File(...)):
             "status": "queued",
             "filename": original_name,
             "size": size_bytes,
+            "job_id": job_id,
         })
 
     except HTTPException:
@@ -2213,12 +2254,39 @@ async def complete_multipart_upload(upload_id: str):
                     shutil.copyfileobj(in_f, out_f, length=8 * 1024 * 1024)
 
         # Background processing similar to /upload_async
+        # Create an ingest job for this session
+        job_id = str(uuid.uuid4())
+        INGEST_JOBS[job_id] = {
+            "status": "queued",
+            "error": None,
+            "result": None,
+            "filename": filename,
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+
         async def _process_assembled():
             try:
+                # Mark running
+                try:
+                    job = INGEST_JOBS.get(job_id)
+                    if job is not None:
+                        job["status"] = "running"
+                        job["updated_at"] = datetime.utcnow().isoformat()
+                except Exception:
+                    pass
                 # Convert to markdown
                 md_text, conv_meta = convert_to_markdown(str(assembled_path))
                 if not md_text or not md_text.strip():
                     logger.warning("No extractable text in assembled file %s", assembled_path)
+                    try:
+                        job = INGEST_JOBS.get(job_id)
+                        if job is not None:
+                            job["status"] = "error"
+                            job["error"] = "no_text_extracted"
+                            job["updated_at"] = datetime.utcnow().isoformat()
+                    except Exception:
+                        pass
                     return
                 md_path = staging / f"{Path(filename).stem}.md"
                 with open(md_path, "w", encoding="utf-8") as f_md:
@@ -2240,10 +2308,26 @@ async def complete_multipart_upload(upload_id: str):
                     clean_before_ingest=False,
                 )
                 results = await pipeline.ingest_documents()
-                ok = [r for r in results if r.document_id and len(r.errors) == 0]
+                ok = [r for r in results if getattr(r, "document_id", "") and len(getattr(r, "errors", []) or []) == 0]
                 logger.info("Multipart complete: %s -> %d document(s)", filename, len(ok))
+                try:
+                    job = INGEST_JOBS.get(job_id)
+                    if job is not None:
+                        job["status"] = "done"
+                        job["result"] = {"document_ids": [r.document_id for r in ok if r.document_id]}
+                        job["updated_at"] = datetime.utcnow().isoformat()
+                except Exception:
+                    pass
             except Exception as e:
                 logger.exception("Multipart completion failed: %s", e)
+                try:
+                    job = INGEST_JOBS.get(job_id)
+                    if job is not None:
+                        job["status"] = "error"
+                        job["error"] = str(e)
+                        job["updated_at"] = datetime.utcnow().isoformat()
+                except Exception:
+                    pass
             finally:
                 # Cleanup session and staging
                 try:
@@ -2252,12 +2336,57 @@ async def complete_multipart_upload(upload_id: str):
                     UPLOAD_SESSIONS.pop(upload_id, None)
 
         asyncio.create_task(_process_assembled())
-        return JSONResponse(status_code=202, content={"success": True, "status": "queued"})
+        return JSONResponse(status_code=202, content={"success": True, "status": "queued", "job_id": job_id})
     except HTTPException:
         raise
     except Exception as e:
         logger.exception("Failed to complete multipart upload: %s", e)
         raise HTTPException(status_code=500, detail="Failed to complete upload")
+
+
+@app.get("/ingest/jobs/{job_id}/status")
+async def get_ingest_job_status(job_id: str):
+    """Return current status of an ingestion job created by upload_async or multipart complete."""
+    job = INGEST_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job_not_found")
+    # Return a copy to avoid accidental mutation
+    return {
+        "job_id": job_id,
+        "status": job.get("status"),
+        "error": job.get("error"),
+        "result": job.get("result"),
+        "filename": job.get("filename"),
+        "size": job.get("size"),
+        "created_at": job.get("created_at"),
+        "updated_at": job.get("updated_at"),
+    }
+
+
+@app.get("/ingest/jobs/{job_id}/result")
+async def get_ingest_job_result(job_id: str):
+    """Return job result when done. Returns 202 while still processing."""
+    job = INGEST_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job_not_found")
+    status = (job.get("status") or "").lower()
+    if status == "done":
+        return {
+            "job_id": job_id,
+            "status": status,
+            "result": job.get("result") or {},
+        }
+    if status == "error":
+        return JSONResponse(status_code=500, content={
+            "job_id": job_id,
+            "status": status,
+            "error": job.get("error") or "unknown_error",
+        })
+    # queued or running
+    return JSONResponse(status_code=202, content={
+        "job_id": job_id,
+        "status": status or "queued",
+    })
 
 
 @app.post("/convert")

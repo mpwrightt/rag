@@ -1260,12 +1260,13 @@ export default function DocumentsPage() {
   const MAX_CONCURRENCY = Number(process.env.NEXT_PUBLIC_UPLOAD_CONCURRENCY || '4') // 4 parallel part uploads
 
   // Upload a large file in parallel parts using the multipart endpoints
+  // Returns a job_id string when background ingestion is started, or null when fully synchronous
   async function uploadLargeFileInParts(
     file: File,
     onProgress: (pct: number) => void
-  ): Promise<void> {
+  ): Promise<string | null> {
     // Fallback: single async upload if multipart endpoints are unavailable
-    const fallbackSingleUpload = async () => {
+    const fallbackSingleUpload = async (): Promise<string | null> => {
       const fd = new FormData()
       fd.append('file', file)
       // Try async endpoint first
@@ -1274,10 +1275,20 @@ export default function DocumentsPage() {
         // Server does not have /upload_async yet; use synchronous /upload
         const resSync = await fetch(`${API_BASE}/upload`, { method: 'POST', body: fd })
         if (!resSync.ok) throw new Error(`fallback /upload failed: ${resSync.status}`)
+        onProgress(100)
+        return null
       } else if (!resAsync.ok) {
         throw new Error(`fallback upload_async failed: ${resAsync.status}`)
+      } else {
+        // Async path returns 202 with a job_id
+        let jobId: string | null = null
+        try {
+          const j = await resAsync.json()
+          jobId = j?.job_id || null
+        } catch {}
+        onProgress(100)
+        return jobId
       }
-      onProgress(100)
     }
 
     // 1) Initiate session
@@ -1289,7 +1300,7 @@ export default function DocumentsPage() {
     })
     if (initRes.status === 404) {
       // Backend has not deployed multipart endpoints yet – degrade gracefully
-      return fallbackSingleUpload()
+      return await fallbackSingleUpload()
     }
     if (!initRes.ok) throw new Error(`initiate failed: ${initRes.status}`)
     const { upload_id } = await initRes.json()
@@ -1315,7 +1326,7 @@ export default function DocumentsPage() {
       })
       if (r.status === 404) {
         // Degrade to single upload
-        return fallbackSingleUpload()
+        return await fallbackSingleUpload()
       }
       if (!r.ok) throw new Error(`part ${p.index} failed: ${r.status}`)
       uploaded += 1
@@ -1337,9 +1348,60 @@ export default function DocumentsPage() {
       method: 'POST'
     })
     if (compRes.status === 404) {
-      return fallbackSingleUpload()
+      return await fallbackSingleUpload()
     }
     if (!(compRes.status === 202 || compRes.ok)) throw new Error(`complete failed: ${compRes.status}`)
+    // Try to extract job_id for background ingestion
+    try {
+      const data = await compRes.json()
+      return data?.job_id || null
+    } catch {
+      return null
+    }
+  }
+
+  // Poll a background ingestion job until completion, updating the specific upload card
+  async function pollIngestJob(jobId: string, localId: string) {
+    // Cap polling to ~5 minutes
+    const started = Date.now()
+    const timeoutMs = 5 * 60 * 1000
+    while (Date.now() - started < timeoutMs) {
+      try {
+        const r = await fetch(`${API_BASE}/ingest/jobs/${encodeURIComponent(jobId)}/result`, {
+          headers: { 'bypass-tunnel-reminder': 'true' }
+        })
+        if (r.status === 202) {
+          // Still processing
+          setUploadProgress(prev => prev.map(u =>
+            u.id === localId ? { ...u, status: 'processing' as const } : u
+          ))
+          await new Promise(res => setTimeout(res, 1500))
+          continue
+        }
+        if (r.ok) {
+          // Done
+          setUploadProgress(prev => prev.map(u =>
+            u.id === localId ? { ...u, status: 'complete' as const, progress: 100 } : u
+          ))
+          // Refresh list now that ingestion completed
+          await fetchDocumentsPage(1)
+          return
+        }
+        // Error response
+        const errTxt = await r.text()
+        setUploadProgress(prev => prev.map(u =>
+          u.id === localId ? { ...u, status: 'error' as const, error: errTxt || `Job error: ${r.status}` } : u
+        ))
+        return
+      } catch (e: any) {
+        // Transient fetch error, continue polling
+        await new Promise(res => setTimeout(res, 1500))
+      }
+    }
+    // Timeout
+    setUploadProgress(prev => prev.map(u =>
+      u.id === localId ? { ...u, status: 'error' as const, error: 'Job timed out' } : u
+    ))
   }
 
   const handleFileUpload = async (files: FileList | null) => {
@@ -1364,15 +1426,24 @@ export default function DocumentsPage() {
         // Use multipart + parallel parts for large files
         if (f.size >= LARGE_FILE_THRESHOLD) {
           try {
-            await uploadLargeFileInParts(f, (pct) => {
+            const jobId = await uploadLargeFileInParts(f, (pct) => {
               setUploadProgress(prev => prev.map(u =>
                 u.id === localId ? { ...u, progress: pct, status: pct >= 100 ? 'complete' as const : 'uploading' } : u
               ))
             })
-            // Ensure complete status
-            setUploadProgress(prev => prev.map(u =>
-              u.id === localId ? { ...u, status: 'complete' as const, progress: 100 } : u
-            ))
+            if (jobId) {
+              // Background ingestion now running
+              setUploadProgress(prev => prev.map(u =>
+                u.id === localId ? { ...u, status: 'processing' as const } : u
+              ))
+              await pollIngestJob(jobId, localId)
+            } else {
+              // Synchronous path already complete
+              setUploadProgress(prev => prev.map(u =>
+                u.id === localId ? { ...u, status: 'complete' as const, progress: 100 } : u
+              ))
+              await fetchDocumentsPage(1)
+            }
           } catch (err: any) {
             setUploadProgress(prev => prev.map(u =>
               u.id === localId ? { ...u, status: 'error' as const, error: err?.message || 'Upload failed' } : u
@@ -1392,14 +1463,22 @@ export default function DocumentsPage() {
           }
           if (res.status === 504) {
             // Proxy timeout on single request; escalate to multipart
-            await uploadLargeFileInParts(f, (pct) => {
+            const jobId = await uploadLargeFileInParts(f, (pct) => {
               setUploadProgress(prev => prev.map(u =>
                 u.id === localId ? { ...u, progress: pct, status: pct >= 100 ? 'complete' as const : 'uploading' } : u
               ))
             })
-            setUploadProgress(prev => prev.map(u =>
-              u.id === localId ? { ...u, status: 'complete' as const, progress: 100 } : u
-            ))
+            if (jobId) {
+              setUploadProgress(prev => prev.map(u =>
+                u.id === localId ? { ...u, status: 'processing' as const } : u
+              ))
+              await pollIngestJob(jobId, localId)
+            } else {
+              setUploadProgress(prev => prev.map(u =>
+                u.id === localId ? { ...u, status: 'complete' as const, progress: 100 } : u
+              ))
+              await fetchDocumentsPage(1)
+            }
             continue
           }
           if (!res.ok) {
@@ -1408,21 +1487,52 @@ export default function DocumentsPage() {
             ))
             continue
           }
+          // Success path: distinguish between async and sync
+          if (res.status === 202) {
+            let jobId: string | null = null
+            try {
+              const data = await res.json()
+              jobId = data?.job_id || null
+            } catch {}
+            if (jobId) {
+              setUploadProgress(prev => prev.map(u =>
+                u.id === localId ? { ...u, status: 'processing' as const } : u
+              ))
+              await pollIngestJob(jobId, localId)
+            } else {
+              // Treat as complete if no job returned
+              setUploadProgress(prev => prev.map(u =>
+                u.id === localId ? { ...u, status: 'complete' as const, progress: 100 } : u
+              ))
+              await fetchDocumentsPage(1)
+            }
+          } else {
+            // /upload synchronous
+            setUploadProgress(prev => prev.map(u =>
+              u.id === localId ? { ...u, status: 'complete' as const, progress: 100 } : u
+            ))
+            await fetchDocumentsPage(1)
+          }
         } catch (err: any) {
           // Network failure: try multipart as a recovery path
-          await uploadLargeFileInParts(f, (pct) => {
+          const jobId = await uploadLargeFileInParts(f, (pct) => {
             setUploadProgress(prev => prev.map(u =>
               u.id === localId ? { ...u, progress: pct, status: pct >= 100 ? 'complete' as const : 'uploading' } : u
             ))
           })
-          setUploadProgress(prev => prev.map(u =>
-            u.id === localId ? { ...u, status: 'complete' as const, progress: 100 } : u
-          ))
+          if (jobId) {
+            setUploadProgress(prev => prev.map(u =>
+              u.id === localId ? { ...u, status: 'processing' as const } : u
+            ))
+            await pollIngestJob(jobId, localId)
+          } else {
+            setUploadProgress(prev => prev.map(u =>
+              u.id === localId ? { ...u, status: 'complete' as const, progress: 100 } : u
+            ))
+            await fetchDocumentsPage(1)
+          }
           continue
         }
-        setUploadProgress(prev => prev.map(u =>
-          u.id === localId ? { ...u, status: 'complete' as const, progress: 100 } : u
-        ))
       }
 
       // Refresh documents after processing uploads (ingestion runs async on server)
