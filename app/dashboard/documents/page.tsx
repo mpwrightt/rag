@@ -1255,8 +1255,8 @@ export default function DocumentsPage() {
   const uniqueFileTypes = Object.keys(fileTypeStats)
 
   // Large-file upload configuration (client-side)
-  const LARGE_FILE_THRESHOLD = Number(process.env.NEXT_PUBLIC_LARGE_UPLOAD_MB || '20') * 1024 * 1024 // 20MB default
-  const CHUNK_SIZE = Number(process.env.NEXT_PUBLIC_UPLOAD_CHUNK_MB || '5') * 1024 * 1024 // 5MB per part
+  const LARGE_FILE_THRESHOLD = Number(process.env.NEXT_PUBLIC_LARGE_UPLOAD_MB || '5') * 1024 * 1024 // 5MB default
+  const CHUNK_SIZE = Number(process.env.NEXT_PUBLIC_UPLOAD_CHUNK_MB || '2') * 1024 * 1024 // 2MB per part
   const MAX_CONCURRENCY = Number(process.env.NEXT_PUBLIC_UPLOAD_CONCURRENCY || '4') // 4 parallel part uploads
 
   // Upload a large file in parallel parts using the multipart endpoints
@@ -1384,14 +1384,39 @@ export default function DocumentsPage() {
         // Smaller files: single request to async endpoint
         const fd = new FormData()
         fd.append('file', f)
-        let res = await fetch(`${API_BASE}/upload_async`, { method: 'POST', body: fd })
-        if (res.status === 404) {
-          // Backend missing /upload_async; try synchronous /upload
-          res = await fetch(`${API_BASE}/upload`, { method: 'POST', body: fd })
-        }
-        if (!res.ok) {
+        try {
+          let res = await fetch(`${API_BASE}/upload_async`, { method: 'POST', body: fd })
+          if (res.status === 404) {
+            // Backend missing /upload_async; try synchronous /upload
+            res = await fetch(`${API_BASE}/upload`, { method: 'POST', body: fd })
+          }
+          if (res.status === 504) {
+            // Proxy timeout on single request; escalate to multipart
+            await uploadLargeFileInParts(f, (pct) => {
+              setUploadProgress(prev => prev.map(u =>
+                u.id === localId ? { ...u, progress: pct, status: pct >= 100 ? 'complete' as const : 'uploading' } : u
+              ))
+            })
+            setUploadProgress(prev => prev.map(u =>
+              u.id === localId ? { ...u, status: 'complete' as const, progress: 100 } : u
+            ))
+            continue
+          }
+          if (!res.ok) {
+            setUploadProgress(prev => prev.map(u =>
+              u.id === localId ? { ...u, status: 'error' as const, error: `Upload failed: ${res.status}` } : u
+            ))
+            continue
+          }
+        } catch (err: any) {
+          // Network failure: try multipart as a recovery path
+          await uploadLargeFileInParts(f, (pct) => {
+            setUploadProgress(prev => prev.map(u =>
+              u.id === localId ? { ...u, progress: pct, status: pct >= 100 ? 'complete' as const : 'uploading' } : u
+            ))
+          })
           setUploadProgress(prev => prev.map(u =>
-            u.id === localId ? { ...u, status: 'error' as const, error: `Upload failed: ${res.status}` } : u
+            u.id === localId ? { ...u, status: 'complete' as const, progress: 100 } : u
           ))
           continue
         }
