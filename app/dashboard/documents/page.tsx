@@ -82,10 +82,10 @@ const Markdown = ({ children }: { children: string }) => (
     remarkPlugins={[remarkGfm]}
     components={{
       code: ({ children }) => (
-        <code className="whitespace-pre-wrap break-words">{String(children)}</code>
+        <code className="whitespace-pre-wrap break-words rounded bg-muted px-1.5 py-0.5 text-[0.9em]">{String(children)}</code>
       ),
       pre: ({ children }) => (
-        <pre className="whitespace-pre-wrap break-words overflow-x-hidden">{children as any}</pre>
+        <pre className="whitespace-pre-wrap break-words overflow-x-auto rounded-md bg-muted p-3">{children as any}</pre>
       ),
     }}
   >
@@ -628,12 +628,14 @@ function DocumentCard({
                   {document.status}
                 </Badge>
                 {document.is_starred && <Star className="w-4 h-4 fill-yellow-400 text-yellow-400" />}
+                <span className="hidden sm:inline">
                 {document.collection_name && (
                   <Badge variant="outline" className="text-xs">
                     <FolderOpen className="w-3 h-3 mr-1" />
                     {document.collection_name}
                   </Badge>
                 )}
+                </span>
               </div>
             </div>
           </div>
@@ -643,7 +645,7 @@ function DocumentCard({
               <Button 
                 variant="ghost" 
                 size="sm" 
-                className="opacity-0 group-hover:opacity-100 transition-opacity"
+                className="opacity-100 sm:opacity-0 group-hover:opacity-100 transition-opacity"
               >
                 <MoreHorizontal className="w-4 h-4" />
               </Button>
@@ -771,7 +773,8 @@ function DocumentCard({
           </div>
         )}
         
-        <div className="grid grid-cols-2 gap-4 mb-4">
+        {/* Compact stats on mobile, full grid on desktop */}
+        <div className="hidden sm:grid grid-cols-2 gap-4 mb-4">
           <div className="text-center">
             <p className="text-lg font-bold text-primary">
               {(typeof document.chunk_count === 'number' && document.chunk_count > 0) ? document.chunk_count : '—'}
@@ -785,9 +788,17 @@ function DocumentCard({
             <p className="text-xs text-muted-foreground">Pages</p>
           </div>
         </div>
-        
-        {/* Document Metadata */}
-        <div className="space-y-2 mb-4">
+        <div className="sm:hidden flex items-center gap-2 mb-3">
+          <span className="inline-flex items-center px-2 py-0.5 text-xs rounded bg-muted text-foreground">
+            Chunks: {(typeof document.chunk_count === 'number' && document.chunk_count > 0) ? document.chunk_count : '—'}
+          </span>
+          <span className="inline-flex items-center px-2 py-0.5 text-xs rounded bg-muted text-foreground">
+            Pages: {(typeof document.metadata?.pages === 'number' && document.metadata.pages > 0) ? document.metadata.pages : '—'}
+          </span>
+        </div>
+
+        {/* Document Metadata (hide on mobile to reduce clutter) */}
+        <div className="hidden sm:block space-y-2 mb-4">
           <div className="flex items-center justify-between text-xs text-muted-foreground">
             <div className="flex items-center gap-1">
               <HardDrive className="w-3 h-3" />
@@ -815,9 +826,9 @@ function DocumentCard({
           )}
         </div>
         
-        {/* Tags */}
+        {/* Tags (hide on mobile) */}
         {document.tags && document.tags.length > 0 && (
-          <div className="flex flex-wrap gap-1 mb-4">
+          <div className="hidden sm:flex flex-wrap gap-1 mb-4">
             {document.tags.slice(0, 3).map((tag, idx) => (
               <Badge key={idx} variant="outline" className="text-xs px-2 py-0.5">
                 #{tag}
@@ -831,7 +842,8 @@ function DocumentCard({
           </div>
         )}
         
-        <div className="flex gap-2">
+        {/* Action buttons: hide on mobile to reduce clutter (available via menu) */}
+        <div className="hidden sm:flex gap-2">
           <Button 
             size="sm" 
             className="flex-1"
@@ -937,6 +949,7 @@ export default function DocumentsPage() {
   const [summaryDetailsOpen, setSummaryDetailsOpen] = useState(false)
   const [downloadFormat, setDownloadFormat] = useState<'md' | 'txt' | 'json'>('md')
   const [summaryJobId, setSummaryJobId] = useState<string | null>(null)
+  const [showMobileFilters, setShowMobileFilters] = useState(false)
 
   // Debug panel state
   const [debugOpen, setDebugOpen] = useState(false)
@@ -2115,7 +2128,7 @@ export default function DocumentsPage() {
             <h1 className="text-2xl sm:text-3xl font-bold bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent">
               Document Library
             </h1>
-            <p className="text-muted-foreground mt-1 text-sm sm:text-base">
+            <p className="hidden sm:block text-muted-foreground mt-1 text-sm sm:text-base">
               Upload, process, and manage your documents with advanced AI-powered features
             </p>
           </div>
@@ -2192,93 +2205,25 @@ export default function DocumentsPage() {
           </div>
           
           <div className="flex flex-col sm:flex-row gap-3">
-            {/* Filter Controls Row 1 - Mobile */}
-            <div className="flex gap-2 sm:hidden">
-              <Select value={filterStatus} onValueChange={setFilterStatus}>
-                <SelectTrigger className="flex-1 h-11 text-sm">
-                  <Filter className="w-4 h-4 mr-2" />
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Status</SelectItem>
-                  <SelectItem value="ready">Ready</SelectItem>
-                  <SelectItem value="processing">Processing</SelectItem>
-                  <SelectItem value="error">Error</SelectItem>
-                </SelectContent>
-              </Select>
-
-              <Select value={filterType} onValueChange={setFilterType}>
-                <SelectTrigger className="flex-1 h-11 text-sm">
-                  <FileIcon className="w-4 h-4 mr-2" />
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Types</SelectItem>
-                  {uniqueFileTypes.map(type => (
-                    <SelectItem key={type} value={type}>
-                      {type.toUpperCase()} ({fileTypeStats[type]})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* Filter Controls Row 2 - Mobile */}
-            <div className="flex gap-2 sm:hidden">
-              <Select value={sortBy} onValueChange={setSortBy}>
-                <SelectTrigger className="flex-1 h-11 text-sm">
-                  <ArrowUpDown className="w-4 h-4 mr-2" />
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="upload_date">Upload Date</SelectItem>
-                  <SelectItem value="name">Name</SelectItem>
-                  <SelectItem value="size">File Size</SelectItem>
-                  <SelectItem value="chunks">Chunk Count</SelectItem>
-                </SelectContent>
-              </Select>
-
+            {/* Condensed Mobile Controls */}
+            <div className="flex items-center gap-2 sm:hidden">
               <Button
                 variant="outline"
-                onClick={() => setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')}
-                className="h-11 px-4"
+                className="h-11 flex-1"
+                onClick={() => setShowMobileFilters(true)}
               >
-                {sortOrder === 'asc' ? <SortAsc className="w-4 h-4" /> : <SortDesc className="w-4 h-4" />}
+                <Filter className="w-4 h-4 mr-2" /> Filters
+              </Button>
+              <Button
+                variant="outline"
+                className="h-11 w-11 p-0"
+                onClick={() => setViewMode(viewMode === 'grid' ? 'list' : 'grid')}
+                aria-label="Toggle view"
+              >
+                {viewMode === 'grid' ? <List className="w-4 h-4" /> : <Grid3x3 className="w-4 h-4" />}
               </Button>
             </div>
 
-            {/* Filter Controls Row 3 - Mobile */}
-            <div className="flex gap-2 sm:hidden">
-              <div className="flex flex-1 items-center border rounded-lg">
-                <Button
-                  variant={viewMode === 'grid' ? 'default' : 'ghost'}
-                  onClick={() => setViewMode('grid')}
-                  className="flex-1 rounded-r-none h-11"
-                >
-                  <Grid3x3 className="w-4 h-4 mr-2" />
-                  Grid
-                </Button>
-                <Button
-                  variant={viewMode === 'list' ? 'default' : 'ghost'}
-                  onClick={() => setViewMode('list')}
-                  className="flex-1 rounded-l-none border-l h-11"
-                >
-                  <List className="w-4 h-4 mr-2" />
-                  List
-                </Button>
-              </div>
-
-              {filteredDocuments.length > 0 && (
-                <Button
-                  variant="outline"
-                  onClick={handleSelectAll}
-                  className="text-sm h-11 px-3 whitespace-nowrap"
-                >
-                  {selectedDocuments.length === filteredDocuments.length ? 'Deselect All' : 'Select All'}
-                </Button>
-              )}
-            </div>
-          
             {/* Desktop Filter Controls */}
             <div className="hidden sm:flex sm:items-center gap-3 flex-wrap">
               <Select value={filterStatus} onValueChange={setFilterStatus}>
@@ -2367,8 +2312,61 @@ export default function DocumentsPage() {
       {/* Mobile-Optimized Content */}
       <div className="flex-1 overflow-y-auto p-4 sm:p-6">
         <div className="max-w-7xl mx-auto">
-          {/* Mobile-Optimized Statistics Cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6 mb-6 sm:mb-8">
+          {/* Mobile Stats: horizontal scroll; Desktop: grid */}
+          <div className="sm:hidden -mx-4 px-4 overflow-x-auto snap-x snap-mandatory mb-6">
+            <div className="flex gap-3">
+              <Card className="p-3 min-w-[70%] snap-start">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg flex items-center justify-center flex-shrink-0">
+                    <FileText className="w-5 h-5 text-white" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs text-muted-foreground">Total Documents</p>
+                    <p className="text-xl font-bold">{stats.total}</p>
+                    <p className="text-xs text-muted-foreground">{stats.ready} ready, {stats.processing} processing</p>
+                  </div>
+                </div>
+              </Card>
+              <Card className="p-3 min-w-[70%] snap-start">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-gradient-to-br from-green-500 to-green-600 rounded-lg flex items-center justify-center flex-shrink-0">
+                    <Database className="w-5 h-5 text-white" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs text-muted-foreground">Knowledge Chunks</p>
+                    <p className="text-xl font-bold">{stats.totalChunks}</p>
+                    <p className="text-xs text-muted-foreground">AI-processed segments</p>
+                  </div>
+                </div>
+              </Card>
+              <Card className="p-3 min-w-[70%] snap-start">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-gradient-to-br from-purple-500 to-purple-600 rounded-lg flex items-center justify-center flex-shrink-0">
+                    <HardDrive className="w-5 h-5 text-white" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs text-muted-foreground">Storage Used</p>
+                    <p className="text-xl font-bold">{(stats.totalSize / 1024 / 1024).toFixed(1)}MB</p>
+                    <p className="text-xs text-muted-foreground">Across {uniqueFileTypes.length} types</p>
+                  </div>
+                </div>
+              </Card>
+              <Card className="p-3 min-w-[70%] snap-start">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-gradient-to-br from-yellow-500 to-yellow-600 rounded-lg flex items-center justify-center flex-shrink-0">
+                    <Zap className="w-5 h-5 text-white" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs text-muted-foreground">Processing Queue</p>
+                    <p className="text-xl font-bold">{stats.processing}</p>
+                    <p className="text-xs text-muted-foreground">{stats.error > 0 ? `${stats.error} errors` : 'All systems running'}</p>
+                  </div>
+                </div>
+              </Card>
+            </div>
+          </div>
+
+          <div className="hidden sm:grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6 mb-6 sm:mb-8">
             <Card className="p-3 sm:p-4">
               <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
                 <div className="w-8 h-8 sm:w-12 sm:h-12 bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg flex items-center justify-center flex-shrink-0">
@@ -2613,6 +2611,121 @@ export default function DocumentsPage() {
           <Plus className="w-6 h-6" />
         </Button>
       </div>
+
+      {/* Mobile Filters Dialog */}
+      <Dialog open={showMobileFilters} onOpenChange={setShowMobileFilters}>
+        <DialogContent className="sm:hidden max-w-md w-[92vw] p-0 overflow-hidden">
+          <DialogHeader className="p-4 pb-2">
+            <DialogTitle className="text-base">Filters</DialogTitle>
+          </DialogHeader>
+          <div className="p-4 pt-0 space-y-4">
+            <div className="space-y-2">
+              <Label className="text-xs">Status</Label>
+              <Select value={filterStatus} onValueChange={setFilterStatus}>
+                <SelectTrigger className="h-11 text-sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Status</SelectItem>
+                  <SelectItem value="ready">Ready</SelectItem>
+                  <SelectItem value="processing">Processing</SelectItem>
+                  <SelectItem value="error">Error</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-xs">Type</Label>
+              <Select value={filterType} onValueChange={setFilterType}>
+                <SelectTrigger className="h-11 text-sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Types</SelectItem>
+                  {uniqueFileTypes.map(type => (
+                    <SelectItem key={type} value={type}>
+                      {type.toUpperCase()} ({fileTypeStats[type]})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label className="text-xs">Sort By</Label>
+                <Select value={sortBy} onValueChange={setSortBy}>
+                  <SelectTrigger className="h-11 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="upload_date">Upload Date</SelectItem>
+                    <SelectItem value="name">Name</SelectItem>
+                    <SelectItem value="size">File Size</SelectItem>
+                    <SelectItem value="chunks">Chunk Count</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label className="text-xs">Order</Label>
+                <Button
+                  variant="outline"
+                  className="h-11 w-full"
+                  onClick={() => setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')}
+                >
+                  {sortOrder === 'asc' ? (
+                    <span className="inline-flex items-center gap-2 text-sm"><SortAsc className="w-4 h-4" /> Ascending</span>
+                  ) : (
+                    <span className="inline-flex items-center gap-2 text-sm"><SortDesc className="w-4 h-4" /> Descending</span>
+                  )}
+                </Button>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-xs">View</Label>
+              <div className="flex items-center border rounded-lg overflow-hidden">
+                <Button
+                  variant={viewMode === 'grid' ? 'default' : 'ghost'}
+                  onClick={() => setViewMode('grid')}
+                  className="flex-1 rounded-r-none h-11"
+                >
+                  <Grid3x3 className="w-4 h-4 mr-2" /> Grid
+                </Button>
+                <Button
+                  variant={viewMode === 'list' ? 'default' : 'ghost'}
+                  onClick={() => setViewMode('list')}
+                  className="flex-1 rounded-l-none border-l h-11"
+                >
+                  <List className="w-4 h-4 mr-2" /> List
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          <div className="p-3 border-t flex items-center justify-between bg-background/95">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setFilterStatus('all')
+                setFilterType('all')
+                setSortBy('upload_date')
+                setSortOrder('desc')
+              }}
+            >
+              Reset
+            </Button>
+            <div className="flex items-center gap-2">
+              {filteredDocuments.length > 0 && (
+                <Button variant="outline" onClick={handleSelectAll} className="text-sm">
+                  {selectedDocuments.length === filteredDocuments.length ? 'Deselect All' : 'Select All'}
+                </Button>
+              )}
+              <Button onClick={() => setShowMobileFilters(false)}>Apply</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Upload Dialog */}
       <Dialog open={showUploadDialog} onOpenChange={setShowUploadDialog}>
