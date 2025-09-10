@@ -2437,8 +2437,8 @@ export default function DocumentsPage() {
 
       {/* Summary Dialog */}
       <Dialog open={showSummaryDialog} onOpenChange={setShowSummaryDialog}>
-        <DialogContent className="max-w-5xl max-h-[90vh]">
-          <DialogHeader>
+        <DialogContent className="max-w-6xl max-h-[95vh] overflow-hidden flex flex-col">
+          <DialogHeader className="flex-shrink-0">
             <DialogTitle className="flex items-center gap-2">
               <SummaryIcon className="w-5 h-5" />
               Document Summary
@@ -2449,10 +2449,10 @@ export default function DocumentsPage() {
           </DialogHeader>
           
           {summaryDocument && (
-            <div className="flex flex-col h-full max-h-[70vh]">
+            <div className="flex flex-col flex-1 overflow-hidden">
               {/* Document Info */}
-              <div className="border-b pb-4 mb-4">
-                <h3 className="font-semibold text-lg">{summaryDocument.title || summaryDocument.name}</h3>
+              <div className="border-b pb-4 mb-4 flex-shrink-0">
+                <h3 className="font-semibold text-lg truncate">{summaryDocument.title || summaryDocument.name}</h3>
                 <p className="text-sm text-muted-foreground">
                   {summaryDocument.type?.toUpperCase()} • {formatSizeMB(summaryDocument.size)} • 
                   {summaryDocument.chunk_count ? ` ${summaryDocument.chunk_count} chunks` : ''}
@@ -2501,9 +2501,9 @@ export default function DocumentsPage() {
 
               {/* Summary Results */}
               {summaryResult && !summaryLoading && !summaryError && (
-                <div className="flex-1 overflow-y-auto space-y-6">
+                <div className="flex-1 overflow-hidden flex flex-col">
                   {/* Summary Metadata */}
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-4 bg-muted/50 rounded-lg">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-4 bg-muted/50 rounded-lg mb-6 flex-shrink-0">
                     <div>
                       <p className="text-sm font-medium">Summary Type</p>
                       <p className="text-sm text-muted-foreground capitalize">
@@ -2532,125 +2532,157 @@ export default function DocumentsPage() {
 
                   {/* Summary Content */}
                   {summaryResult.summary && (
-                    <div className="space-y-4">
-                      {/* JSON Structure Summary */}
-                      {typeof summaryResult.summary === 'object' && (
-                        <>
-                          {summaryResult.summary.executive_overview && (
-                            <div>
-                              <h4 className="font-semibold mb-2 flex items-center gap-2">
-                                <Target className="w-4 h-4" />
-                                Executive Overview
-                              </h4>
-                              <div className="prose prose-sm max-w-none">
-                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                  {summaryResult.summary.executive_overview}
-                                </ReactMarkdown>
-                              </div>
+                    <div className="flex-1 overflow-y-auto pr-2">
+                      <div className="space-y-6">
+                        {/* Handle raw JSON string that needs parsing */}
+                        {(() => {
+                          let parsedSummary = summaryResult.summary;
+                          
+                          // If it's a string that looks like JSON, try to parse it
+                          if (typeof parsedSummary === 'string') {
+                            try {
+                              parsedSummary = JSON.parse(parsedSummary);
+                            } catch (e) {
+                              // If parsing fails, treat as markdown text
+                              return (
+                                <div className="bg-background border rounded-lg p-6">
+                                  <h4 className="font-semibold mb-4 flex items-center gap-2">
+                                    <FileText className="w-5 h-5" />
+                                    Document Summary
+                                  </h4>
+                                  <div className="prose prose-sm max-w-none dark:prose-invert">
+                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                      {parsedSummary}
+                                    </ReactMarkdown>
+                                  </div>
+                                </div>
+                              );
+                            }
+                          }
+                          
+                          // Handle structured JSON summary
+                          if (typeof parsedSummary === 'object' && parsedSummary !== null) {
+                            return (
+                              <>
+                                {parsedSummary.executive_overview && (
+                                  <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-6">
+                                    <h4 className="font-semibold mb-4 flex items-center gap-2 text-blue-700 dark:text-blue-300">
+                                      <Target className="w-5 h-5" />
+                                      Executive Overview
+                                    </h4>
+                                    <div className="prose prose-sm max-w-none dark:prose-invert">
+                                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                        {parsedSummary.executive_overview}
+                                      </ReactMarkdown>
+                                    </div>
+                                  </div>
+                                )}
+
+                                {parsedSummary.key_metrics && (
+                                  <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-6">
+                                    <h4 className="font-semibold mb-4 flex items-center gap-2 text-green-700 dark:text-green-300">
+                                      <BarChart3 className="w-5 h-5" />
+                                      Key Metrics
+                                    </h4>
+                                    <div className="prose prose-sm max-w-none dark:prose-invert">
+                                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                        {parsedSummary.key_metrics}
+                                      </ReactMarkdown>
+                                    </div>
+                                  </div>
+                                )}
+
+                                {parsedSummary.major_highlights && (
+                                  <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-6">
+                                    <h4 className="font-semibold mb-4 flex items-center gap-2 text-yellow-700 dark:text-yellow-300">
+                                      <Sparkles className="w-5 h-5" />
+                                      Major Highlights
+                                    </h4>
+                                    <div className="prose prose-sm max-w-none dark:prose-invert">
+                                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                        {parsedSummary.major_highlights}
+                                      </ReactMarkdown>
+                                    </div>
+                                  </div>
+                                )}
+
+                                {parsedSummary.challenges_and_risks && (
+                                  <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-6">
+                                    <h4 className="font-semibold mb-4 flex items-center gap-2 text-red-700 dark:text-red-300">
+                                      <AlertTriangle className="w-5 h-5" />
+                                      Challenges & Risks
+                                    </h4>
+                                    <div className="prose prose-sm max-w-none dark:prose-invert">
+                                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                        {parsedSummary.challenges_and_risks}
+                                      </ReactMarkdown>
+                                    </div>
+                                  </div>
+                                )}
+
+                                {parsedSummary.opportunities_and_recommendations && (
+                                  <div className="bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg p-6">
+                                    <h4 className="font-semibold mb-4 flex items-center gap-2 text-purple-700 dark:text-purple-300">
+                                      <TrendingUp className="w-5 h-5" />
+                                      Opportunities & Recommendations
+                                    </h4>
+                                    <div className="prose prose-sm max-w-none dark:prose-invert">
+                                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                        {parsedSummary.opportunities_and_recommendations}
+                                      </ReactMarkdown>
+                                    </div>
+                                  </div>
+                                )}
+
+                                {parsedSummary.conclusion && (
+                                  <div className="bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 rounded-lg p-6">
+                                    <h4 className="font-semibold mb-4 flex items-center gap-2 text-indigo-700 dark:text-indigo-300">
+                                      <CheckCircle className="w-5 h-5" />
+                                      Conclusion
+                                    </h4>
+                                    <div className="prose prose-sm max-w-none dark:prose-invert">
+                                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                        {parsedSummary.conclusion}
+                                      </ReactMarkdown>
+                                    </div>
+                                  </div>
+                                )}
+
+                                {parsedSummary.full_text && (
+                                  <div className="bg-gray-50 dark:bg-gray-900/20 border border-gray-200 dark:border-gray-800 rounded-lg p-6">
+                                    <h4 className="font-semibold mb-4 flex items-center gap-2 text-gray-700 dark:text-gray-300">
+                                      <FileText className="w-5 h-5" />
+                                      Full Analysis
+                                    </h4>
+                                    <div className="prose prose-sm max-w-none dark:prose-invert">
+                                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                        {parsedSummary.full_text}
+                                      </ReactMarkdown>
+                                    </div>
+                                  </div>
+                                )}
+                              </>
+                            );
+                          }
+
+                          // Fallback for other types
+                          return (
+                            <div className="bg-background border rounded-lg p-6">
+                              <h4 className="font-semibold mb-4">Summary</h4>
+                              <pre className="whitespace-pre-wrap text-sm bg-muted p-4 rounded overflow-x-auto">
+                                {JSON.stringify(parsedSummary, null, 2)}
+                              </pre>
                             </div>
-                          )}
-
-                          {summaryResult.summary.key_metrics && (
-                            <div>
-                              <h4 className="font-semibold mb-2 flex items-center gap-2">
-                                <BarChart3 className="w-4 h-4" />
-                                Key Metrics
-                              </h4>
-                              <div className="prose prose-sm max-w-none">
-                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                  {summaryResult.summary.key_metrics}
-                                </ReactMarkdown>
-                              </div>
-                            </div>
-                          )}
-
-                          {summaryResult.summary.major_highlights && (
-                            <div>
-                              <h4 className="font-semibold mb-2 flex items-center gap-2">
-                                <Sparkles className="w-4 h-4" />
-                                Major Highlights
-                              </h4>
-                              <div className="prose prose-sm max-w-none">
-                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                  {summaryResult.summary.major_highlights}
-                                </ReactMarkdown>
-                              </div>
-                            </div>
-                          )}
-
-                          {summaryResult.summary.challenges_and_risks && (
-                            <div>
-                              <h4 className="font-semibold mb-2 flex items-center gap-2">
-                                <AlertTriangle className="w-4 h-4" />
-                                Challenges & Risks
-                              </h4>
-                              <div className="prose prose-sm max-w-none">
-                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                  {summaryResult.summary.challenges_and_risks}
-                                </ReactMarkdown>
-                              </div>
-                            </div>
-                          )}
-
-                          {summaryResult.summary.opportunities_and_recommendations && (
-                            <div>
-                              <h4 className="font-semibold mb-2 flex items-center gap-2">
-                                <TrendingUp className="w-4 h-4" />
-                                Opportunities & Recommendations
-                              </h4>
-                              <div className="prose prose-sm max-w-none">
-                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                  {summaryResult.summary.opportunities_and_recommendations}
-                                </ReactMarkdown>
-                              </div>
-                            </div>
-                          )}
-
-                          {summaryResult.summary.conclusion && (
-                            <div>
-                              <h4 className="font-semibold mb-2 flex items-center gap-2">
-                                <CheckCircle className="w-4 h-4" />
-                                Conclusion
-                              </h4>
-                              <div className="prose prose-sm max-w-none">
-                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                  {summaryResult.summary.conclusion}
-                                </ReactMarkdown>
-                              </div>
-                            </div>
-                          )}
-                        </>
-                      )}
-
-                      {/* Text-based Summary Fallback */}
-                      {typeof summaryResult.summary === 'string' && (
-                        <div>
-                          <h4 className="font-semibold mb-2">Summary</h4>
-                          <div className="prose prose-sm max-w-none">
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                              {summaryResult.summary}
-                            </ReactMarkdown>
-                          </div>
-                        </div>
-                      )}
-
-                      {summaryResult.summary.full_text && (
-                        <div>
-                          <h4 className="font-semibold mb-2">Full Analysis</h4>
-                          <div className="prose prose-sm max-w-none">
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                              {summaryResult.summary.full_text}
-                            </ReactMarkdown>
-                          </div>
-                        </div>
-                      )}
+                          );
+                        })()}
+                      </div>
                     </div>
                   )}
                 </div>
               )}
 
               {/* Action Buttons */}
-              <div className="flex justify-between items-center pt-4 border-t">
+              <div className="flex justify-between items-center pt-4 border-t mt-4 flex-shrink-0">
                 <div className="flex gap-2">
                   <Button 
                     variant="outline"
