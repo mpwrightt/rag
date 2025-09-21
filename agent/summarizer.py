@@ -38,21 +38,26 @@ class DBRSummarizer:
     and RAG-enhanced context retrieval.
     """
     
-    def __init__(self, max_context_tokens: int = 32000):
+    def __init__(self, max_context_tokens: int = 900000):
         """
-        Initialize the DBR summarizer.
-        
+        Initialize the DBR summarizer optimized for Gemini 2.5 Flash 1M context.
+
         Args:
-            max_context_tokens: Maximum tokens to use for context window
+            max_context_tokens: Maximum tokens to use for context window (default 900K for 1M model)
         """
         self.max_context_tokens = max_context_tokens
-        
+
         # Token estimation: rough approximation (1 token ≈ 4 characters)
         self.chars_per_token = 4
-        
-        # Reserve tokens for system prompt and response
-        self.reserved_tokens = 2000
+
+        # Reserve tokens for system prompt and comprehensive response
+        self.reserved_tokens = 50000  # More room for complex outputs
         self.available_tokens = max_context_tokens - self.reserved_tokens
+
+        # Enable single-pass processing with full context
+        self.enable_single_pass = True
+        self.max_rag_context_docs = 20  # Increased from 5
+        self.max_context_chunks = 100   # Increased significantly
     
     async def summarize_dbr(
         self,
@@ -132,26 +137,33 @@ class DBRSummarizer:
                 effective_include_context = False
 
             if effective_include_context:
-                context_info = await self._get_rag_context(
-                    document, chunks[:5], context_queries  # Use first 5 chunks for context queries
+                # Use more sample chunks for better context query generation with 1M context
+                sample_chunks = self._select_sample_chunks(chunks, max_samples=15)
+                context_info = await self._get_expanded_rag_context(
+                    document, sample_chunks, context_queries
                 )
             
-            # 5. Perform hierarchical summarization with domain expertise
-            # Update job status with total batches/progress when known
-            summary_result = await self._hierarchical_summarize(
+            # 5. Perform single-pass summarization with full context (optimized for 1M tokens)
+            if job_id:
+                try:
+                    await update_summary_job_status(job_id, "processing")
+                except Exception:
+                    pass
+
+            summary_result = await self._single_pass_summarize(
                 chunks, document, context_info, summary_type, domain_classification,
                 job_id=job_id
             )
             
-            # 6. Generate final structured summary with domain expertise
+            # 6. Extract final summary from single-pass result (already comprehensive)
             if job_id:
                 try:
                     await update_summary_job_status(job_id, "finalizing")
                 except Exception:
                     pass
-            final_summary = await self._generate_final_summary(
-                summary_result, document, context_info, summary_type, domain_classification
-            )
+
+            # With single-pass processing, the summary is already final and comprehensive
+            final_summary = summary_result.get("summary", "{}")
             
             # 6b. Verify summary against source chunks to compute overall confidence
             try:
@@ -367,6 +379,266 @@ class DBRSummarizer:
             logger.error(f"RAG context retrieval failed: {e}")
         
         return context_info
+
+    async def _get_expanded_rag_context(
+        self,
+        document: Dict[str, Any],
+        sample_chunks: List[Dict[str, Any]],
+        custom_queries: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """
+        Get expanded RAG context leveraging 1M token capacity.
+        """
+        context_info = {
+            "queries": [],
+            "related_docs": [],
+            "related_chunks": [],
+            "full_documents": [],
+            "comparative_context": []
+        }
+
+        try:
+            # Generate more comprehensive context queries
+            queries = custom_queries or await self._generate_context_queries(document, sample_chunks)
+            context_info["queries"] = queries
+
+            # Perform multiple RAG searches with higher limits
+            all_related_chunks = []
+            related_doc_ids = set()
+
+            for query in queries[:5]:  # Process more queries
+                try:
+                    # Use much higher limits for 1M context
+                    search_input = HybridSearchInput(
+                        query=query,
+                        limit=self.max_rag_context_docs,  # 20 vs previous 5
+                        document_ids=[document["id"]]  # Exclude current document
+                    )
+
+                    chunks = await hybrid_search_tool(search_input)
+                    all_related_chunks.extend(chunks)
+
+                    # Collect related document IDs for full document retrieval
+                    for chunk in chunks:
+                        doc_id = chunk.document_id
+                        if doc_id != document["id"]:
+                            related_doc_ids.add(doc_id)
+
+                except Exception as e:
+                    logger.warning(f"Context search failed for query '{query}': {e}")
+                    continue
+
+            # Get full documents for top related docs (leveraging 1M context)
+            for doc_id in list(related_doc_ids)[:10]:  # Top 10 related docs
+                try:
+                    related_doc = await get_document(doc_id)
+                    if related_doc:
+                        context_info["related_docs"].append({
+                            "id": doc_id,
+                            "title": related_doc.get("title", "Unknown"),
+                            "created_at": related_doc.get("created_at")
+                        })
+
+                        # Get more chunks from this document
+                        doc_chunks = await get_document_chunks(doc_id)
+                        if doc_chunks:
+                            context_info["full_documents"].append({
+                                "document": related_doc,
+                                "chunks": doc_chunks[:20]  # More chunks per doc
+                            })
+
+                except Exception as e:
+                    logger.warning(f"Failed to get full document {doc_id}: {e}")
+
+            # Deduplicate and expand context chunks
+            seen_chunks = set()
+            unique_chunks: List[Any] = []
+            for chunk in all_related_chunks:
+                doc_id = getattr(chunk, 'document_id', None)
+                if doc_id is None and isinstance(chunk, dict):
+                    doc_id = chunk.get('document_id')
+
+                chunk_id = getattr(chunk, 'chunk_id', None)
+                if chunk_id is None and isinstance(chunk, dict):
+                    chunk_id = chunk.get('chunk_id')
+
+                if not chunk_id:
+                    content = getattr(chunk, 'content', None)
+                    if content is None and isinstance(chunk, dict):
+                        content = chunk.get('content')
+                    if content:
+                        chunk_id = hashlib.sha1(content.encode('utf-8')).hexdigest()
+                    else:
+                        chunk_id = f"idx_{len(unique_chunks)}"
+
+                key = f"{doc_id}_{chunk_id}"
+                if key not in seen_chunks:
+                    seen_chunks.add(key)
+                    unique_chunks.append(chunk)
+
+            # Store significantly more context chunks (leveraging 1M context)
+            context_info["related_chunks"] = unique_chunks[:self.max_context_chunks]
+
+        except Exception as e:
+            logger.error(f"Expanded RAG context retrieval failed: {e}")
+
+        return context_info
+
+    async def _single_pass_summarize(
+        self,
+        chunks: List[Dict[str, Any]],
+        document: Dict[str, Any],
+        context_info: Dict[str, Any],
+        summary_type: str,
+        domain_classification: Optional[Any] = None,
+        *,
+        job_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Perform single-pass summarization using full 1M context window.
+        This replaces hierarchical batching for much better performance and quality.
+        """
+        start_time = datetime.utcnow()
+
+        logger.info(f"Single-pass processing {len(chunks)} chunks with full 1M context")
+
+        if job_id:
+            try:
+                await update_summary_job_status(job_id, "running", progress=1, total=1)
+            except Exception:
+                pass
+
+        try:
+            # Build comprehensive prompt with full document + extensive context
+            full_prompt = await self._build_comprehensive_prompt(
+                chunks, document, context_info, summary_type, domain_classification
+            )
+
+            # Single LLM call with full context
+            deps = AgentDependencies(session_id=f"single_pass_{document['id']}")
+            summary = await self._run_llm_with_retry(full_prompt, stage="final", deps=deps)
+
+            processing_time = (datetime.utcnow() - start_time).total_seconds()
+
+            if job_id:
+                try:
+                    await update_summary_job_status(job_id, "running", progress=1, total=1)
+                except Exception:
+                    pass
+
+            return {
+                "summary": summary.strip(),
+                "processing_time": processing_time,
+                "total_chunks": len(chunks),
+                "method": "single_pass_1M_context"
+            }
+
+        except Exception as e:
+            logger.error(f"Single-pass summarization failed: {e}")
+            raise
+
+    async def _build_comprehensive_prompt(
+        self,
+        chunks: List[Dict[str, Any]],
+        document: Dict[str, Any],
+        context_info: Dict[str, Any],
+        summary_type: str,
+        domain_classification: Optional[Any] = None
+    ) -> str:
+        """
+        Build comprehensive prompt leveraging full 1M context capacity.
+        """
+        doc_title = document.get("title", "Document")
+
+        # Combine ALL document chunks (no batching needed with 1M context)
+        full_document_content = "\n\n".join([
+            f"=== SECTION {i + 1} ===\n{chunk.get('content', '')}"
+            for i, chunk in enumerate(chunks)
+        ])
+
+        # Build extensive context section
+        context_section = ""
+        if context_info.get("related_chunks"):
+            related_content = "\n\n".join([
+                f"--- RELATED: {getattr(chunk, 'document_title', 'Unknown')} ---\n"
+                f"{getattr(chunk, 'content', getattr(chunk, 'content', '') if isinstance(chunk, dict) else '')}"
+                for chunk in context_info["related_chunks"][:50]  # Much more context
+            ])
+            context_section = f"\n\nRELATED DOCUMENTS CONTEXT:\n{related_content}"
+
+        # Add full document context if available
+        full_docs_section = ""
+        if context_info.get("full_documents"):
+            full_docs_content = []
+            for doc_info in context_info["full_documents"][:5]:  # Top 5 full docs
+                doc = doc_info["document"]
+                doc_chunks = doc_info["chunks"]
+                combined_doc = "\n".join([c.get("content", "") for c in doc_chunks[:10]])
+                full_docs_content.append(
+                    f"=== FULL DOCUMENT: {doc.get('title', 'Unknown')} ===\n{combined_doc}"
+                )
+            full_docs_section = f"\n\nFULL REFERENCE DOCUMENTS:\n" + "\n\n".join(full_docs_content)
+
+        # Domain-specific expert prompt
+        if domain_classification and domain_classification.domain != DocumentDomain.GENERAL:
+            domain_name = domain_classification.domain.name.replace('_', ' ').title()
+            expert_prompt = f"""
+You are a senior expert in {domain_classification.domain.value.replace('_', ' ')} with deep professional expertise.
+
+DOCUMENT TO ANALYZE: {doc_title}
+DOMAIN: {domain_name} (Confidence: {domain_classification.confidence:.1%})
+CLASSIFICATION REASONING: {domain_classification.reasoning}
+
+FULL DOCUMENT CONTENT:
+{full_document_content}
+
+{context_section}
+
+{full_docs_section}
+
+As a domain expert, provide a comprehensive analysis leveraging your deep expertise in {domain_classification.domain.value.replace('_', ' ')}.
+Consider all document content, related context, and full reference documents in your analysis.
+
+Respond STRICTLY with a single JSON object (no markdown code fences, no extra text) with keys:
+- "executive_overview": comprehensive executive summary (300-400 words)
+- "key_metrics": detailed object of all quantitative findings and KPIs
+- "major_highlights": array of 8-12 detailed findings
+- "challenges_and_risks": array of detailed risk analysis
+- "opportunities_and_recommendations": array of strategic recommendations
+- "comparative_analysis": insights from related documents
+- "domain_expertise": expert professional insights specific to {domain_classification.domain.value.replace('_', ' ')}
+- "conclusion": comprehensive outlook and next steps
+"""
+        else:
+            # General comprehensive prompt
+            expert_prompt = f"""
+Create a comprehensive analysis of the following document with extensive context:
+
+DOCUMENT: {doc_title}
+DATE: {document.get('created_at', 'Unknown')}
+
+FULL DOCUMENT CONTENT:
+{full_document_content}
+
+{context_section}
+
+{full_docs_section}
+
+Analyze the complete document content along with all related context and reference documents.
+Provide a thorough, comprehensive summary that leverages all available information.
+
+Respond STRICTLY with one JSON object (no markdown fences, no extra text) with keys:
+- "executive_overview": comprehensive summary (300-400 words)
+- "key_metrics": detailed object of all quantitative data and KPIs found
+- "major_highlights": 8-12 most important findings (array of detailed strings)
+- "challenges_and_risks": comprehensive risk analysis (array of detailed strings)
+- "opportunities_and_recommendations": strategic next steps (array of detailed strings)
+- "comparative_analysis": insights and patterns from related documents
+- "data_quality_assessment": evaluation of document completeness and reliability
+- "conclusion": comprehensive outlook and recommendations
+"""
+
+        return expert_prompt
 
     def _compute_extraction_quality(self, chunks: List[Dict[str, Any]]) -> float:
         """Heuristic extraction quality score in [0,1]."""

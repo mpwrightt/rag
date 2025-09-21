@@ -61,7 +61,7 @@ async def generate_embedding(text: str) -> List[float]:
 class VectorSearchInput(BaseModel):
     """Input for vector search tool."""
     query: str = Field(..., description="Search query")
-    limit: int = Field(default=10, description="Maximum number of results")
+    limit: int = Field(default=50, description="Maximum number of results (optimized for 1M context)")
     collection_ids: Optional[List[str]] = Field(default=None, description="Restrict search to these collection UUIDs")
     document_ids: Optional[List[str]] = Field(default=None, description="Restrict search to these document UUIDs")
 
@@ -74,7 +74,7 @@ class GraphSearchInput(BaseModel):
 class HybridSearchInput(BaseModel):
     """Input for hybrid search tool."""
     query: str = Field(..., description="Search query")
-    limit: int = Field(default=10, description="Maximum number of results")
+    limit: int = Field(default=50, description="Maximum number of results (optimized for 1M context)")
     text_weight: float = Field(default=0.3, description="Weight for text similarity (0-1)")
     collection_ids: Optional[List[str]] = Field(default=None, description="Restrict search to these collection UUIDs")
     document_ids: Optional[List[str]] = Field(default=None, description="Restrict search to these document UUIDs")
@@ -87,7 +87,7 @@ class DocumentInput(BaseModel):
 
 class DocumentListInput(BaseModel):
     """Input for listing documents."""
-    limit: int = Field(default=20, description="Maximum number of documents")
+    limit: int = Field(default=100, description="Maximum number of documents (optimized for 1M context)")
     offset: int = Field(default=0, description="Number of documents to skip")
     collection_ids: Optional[List[str]] = Field(default=None, description="Restrict listing to these collection UUIDs")
     document_ids: Optional[List[str]] = Field(default=None, description="Restrict listing to these document UUIDs")
@@ -111,7 +111,7 @@ async def search_by_title(
     query: str,
     collection_ids: Optional[List[str]] = None,
     document_ids: Optional[List[str]] = None,
-    limit: int = 10
+    limit: int = 50  # Optimized for 1M context
 ) -> List[Dict[str, Any]]:
     """
     Search for documents by title or filename, returning their first chunks.
@@ -549,7 +549,7 @@ async def perform_comprehensive_search(
     query: str,
     use_vector: bool = True,
     use_graph: bool = True,
-    limit: int = 10
+    limit: int = 50  # Optimized for 1M context
 ) -> Dict[str, Any]:
     """
     Perform a comprehensive search using multiple methods.

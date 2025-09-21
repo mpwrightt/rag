@@ -1024,7 +1024,7 @@ async def chat_stream_legacy(request: ChatRequest):
                                 "use_graph": True,
                                 "use_vector": True,
                                 "use_query_expansion": True,
-                                "vector_limit": 20,
+                                "vector_limit": 100,  # Optimized for 1M context
                             }
                             # This will emit granular retrieval_step events via emit_retrieval_event
                             await retriever.retrieve(
@@ -1049,7 +1049,7 @@ async def chat_stream_legacy(request: ChatRequest):
                                 "type": "retrieval",
                                 "event": "start",
                                 "tool": "guided_retrieval",
-                                "args": {"query": request.message, "limit": 5}
+                                "args": {"query": request.message, "limit": 50}  # Increased for 1M context
                             })
 
                             # Graph stage
@@ -1086,7 +1086,7 @@ async def chat_stream_legacy(request: ChatRequest):
                                 "event": "start",
                                 "tool": "guided_retrieval",
                                 "stage": "vector",
-                                "args": {"limit": 5}
+                                "args": {"limit": 30}  # Increased for 1M context
                             })
                             await asyncio.sleep(0.05)
                             mock_vector = [
