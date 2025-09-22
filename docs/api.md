@@ -137,6 +137,52 @@ curl -X POST http://localhost:8058/search/hybrid \
 | GET | `/documents/{id}` | Get document details. | Yes | `id: uuid` | None | 200: [Document](#document) |
 | DELETE | `/documents/{id}` | Delete document and chunks/graph. | Yes | `id: uuid` | None | 200: `{"deleted": true}` |
 
+#### Incremental Updates (Phase 1)
+Fast, metadata-only update endpoints. These avoid re-embedding and full re-ingestion.
+
+| Method | Path | Description | Auth | Request Body | Response |
+|--------|------|-------------|------|--------------|----------|
+| PATCH | `/documents/{id}/metadata` | Merge metadata into a document (no re-embedding). | Yes | `{ "metadata": {"key": "value"} }` | 200: `{ "document_id": "uuid", "metadata": {...}, "updated_at": "..." }` |
+| PATCH | `/chunks/metadata` | Bulk-merge metadata for multiple chunks. | Yes | `{ "chunk_ids": ["uuid", ...], "metadata": {"category": "notes"} }` | 200: `{ "updated": 12 }` |
+| POST | `/documents/{id}/tags` | Add tags to a document (idempotent). | Yes | `{ "tags": ["environmental", "priority-high"] }` | 200: `{ "document_id": "uuid", "added": 2 }` |
+| POST | `/documents/{id}/classification` | Update document domain and chunk categories. | Yes | `{ "domain": "environmental", "domain_confidence": 0.86, "chunk_category_updates": [{"chunk_ids": ["uuid1","uuid2"], "category": "executive"}] }` | 200: `{ "document_id": "uuid", "chunk_category_updates": 2 }` |
+| PUT | `/documents/{id}/collections` | Set exact collections for a document. | Yes | `{ "collection_ids": ["uuidA", "uuidB"] }` | 200: `{ "document_id": "uuid", "added": 1, "removed": 2, "collections": ["uuidA","uuidB"] }` |
+
+Examples:
+
+```bash
+# Merge metadata into a document
+curl -X PATCH "$API_BASE/documents/$DOC_ID/metadata" \
+  -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" \
+  -d '{"metadata": {"reviewed": true, "owner": "alice"}}'
+
+# Bulk update chunk categories
+curl -X PATCH "$API_BASE/chunks/metadata" \
+  -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" \
+  -d '{"chunk_ids": ["c1","c2","c3"], "metadata": {"category": "appendix"}}'
+
+# Add tags
+curl -X POST "$API_BASE/documents/$DOC_ID/tags" \
+  -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" \
+  -d '{"tags": ["environmental", "priority-high"]}'
+
+# Update classification and chunk categories
+curl -X POST "$API_BASE/documents/$DOC_ID/classification" \
+  -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" \
+  -d '{
+    "domain": "environmental",
+    "domain_confidence": 0.9,
+    "chunk_category_updates": [
+      {"chunk_ids": ["c1","c2"], "category": "executive"}
+    ]
+  }'
+
+# Set collection memberships
+curl -X PUT "$API_BASE/documents/$DOC_ID/collections" \
+  -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" \
+  -d '{"collection_ids": ["col-1","col-2"]}'
+```
+
 #### Document
 ```json
 {

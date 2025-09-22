@@ -24,36 +24,23 @@ from .graph_utils import (
     graph_client
 )
 from .models import ChunkResult, GraphSearchResult, DocumentMetadata
-from .providers import get_embedding_client, get_embedding_model
+from .providers import generate_embedding as gemini_generate_embedding, get_embedding_model
 
 # Load environment variables
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-# Initialize embedding client with flexible provider
-embedding_client = get_embedding_client()
+# Gemini embedding configuration
 EMBEDDING_MODEL = get_embedding_model()
 
 
 async def generate_embedding(text: str) -> List[float]:
-    """
-    Generate embedding for text using OpenAI.
-    
-    Args:
-        text: Text to embed
-    
-    Returns:
-        Embedding vector
-    """
+    """Generate an embedding for query-time similarity search."""
     try:
-        response = await embedding_client.embeddings.create(
-            model=EMBEDDING_MODEL,
-            input=text
-        )
-        return response.data[0].embedding
-    except Exception as e:
-        logger.error(f"Failed to generate embedding: {e}")
+        return await gemini_generate_embedding(text, model=EMBEDDING_MODEL)
+    except Exception as exc:
+        logger.error(f"Failed to generate embedding: {exc}")
         raise
 
 

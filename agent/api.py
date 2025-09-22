@@ -40,6 +40,10 @@ from .db_utils import (
     get_graph_statistics,
     search_facts,
     search_facts_websearch,
+    # Incremental update helpers
+    update_document_metadata_only,
+    update_chunk_metadata_batch,
+    add_document_tags,
     # Collections
     list_collections_db,
     create_collection_db,
@@ -48,6 +52,7 @@ from .db_utils import (
     add_documents_to_collection_db,
     remove_document_from_collection_db,
     list_collection_documents_db,
+    update_document_collections_db,
     # Summary jobs
     create_summary_job,
     update_summary_job_status,
@@ -80,7 +85,12 @@ from .models import (
     ChatMetrics,
     DocumentUsageStats,
     UserEngagementMetrics,
-    AnalyticsDashboardResponse
+    AnalyticsDashboardResponse,
+    DocumentMetadataUpdateRequest,
+    ChunkMetadataBatchUpdateRequest,
+    AddTagsRequest,
+    UpdateClassificationRequest,
+    UpdateCollectionsRequest,
 )
 from .tools import (
     vector_search_tool,
@@ -784,6 +794,106 @@ async def api_add_documents_to_collection(collection_id: str, request: Request):
         logger.exception("Failed to add documents to collection: %s", e)
         # Surface underlying error for debugging during integration
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# -------------------------
+# Phase 1: Incremental Update Endpoints (metadata-only, no embeddings)
+# -------------------------
+
+@app.patch("/documents/{document_id}/metadata")
+async def patch_document_metadata(document_id: str, req: DocumentMetadataUpdateRequest):
+    """Merge metadata into a document without re-embedding."""
+    try:
+        if not req or not isinstance(req.metadata, dict) or not req.metadata:
+            raise HTTPException(status_code=400, detail="metadata is required and must be a non-empty object")
+        updated = await update_document_metadata_only(document_id, req.metadata)
+        if not updated:
+            raise HTTPException(status_code=404, detail="Document not found")
+        return {"document_id": updated["id"], "metadata": updated["metadata"], "updated_at": updated["updated_at"]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to update document metadata: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to update document metadata")
+
+
+@app.patch("/chunks/metadata")
+async def patch_chunks_metadata(req: ChunkMetadataBatchUpdateRequest):
+    """Bulk-merge metadata for multiple chunks without re-embedding."""
+    try:
+        if not req or not req.chunk_ids or not isinstance(req.metadata, dict) or not req.metadata:
+            raise HTTPException(status_code=400, detail="chunk_ids and non-empty metadata are required")
+        updated_count = await update_chunk_metadata_batch(req.chunk_ids, req.metadata)
+        return {"updated": updated_count}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to update chunk metadata batch: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to update chunk metadata")
+
+
+@app.post("/documents/{document_id}/tags")
+async def post_document_tags(document_id: str, req: AddTagsRequest):
+    """Add tags to a document (idempotent)."""
+    try:
+        if not req or not req.tags:
+            raise HTTPException(status_code=400, detail="tags array is required")
+        added = await add_document_tags(document_id, req.tags)
+        return {"document_id": document_id, "added": added}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to add document tags: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to add document tags")
+
+
+@app.post("/documents/{document_id}/classification")
+async def post_document_classification(document_id: str, req: UpdateClassificationRequest):
+    """Update document domain classification and optional chunk categories without re-embedding."""
+    try:
+        total_chunk_updates = 0
+        # Update document-level classification in metadata if provided
+        doc_meta: Dict[str, Any] = {}
+        if req and req.domain:
+            doc_meta["domain"] = req.domain
+        if req and req.domain_confidence is not None:
+            doc_meta["domain_confidence"] = req.domain_confidence
+        if doc_meta:
+            updated = await update_document_metadata_only(document_id, doc_meta)
+            if not updated:
+                raise HTTPException(status_code=404, detail="Document not found")
+
+        # Update chunk categories in batch per group
+        if req and req.chunk_category_updates:
+            for update in req.chunk_category_updates:
+                if update.chunk_ids and update.category:
+                    total_chunk_updates += await update_chunk_metadata_batch(update.chunk_ids, {"category": update.category})
+
+        return {
+            "document_id": document_id,
+            "chunk_category_updates": total_chunk_updates,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to update classification: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to update classification")
+
+
+@app.put("/documents/{document_id}/collections")
+async def put_document_collections(document_id: str, req: UpdateCollectionsRequest, request: Request):
+    """Set the exact set of collections for a document (add/remove memberships)."""
+    try:
+        if not req or not isinstance(req.collection_ids, list):
+            raise HTTPException(status_code=400, detail="collection_ids array is required")
+        actor = request.headers.get("x-user-id")
+        result = await update_document_collections_db(document_id, req.collection_ids, added_by=actor)
+        return {"document_id": document_id, **result}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to update document collections: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to update document collections")
 
 
 @app.delete("/collections/{collection_id}/documents/{document_id}")

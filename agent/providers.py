@@ -1,149 +1,135 @@
 """
-Flexible provider configuration for LLM and embedding models.
+Gemini provider configuration for LLM and embedding models.
 """
 
+import asyncio
+import logging
 import os
-from typing import Optional, Union
-from pydantic_ai.providers.openai import OpenAIProvider
-from pydantic_ai.providers.google import GoogleProvider
-from pydantic_ai.models.openai import OpenAIModel  
-from pydantic_ai.models.google import GoogleModel
-import openai
-from dotenv import load_dotenv
+from typing import List, Optional
 
-# Load environment variables
+import google.generativeai as genai
+from dotenv import load_dotenv
+from pydantic_ai.models.google import GoogleModel
+from pydantic_ai.providers.google import GoogleProvider
+
 load_dotenv()
 
+logger = logging.getLogger(__name__)
 
-def get_llm_model(model_choice: Optional[str] = None) -> Union[OpenAIModel, GoogleModel]:
+_DEFAULT_LLM_MODEL = "gemini-2.5-flash"
+_DEFAULT_EMBEDDING_MODEL = "text-embedding-004"
+_GENAI_CONFIGURED = False
+
+
+def _get_api_key() -> str:
+    """Return the configured Gemini API key."""
+    return os.getenv("GOOGLE_API_KEY") or os.getenv("LLM_API_KEY") or ""
+
+
+def _ensure_genai_configured() -> None:
+    """Configure the google.generativeai client once per process."""
+    global _GENAI_CONFIGURED
+    if _GENAI_CONFIGURED:
+        return
+
+    api_key = _get_api_key()
+    if not api_key:
+        raise ValueError("Set GOOGLE_API_KEY or LLM_API_KEY to use Gemini models.")
+
+    genai.configure(api_key=api_key)
+    _GENAI_CONFIGURED = True
+
+
+def get_llm_model(model_choice: Optional[str] = None) -> GoogleModel:
     """
-    Get LLM model configuration based on environment variables.
-    
+    Create a Pydantic AI GoogleModel configured for Gemini.
+
     Args:
-        model_choice: Optional override for model choice
-    
-    Returns:
-        Configured model (OpenAI or Google)
-    """
-    llm_choice = model_choice or os.getenv('LLM_CHOICE', 'gpt-4-turbo-preview')
-    api_key = os.getenv('LLM_API_KEY', '')
-    
-    # Determine provider based on model choice
-    if 'gemini' in llm_choice.lower():
-        # Use Google provider for Gemini models
-        provider = GoogleProvider(api_key=api_key)
-        return GoogleModel(llm_choice, provider=provider)
-    else:
-        # Default to OpenAI provider
-        base_url = os.getenv('LLM_BASE_URL', 'https://api.openai.com/v1')
-        provider = OpenAIProvider(base_url=base_url, api_key=api_key)
-        return OpenAIModel(llm_choice, provider=provider)
+        model_choice: Optional override of the model name.
 
-
-def get_embedding_client() -> openai.AsyncOpenAI:
-    """
-    Get embedding client configuration based on environment variables.
-    
     Returns:
-        Configured OpenAI-compatible client for embeddings
+        Configured GoogleModel instance.
     """
-    embedding_provider = os.getenv('EMBEDDING_PROVIDER', 'openai').lower()
-    api_key = os.getenv('LLM_API_KEY', '')  # Use same API key as LLM for Google
-    
-    if embedding_provider == 'google':
-        # For Google embeddings, we'll need to use the Google AI client
-        # For now, fall back to a compatible base URL approach
-        base_url = os.getenv('EMBEDDING_BASE_URL', 'https://generativelanguage.googleapis.com/v1beta')
-        return openai.AsyncOpenAI(
-            base_url=base_url,
-            api_key=api_key
-        )
-    else:
-        # Default OpenAI configuration
-        base_url = os.getenv('EMBEDDING_BASE_URL', 'https://api.openai.com/v1')
-        api_key = os.getenv('EMBEDDING_API_KEY', api_key)
-        return openai.AsyncOpenAI(
-            base_url=base_url,
-            api_key=api_key
-        )
+    llm_choice = model_choice or os.getenv("LLM_CHOICE", _DEFAULT_LLM_MODEL)
+    provider = GoogleProvider(api_key=_get_api_key())
+    return GoogleModel(llm_choice, provider=provider)
 
 
 def get_embedding_model() -> str:
-    """
-    Get embedding model name from environment.
-    
-    Returns:
-        Embedding model name
-    """
-    return os.getenv('EMBEDDING_MODEL', 'text-embedding-3-small')
+    """Return the embedding model identifier."""
+    return os.getenv("EMBEDDING_MODEL", _DEFAULT_EMBEDDING_MODEL)
 
 
-def get_ingestion_model() -> Union[OpenAIModel, GoogleModel]:
-    """
-    Get ingestion-specific LLM model (can be faster/cheaper than main model).
-    
-    Returns:
-        Configured model for ingestion tasks
-    """
-    ingestion_choice = os.getenv('INGESTION_LLM_CHOICE')
-    
-    # If no specific ingestion model, use the main model
+def get_ingestion_model() -> GoogleModel:
+    """Return the Gemini model to use during ingestion tasks."""
+    ingestion_choice = os.getenv("INGESTION_LLM_CHOICE")
     if not ingestion_choice:
         return get_llm_model()
-    
     return get_llm_model(model_choice=ingestion_choice)
 
 
-# Provider information functions
+async def generate_embedding(text: str, model: Optional[str] = None) -> List[float]:
+    """Generate a single embedding vector using Gemini."""
+    embeddings = await generate_embeddings([text], model=model)
+    return embeddings[0] if embeddings else []
+
+
+async def generate_embeddings(texts: List[str], model: Optional[str] = None) -> List[List[float]]:
+    """Generate embeddings for a batch of texts using Gemini."""
+    if not texts:
+        return []
+
+    _ensure_genai_configured()
+    model_name = model or get_embedding_model()
+
+    def _embed_batch() -> List[List[float]]:
+        results: List[List[float]] = []
+        for text in texts:
+            content = text or ""
+            try:
+                response = genai.embed_content(model=model_name, content=content)
+                embedding = response.get("embedding") or []
+                results.append(list(embedding))
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.error("Gemini embedding request failed: %s", exc)
+                raise
+        return results
+
+    return await asyncio.to_thread(_embed_batch)
+
+
 def get_llm_provider() -> str:
-    """Get the LLM provider name."""
-    return os.getenv('LLM_PROVIDER', 'openai')
+    """Return the current LLM provider identifier."""
+    return "google"
 
 
 def get_embedding_provider() -> str:
-    """Get the embedding provider name."""
-    return os.getenv('EMBEDDING_PROVIDER', 'openai')
+    """Return the current embedding provider identifier."""
+    return "google"
 
 
 def validate_configuration() -> bool:
-    """
-    Validate that required environment variables are set.
-    
-    Returns:
-        True if configuration is valid
-    """
-    required_vars = [
-        'LLM_API_KEY',
-        'LLM_CHOICE',
-        'EMBEDDING_API_KEY',
-        'EMBEDDING_MODEL'
-    ]
-    
+    """Validate required Gemini configuration is present."""
     missing_vars = []
-    for var in required_vars:
+    if not _get_api_key():
+        missing_vars.append("GOOGLE_API_KEY or LLM_API_KEY")
+
+    for var in ("LLM_CHOICE", "EMBEDDING_MODEL"):
         if not os.getenv(var):
             missing_vars.append(var)
-    
+
     if missing_vars:
         print(f"Missing required environment variables: {', '.join(missing_vars)}")
         return False
-    
     return True
 
 
 def get_model_info() -> dict:
-    """
-    Get information about current model configuration.
-    
-    Returns:
-        Dictionary with model configuration info
-    """
+    """Return diagnostic information about the current Gemini setup."""
     return {
         "llm_provider": get_llm_provider(),
-        "llm_model": os.getenv('LLM_CHOICE'),
-        "llm_base_url": os.getenv('LLM_BASE_URL'),
+        "llm_model": os.getenv("LLM_CHOICE", _DEFAULT_LLM_MODEL),
         "embedding_provider": get_embedding_provider(),
         "embedding_model": get_embedding_model(),
-        "embedding_base_url": os.getenv('EMBEDDING_BASE_URL'),
-        "ingestion_model": os.getenv('INGESTION_LLM_CHOICE', 'same as main'),
+        "ingestion_model": os.getenv("INGESTION_LLM_CHOICE", "same as main"),
     }

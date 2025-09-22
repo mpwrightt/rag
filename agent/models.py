@@ -2,6 +2,7 @@
 Pydantic models for data validation and serialization.
 """
 
+import os
 from typing import List, Dict, Any, Optional, Literal
 from datetime import datetime
 from uuid import UUID
@@ -158,8 +159,17 @@ class Chunk(BaseModel):
     @classmethod
     def validate_embedding(cls, v: Optional[List[float]]) -> Optional[List[float]]:
         """Validate embedding dimensions."""
-        if v is not None and len(v) != 1536:  # OpenAI text-embedding-3-small
-            raise ValueError(f"Embedding must have 1536 dimensions, got {len(v)}")
+        if v is None:
+            return None
+        valid_dims = {768, 1536, 3072}
+        env_dim = os.getenv("VECTOR_DIMENSION")
+        if env_dim:
+            try:
+                valid_dims.add(int(env_dim))
+            except ValueError:
+                pass
+        if len(v) not in valid_dims:
+            raise ValueError(f"Embedding must have one of the supported dimensions {sorted(valid_dims)}, got {len(v)}")
         return v
 
 
@@ -186,18 +196,6 @@ class Message(BaseModel):
 
 
 # Agent Models
-class AgentDependencies(BaseModel):
-    """Dependencies for the agent."""
-    session_id: str
-    database_url: Optional[str] = None
-    neo4j_uri: Optional[str] = None
-    openai_api_key: Optional[str] = None
-    
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-
-
-
 class AgentContext(BaseModel):
     """Agent execution context."""
     session_id: str
@@ -421,3 +419,38 @@ class HealthStatus(BaseModel):
     llm_connection: bool
     version: str
     timestamp: datetime
+
+
+# Phase 1 Incremental Update Request Models
+class DocumentMetadataUpdateRequest(BaseModel):
+    """Request payload to update a document's metadata only (no re-embedding)."""
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ChunkMetadataBatchUpdateRequest(BaseModel):
+    """Bulk update metadata for multiple chunks."""
+    chunk_ids: List[str]
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AddTagsRequest(BaseModel):
+    """Add tags to a document (idempotent)."""
+    tags: List[str]
+
+
+class UpdateClassificationChunkCategory(BaseModel):
+    """Chunk category update item used in classification updates."""
+    chunk_ids: List[str]
+    category: str
+
+
+class UpdateClassificationRequest(BaseModel):
+    """Update document classification and optional chunk categories without re-embedding."""
+    domain: Optional[str] = None
+    domain_confidence: Optional[float] = None
+    chunk_category_updates: List[UpdateClassificationChunkCategory] = Field(default_factory=list)
+
+
+class UpdateCollectionsRequest(BaseModel):
+    """Add or remove collection memberships for a document."""
+    collection_ids: List[str]
