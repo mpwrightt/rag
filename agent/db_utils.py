@@ -473,14 +473,14 @@ async def get_session_messages(
             query += f" LIMIT {limit}"
         
         results = await conn.fetch(query, session_id)
-        
+
         return [
             {
                 "id": row["id"],
                 "role": row["role"],
                 "content": row["content"],
                 "metadata": json.loads(row["metadata"]),
-                "created_at": row["created_at"].isoformat()
+                "created_at": row["created_at"].isoformat(),
             }
             for row in results
         ]
@@ -524,7 +524,7 @@ async def get_document(document_id: str) -> Optional[Dict[str, Any]]:
                 "created_at": result["created_at"].isoformat(),
                 "updated_at": result["updated_at"].isoformat()
             }
-        
+
         return None
 
 
@@ -542,6 +542,8 @@ async def list_documents(
         limit: Maximum number of documents to return
         offset: Number of documents to skip
         metadata_filter: Optional metadata filter
+        collection_ids: Optional list of collection IDs to filter by
+        document_ids: Optional list of document IDs to filter by
     
     Returns:
         List of documents
@@ -559,33 +561,34 @@ async def list_documents(
             FROM documents d
             LEFT JOIN chunks c ON d.id = c.document_id
         """
-
+        
         params: List[Any] = []
         conditions: List[str] = []
-
+        
         if metadata_filter:
             conditions.append(f"d.metadata @> ${len(params) + 1}::jsonb")
             params.append(json.dumps(metadata_filter))
-
+        
         if document_ids:
             conditions.append(f"d.id = ANY(${len(params) + 1}::uuid[])")
             params.append(document_ids)
-
+        
         if collection_ids:
             conditions.append(
                 f"d.id IN (SELECT document_id FROM collection_documents WHERE collection_id = ANY(${len(params) + 1}::uuid[]))"
             )
             params.append(collection_ids)
-
+        
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
-
+        
         query += """
             GROUP BY d.id, d.title, d.source, d.metadata, d.created_at, d.updated_at
             ORDER BY d.created_at DESC
             LIMIT $%d OFFSET $%d
         """ % (len(params) + 1, len(params) + 2)
         results = await conn.fetch(query, *params, limit, offset)
+        
         return [
             {
                 "id": row["id"],
@@ -600,130 +603,91 @@ async def list_documents(
         ]
 
 
-async def list_collections_db(
-    limit: int = 50,
-    offset: int = 0,
-    search: Optional[str] = None,
-    created_by: Optional[str] = None,
-    workspace_id: Optional[str] = None,
-    is_shared: Optional[bool] = None
-) -> Tuple[List[Dict[str, Any]], int]:
-    """
-    List collections with optional filtering and pagination.
-
-    Args:
-        limit: Max number of collections to return
-        offset: Number of collections to skip
-        search: Optional ILIKE search over name/description
-        created_by: Filter by creator
-        workspace_id: Filter by workspace UUID
-        is_shared: Filter by shared status
-
-    Returns:
-        (collections, total_count)
-    """
+async def update_document_metadata(
+    document_id: str,
+    metadata_patch: Dict[str, Any],
+    *,
+    replace: bool = False,
+) -> bool:
+    """Merge or replace metadata for a document."""
     async with db_pool.acquire() as conn:
-        base_where = []
-        params = []
+        rec = await conn.fetchrow(
+            "SELECT metadata FROM documents WHERE id = $1::uuid",
+            document_id,
+        )
+        if not rec:
+            return False
 
+        existing_raw = rec["metadata"]
         try:
-            if search:
-                base_where.append(f"(name ILIKE ${len(params)+1} OR description ILIKE ${len(params)+1})")
-                params.append(f"%{search}%")
-            if created_by:
-                base_where.append(f"created_by = ${len(params)+1}")
-                params.append(created_by)
-            if workspace_id:
-                # Validate UUID early to avoid opaque DB cast errors
-                try:
-                    _ = UUID(str(workspace_id))
-                except Exception:
-                    logger.warning("Invalid workspace_id provided to list_collections_db: %s", workspace_id)
-                    raise
-                base_where.append(f"workspace_id = ${len(params)+1}::uuid")
-                params.append(workspace_id)
-            if is_shared is not None:
-                base_where.append(f"is_shared = ${len(params)+1}")
-                params.append(is_shared)
-
-            where_clause = f"WHERE {' AND '.join(base_where)}" if base_where else ""
-
-            # Log the constructed query details
-            logger.info(
-                "Collections query: where='%s', params=%s, limit=%s, offset=%s",
-                where_clause,
-                params,
-                limit,
-                offset,
-            )
-
-            # Total count
-            count_query = f"""
-                SELECT COUNT(*)
-                FROM collections
-                {where_clause}
-            """
-            total: int = await conn.fetchval(count_query, *params)
-
-            # Paged results
-            list_query = f"""
-                SELECT 
-                    id::text as id,
-                    name,
-                    description,
-                    color,
-                    icon,
-                    created_by,
-                    is_shared,
-                    workspace_id::text as workspace_id,
-                    document_count,
-                    total_size,
-                    last_accessed,
-                    metadata,
-                    created_at,
-                    updated_at
-                FROM collections
-                {where_clause}
-                ORDER BY updated_at DESC
-                LIMIT ${len(params)+1} OFFSET ${len(params)+2}
-            """
-
-            list_params = params + [limit, offset]
-            rows = await conn.fetch(list_query, *list_params)
-
-            logger.info("Collections fetched: %d rows (total=%d)", len(rows), total)
-
-            collections = [
-                {
-                    "id": r["id"],
-                    "name": r["name"],
-                    "description": r["description"],
-                    "color": r["color"],
-                    "icon": r["icon"],
-                    "created_by": r["created_by"],
-                    "is_shared": r["is_shared"],
-                    "workspace_id": r["workspace_id"],
-                    "document_count": r["document_count"],
-                    "total_size": r["total_size"],
-                    "last_accessed": r["last_accessed"].isoformat() if r["last_accessed"] else None,
-                    "metadata": r["metadata"] if isinstance(r["metadata"], dict) else (json.loads(r["metadata"]) if r["metadata"] else {}),
-                    "created_at": r["created_at"].isoformat() if r["created_at"] else None,
-                    "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
-                }
-                for r in rows
-            ]
-
-            return collections, total
+            if isinstance(existing_raw, str):
+                existing = json.loads(existing_raw)
+            else:
+                existing = existing_raw or {}
         except Exception:
-            # Log full traceback for diagnostics
-            logger.exception(
-                "Error in list_collections_db with where='%s', params=%s, limit=%s, offset=%s",
-                ' AND '.join(base_where) if base_where else '',
-                params,
-                limit,
-                offset,
+            existing = {}
+
+        if replace:
+            new_metadata = metadata_patch
+        else:
+            new_metadata = existing.copy()
+            new_metadata.update(metadata_patch)
+
+        await conn.execute(
+            "UPDATE documents SET metadata = $2::jsonb WHERE id = $1::uuid",
+            document_id,
+            json.dumps(new_metadata),
+        )
+        return True
+
+
+async def list_proposal_documents_db(
+    proposal_id: str,
+    *,
+    source_type: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """List documents linked to a specific proposal via metadata."""
+    async with db_pool.acquire() as conn:
+        params: List[Any] = [proposal_id]
+        where_clause = "metadata ->> 'proposal_id' = $1"
+        if source_type:
+            params.append(source_type)
+            where_clause += " AND metadata ->> 'proposal_source_type' = $2"
+
+        rows = await conn.fetch(
+            f"""
+            SELECT
+                id::text AS id,
+                title,
+                source,
+                metadata,
+                created_at,
+                updated_at
+            FROM documents
+            WHERE {where_clause}
+            ORDER BY created_at DESC
+            """,
+            *params,
+        )
+
+        docs: List[Dict[str, Any]] = []
+        for row in rows:
+            raw_meta = row["metadata"]
+            try:
+                metadata = raw_meta if isinstance(raw_meta, dict) else json.loads(raw_meta or "{}")
+            except Exception:
+                metadata = {}
+            docs.append(
+                {
+                    "id": row["id"],
+                    "title": row["title"],
+                    "source": row["source"],
+                    "metadata": metadata,
+                    "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+                    "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+                }
             )
-            raise
+        return docs
 
 
 async def delete_document(document_id: str) -> bool:
@@ -768,6 +732,97 @@ async def delete_document(document_id: str) -> bool:
             )
             rows_affected = int(result.split()[-1]) if result and result.startswith("DELETE") else 0
             return rows_affected > 0
+
+
+async def list_collections_db(
+    limit: int = 50,
+    offset: int = 0,
+    search: Optional[str] = None,
+    created_by: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    is_shared: Optional[bool] = None,
+) -> Tuple[List[Dict[str, Any]], int]:
+    """List collections with optional filters and pagination.
+
+    Returns (collections, total_count).
+    """
+    async with db_pool.acquire() as conn:
+        base_where: List[str] = []
+        params: List[Any] = []
+
+        if search:
+            base_where.append(f"(name ILIKE ${len(params)+1} OR description ILIKE ${len(params)+1})")
+            params.append(f"%{search}%")
+        if created_by:
+            base_where.append(f"created_by = ${len(params)+1}")
+            params.append(created_by)
+        if workspace_id:
+            # Validate UUID early
+            _ = UUID(str(workspace_id))
+            base_where.append(f"workspace_id = ${len(params)+1}::uuid")
+            params.append(workspace_id)
+        if is_shared is not None:
+            base_where.append(f"is_shared = ${len(params)+1}")
+            params.append(is_shared)
+
+        where_clause = f"WHERE {' AND '.join(base_where)}" if base_where else ""
+
+        # Total count
+        total_query = f"""
+            SELECT COUNT(*)
+            FROM collections
+            {where_clause}
+        """
+        total: int = await conn.fetchval(total_query, *params)
+
+        # Paged results
+        list_query = f"""
+            SELECT 
+                id::text as id,
+                name,
+                description,
+                color,
+                icon,
+                created_by,
+                is_shared,
+                workspace_id::text as workspace_id,
+                document_count,
+                total_size,
+                last_accessed,
+                metadata,
+                created_at,
+                updated_at
+            FROM collections
+            {where_clause}
+            ORDER BY updated_at DESC
+            LIMIT ${len(params)+1} OFFSET ${len(params)+2}
+        """
+        rows = await conn.fetch(list_query, *params, limit, offset)
+
+        collections: List[Dict[str, Any]] = []
+        for r in rows:
+            raw_meta = r["metadata"]
+            meta = raw_meta if isinstance(raw_meta, dict) else (json.loads(raw_meta) if raw_meta else {})
+            collections.append(
+                {
+                    "id": r["id"],
+                    "name": r["name"],
+                    "description": r["description"],
+                    "color": r["color"],
+                    "icon": r["icon"],
+                    "created_by": r["created_by"],
+                    "is_shared": r["is_shared"],
+                    "workspace_id": r["workspace_id"],
+                    "document_count": r["document_count"],
+                    "total_size": r["total_size"],
+                    "last_accessed": r["last_accessed"].isoformat() if r["last_accessed"] else None,
+                    "metadata": meta,
+                    "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+                    "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
+                }
+            )
+
+        return collections, total
 
 
 async def create_collection_db(
@@ -1113,6 +1168,7 @@ async def vector_search(
     limit: int = 10,
     collection_ids: Optional[List[str]] = None,
     document_ids: Optional[List[str]] = None,
+    chunk_ids: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Perform vector similarity search.
@@ -1130,7 +1186,7 @@ async def vector_search(
         embedding_str = '[' + ','.join(map(str, embedding)) + ']'
 
         # If no filters provided, use optimized SQL function
-        if not collection_ids and not document_ids:
+        if not collection_ids and not document_ids and not chunk_ids:
             results = await conn.fetch(
                 "SELECT * FROM match_chunks($1::vector, $2)",
                 embedding_str,
@@ -1149,6 +1205,11 @@ async def vector_search(
                     f"d.id IN (SELECT document_id FROM collection_documents WHERE collection_id = ANY(${len(params) + 1}::uuid[]))"
                 )
                 params.append(collection_ids)
+            if chunk_ids:
+                where_clauses.append(
+                    f"c.id = ANY(${len(params) + 1}::uuid[])"
+                )
+                params.append(chunk_ids)
 
             query = f"""
                 SELECT
@@ -1188,6 +1249,7 @@ async def hybrid_search(
     text_weight: float = 0.3,
     collection_ids: Optional[List[str]] = None,
     document_ids: Optional[List[str]] = None,
+    chunk_ids: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Perform hybrid search (vector + keyword).
@@ -1206,7 +1268,7 @@ async def hybrid_search(
         # PostgreSQL vector format: '[1.0,2.0,3.0]' (no spaces after commas)
         embedding_str = '[' + ','.join(map(str, embedding)) + ']'
 
-        if not collection_ids and not document_ids:
+        if not collection_ids and not document_ids and not chunk_ids:
             results = await conn.fetch(
                 "SELECT * FROM hybrid_search($1::vector, $2, $3, $4)",
                 embedding_str,
@@ -1231,6 +1293,10 @@ async def hybrid_search(
                     f"d.id IN (SELECT document_id FROM collection_documents WHERE collection_id = ANY(${len(params) + 1}::uuid[]))"
                 )
                 params.append(collection_ids)
+            if chunk_ids:
+                vector_where.append(f"c.id = ANY(${len(params) + 1}::uuid[])")
+                text_where.append(f"c.id = ANY(${len(params) + 1}::uuid[])")
+                params.append(chunk_ids)
 
             query = f"""
                 WITH vector_results AS (
@@ -2209,3 +2275,266 @@ async def get_summary_statistics() -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Failed to get summary statistics: {e}")
         return {}
+
+
+# -------------------------
+# Proposal Management Functions
+# -------------------------
+async def create_proposal_db(
+    *,
+    title: str,
+    client_fields: Dict[str, Any] | None = None,
+    project_fields: Dict[str, Any] | None = None,
+    status: str = "draft",
+    metadata: Dict[str, Any] | None = None,
+    created_by: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Create a proposal and return the created row."""
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO proposals (title, client_fields, project_fields, status, metadata, created_by)
+            VALUES ($1, $2::jsonb, $3::jsonb, $4, $5::jsonb, $6)
+            RETURNING id::text, title, client_fields, project_fields, status, metadata, created_by, created_at, updated_at
+            """,
+            title,
+            json.dumps(client_fields or {}),
+            json.dumps(project_fields or {}),
+            status,
+            json.dumps(metadata or {}),
+            created_by,
+        )
+        return {
+            "id": row["id"],
+            "title": row["title"],
+            "client_fields": row["client_fields"] if isinstance(row["client_fields"], dict) else (json.loads(row["client_fields"]) if row["client_fields"] else {}),
+            "project_fields": row["project_fields"] if isinstance(row["project_fields"], dict) else (json.loads(row["project_fields"]) if row["project_fields"] else {}),
+            "status": row["status"],
+            "metadata": row["metadata"] if isinstance(row["metadata"], dict) else (json.loads(row["metadata"]) if row["metadata"] else {}),
+            "created_by": row["created_by"],
+            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+            "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+        }
+
+
+async def get_proposal_db(proposal_id: str) -> Optional[Dict[str, Any]]:
+    """Fetch a proposal by ID."""
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT id::text, title, client_fields, project_fields, status, metadata, created_by, created_at, updated_at
+            FROM proposals
+            WHERE id = $1::uuid
+            """,
+            proposal_id,
+        )
+        if not row:
+            return None
+        return {
+            "id": row["id"],
+            "title": row["title"],
+            "client_fields": row["client_fields"] if isinstance(row["client_fields"], dict) else (json.loads(row["client_fields"]) if row["client_fields"] else {}),
+            "project_fields": row["project_fields"] if isinstance(row["project_fields"], dict) else (json.loads(row["project_fields"]) if row["project_fields"] else {}),
+            "status": row["status"],
+            "metadata": row["metadata"] if isinstance(row["metadata"], dict) else (json.loads(row["metadata"]) if row["metadata"] else {}),
+            "created_by": row["created_by"],
+            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+            "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+        }
+
+
+async def create_proposal_version_db(
+    *,
+    proposal_id: str,
+    html: Optional[str] = None,
+    sections: Optional[Dict[str, Any]] = None,
+    citations: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Create a proposal version snapshot and return it."""
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO proposal_versions (proposal_id, html, sections, citations)
+            VALUES ($1::uuid, $2, $3::jsonb, $4::jsonb)
+            RETURNING id::text, proposal_id::text as proposal_id, html, sections, citations, created_at
+            """,
+            proposal_id,
+            html,
+            json.dumps(sections or []),
+            json.dumps(citations or []),
+        )
+        return {
+            "id": row["id"],
+            "proposal_id": row["proposal_id"],
+            "html": row["html"],
+            "sections": row["sections"] if isinstance(row["sections"], list) else (json.loads(row["sections"]) if row["sections"] else []),
+            "citations": row["citations"] if isinstance(row["citations"], list) else (json.loads(row["citations"]) if row["citations"] else []),
+            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+        }
+
+
+async def list_proposals_db(
+    *,
+    limit: int = 50,
+    offset: int = 0,
+) -> List[Dict[str, Any]]:
+    """List proposals with pagination."""
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id::text, title, status, metadata, created_at, updated_at
+            FROM proposals
+            ORDER BY updated_at DESC
+            LIMIT $1 OFFSET $2
+            """,
+            limit,
+            offset,
+        )
+        return [
+            {
+                "id": r["id"],
+                "title": r["title"],
+                "status": r["status"],
+                "metadata": r["metadata"] if isinstance(r["metadata"], dict) else (json.loads(r["metadata"]) if r["metadata"] else {}),
+                "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+                "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
+            }
+            for r in rows
+        ]
+
+
+async def get_proposal_version_db(version_id: str) -> Optional[Dict[str, Any]]:
+    """Fetch a proposal version by version ID."""
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT id::text, proposal_id::text as proposal_id, html, sections, citations, created_at
+            FROM proposal_versions
+            WHERE id = $1::uuid
+            """,
+            version_id,
+        )
+        if not row:
+            return None
+        return {
+            "id": row["id"],
+            "proposal_id": row["proposal_id"],
+            "html": row["html"],
+            "sections": row["sections"] if isinstance(row["sections"], list) else (json.loads(row["sections"]) if row["sections"] else []),
+            "citations": row["citations"] if isinstance(row["citations"], list) else (json.loads(row["citations"]) if row["citations"] else []),
+            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+        }
+
+
+async def get_latest_proposal_version_db(proposal_id: str) -> Optional[Dict[str, Any]]:
+    """Fetch the most recent version for a proposal."""
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT id::text, proposal_id::text as proposal_id, html, sections, citations, created_at
+            FROM proposal_versions
+            WHERE proposal_id = $1::uuid
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            proposal_id,
+        )
+        if not row:
+            return None
+        return {
+            "id": row["id"],
+            "proposal_id": row["proposal_id"],
+            "html": row["html"],
+            "sections": row["sections"] if isinstance(row["sections"], list) else (json.loads(row["sections"]) if row["sections"] else []),
+            "citations": row["citations"] if isinstance(row["citations"], list) else (json.loads(row["citations"]) if row["citations"] else []),
+            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+        }
+
+
+async def list_proposal_versions_db(
+    proposal_id: str,
+    *,
+    limit: int = 20,
+    offset: int = 0,
+) -> List[Dict[str, Any]]:
+    """List versions for a proposal."""
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id::text, proposal_id::text as proposal_id, html, sections, citations, created_at
+            FROM proposal_versions
+            WHERE proposal_id = $1::uuid
+            ORDER BY created_at DESC
+            LIMIT $2 OFFSET $3
+            """,
+            proposal_id,
+            limit,
+            offset,
+        )
+        return [
+            {
+                "id": r["id"],
+                "proposal_id": r["proposal_id"],
+                "html": r["html"],
+                "sections": r["sections"] if isinstance(r["sections"], list) else (json.loads(r["sections"]) if r["sections"] else []),
+                "citations": r["citations"] if isinstance(r["citations"], list) else (json.loads(r["citations"]) if r["citations"] else []),
+                "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+            }
+            for r in rows
+        ]
+
+
+async def update_proposal_db(
+    proposal_id: str,
+    *,
+    title: Optional[str] = None,
+    client_fields: Optional[Dict[str, Any]] = None,
+    project_fields: Optional[Dict[str, Any]] = None,
+    status: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Update mutable fields of a proposal and return the updated record."""
+    async with db_pool.acquire() as conn:
+        # Build dynamic update parts
+        sets = []
+        args: List[Any] = []
+        if title is not None:
+            sets.append("title = $%d" % (len(args) + 1))
+            args.append(title)
+        if client_fields is not None:
+            sets.append("client_fields = $%d::jsonb" % (len(args) + 1))
+            args.append(json.dumps(client_fields))
+        if project_fields is not None:
+            sets.append("project_fields = $%d::jsonb" % (len(args) + 1))
+            args.append(json.dumps(project_fields))
+        if status is not None:
+            sets.append("status = $%d" % (len(args) + 1))
+            args.append(status)
+        if metadata is not None:
+            sets.append("metadata = $%d::jsonb" % (len(args) + 1))
+            args.append(json.dumps(metadata))
+
+        if not sets:
+            # Nothing to update; return current
+            return await get_proposal_db(proposal_id)
+
+        args.append(proposal_id)
+        query = f"""
+            UPDATE proposals
+            SET {', '.join(sets)}, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ${len(args)}::uuid
+            RETURNING id::text, title, client_fields, project_fields, status, metadata, created_at, updated_at
+        """
+        row = await conn.fetchrow(query, *args)
+        if not row:
+            return None
+        return {
+            "id": row["id"],
+            "title": row["title"],
+            "client_fields": row["client_fields"] if isinstance(row["client_fields"], dict) else (json.loads(row["client_fields"]) if row["client_fields"] else {}),
+            "project_fields": row["project_fields"] if isinstance(row["project_fields"], dict) else (json.loads(row["project_fields"]) if row["project_fields"] else {}),
+            "status": row["status"],
+            "metadata": row["metadata"] if isinstance(row["metadata"], dict) else (json.loads(row["metadata"]) if row["metadata"] else {}),
+            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+            "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+        }

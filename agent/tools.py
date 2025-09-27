@@ -64,6 +64,7 @@ class VectorSearchInput(BaseModel):
     limit: int = Field(default=10, description="Maximum number of results")
     collection_ids: Optional[List[str]] = Field(default=None, description="Restrict search to these collection UUIDs")
     document_ids: Optional[List[str]] = Field(default=None, description="Restrict search to these document UUIDs")
+    chunk_ids: Optional[List[str]] = Field(default=None, description="Restrict search to these specific chunk UUIDs")
 
 
 class GraphSearchInput(BaseModel):
@@ -78,6 +79,7 @@ class HybridSearchInput(BaseModel):
     text_weight: float = Field(default=0.3, description="Weight for text similarity (0-1)")
     collection_ids: Optional[List[str]] = Field(default=None, description="Restrict search to these collection UUIDs")
     document_ids: Optional[List[str]] = Field(default=None, description="Restrict search to these document UUIDs")
+    chunk_ids: Optional[List[str]] = Field(default=None, description="Restrict search to these specific chunk UUIDs")
 
 
 class DocumentInput(BaseModel):
@@ -107,6 +109,31 @@ class EntityTimelineInput(BaseModel):
 
 
 # Helper Functions
+def _looks_like_binary_text(text: str) -> bool:
+    """Heuristic to detect binary/gibberish content (e.g., raw PDF bytes) that should not be surfaced.
+    Returns True when content likely contains binary markers or excessive non-word noise.
+    """
+    if not text:
+        return False
+    t = text.strip()
+    # Common PDF markers or object/xref sections
+    pdf_markers = ("%PDF-", "startxref", "endobj", "/XRef", "/Font", "/Type /Page")
+    if any(marker in t[:200] for marker in pdf_markers):
+        return True
+    # If a large portion of characters are not letters, digits, basic punctuation, or whitespace
+    import re
+    allowed = re.compile(r"[\w\s\.,;:'\-\(\)\[\]/&%]", re.UNICODE)
+    total = len(t)
+    if total < 12:
+        return False
+    allowed_count = sum(1 for ch in t if allowed.match(ch))
+    # If less than 70% allowed characters, likely gibberish
+    if allowed_count / max(1, total) < 0.7:
+        return True
+    # Extremely long unbroken token (e.g., compressed streams)
+    if any(len(tok) > 120 for tok in t.split()):
+        return True
+    return False
 async def search_by_title(
     query: str,
     collection_ids: Optional[List[str]] = None,
@@ -189,12 +216,15 @@ async def vector_search_tool(input_data: VectorSearchInput) -> List[ChunkResult]
         List of matching chunks
     """
     try:
-        # First, try to find exact or fuzzy title matches
-        title_results = await search_by_title(
-            query=input_data.query,
-            collection_ids=input_data.collection_ids,
-            document_ids=input_data.document_ids
-        )
+        title_results: List[Dict[str, Any]] = []
+        # When chunk_ids are explicitly provided, skip title boosting and only return filtered chunks
+        if not input_data.chunk_ids:
+            # First, try to find exact or fuzzy title matches
+            title_results = await search_by_title(
+                query=input_data.query,
+                collection_ids=input_data.collection_ids,
+                document_ids=input_data.document_ids
+            )
         
         # Generate embedding for the query
         embedding = await generate_embedding(input_data.query)
@@ -205,29 +235,35 @@ async def vector_search_tool(input_data: VectorSearchInput) -> List[ChunkResult]
             limit=input_data.limit,
             collection_ids=input_data.collection_ids,
             document_ids=input_data.document_ids,
+            chunk_ids=input_data.chunk_ids,
         )
 
         # Combine results, prioritizing title matches
         combined_results = []
         
-        # Add title matches first (boost their scores)
-        for r in title_results[:5]:  # Top 5 title matches
-            combined_results.append(
-                ChunkResult(
-                    chunk_id=str(r["chunk_id"]),
-                    document_id=str(r["document_id"]),
-                    content=r["content"],
-                    score=min(0.98, r.get("similarity", 0.9) + 0.3),  # Boost title matches
-                    metadata={**r["metadata"], "match_type": "title_match"},
-                    document_title=r["document_title"],
-                    document_source=r["document_source"]
+        # Add title matches first (boost their scores) when applicable
+        if title_results:
+            for r in title_results[:5]:  # Top 5 title matches
+                if _looks_like_binary_text(r["content"]):
+                    continue
+                combined_results.append(
+                    ChunkResult(
+                        chunk_id=str(r["chunk_id"]),
+                        document_id=str(r["document_id"]),
+                        content=r["content"],
+                        score=min(0.98, r.get("similarity", 0.9) + 0.3),  # Boost title matches
+                        metadata={**r["metadata"], "match_type": "title_match"},
+                        document_title=r["document_title"],
+                        document_source=r["document_source"]
+                    )
                 )
-            )
         
         # Add vector results, avoiding duplicates
         title_chunk_ids = {r["chunk_id"] for r in title_results}
         for r in vector_results:
             if r["chunk_id"] not in title_chunk_ids:
+                if _looks_like_binary_text(r["content"]):
+                    continue
                 combined_results.append(
                     ChunkResult(
                         chunk_id=str(r["chunk_id"]),
@@ -269,17 +305,49 @@ async def graph_search_tool(input_data: GraphSearchInput) -> List[GraphSearchRes
         
         logger.info(f"Graph search returned {len(results)} results")
         
-        # Convert to GraphSearchResult models
+        # Convert to GraphSearchResult models (normalize UUID and datetime types)
         graph_results = []
         for r in results:
             try:
+                _uuid = r.get("uuid", "")
+                if _uuid is None:
+                    _uuid = ""
+                elif not isinstance(_uuid, str):
+                    try:
+                        _uuid = str(_uuid)
+                    except Exception:
+                        _uuid = ""
+
+                _src_uuid = r.get("source_node_uuid")
+                if _src_uuid is not None and not isinstance(_src_uuid, str):
+                    try:
+                        _src_uuid = str(_src_uuid)
+                    except Exception:
+                        _src_uuid = None
+
+                _valid_at = r.get("valid_at")
+                try:
+                    from datetime import datetime
+                    if hasattr(_valid_at, 'isoformat') and callable(_valid_at.isoformat):
+                        _valid_at = _valid_at.isoformat()
+                except Exception:
+                    pass
+
+                _invalid_at = r.get("invalid_at")
+                try:
+                    from datetime import datetime
+                    if hasattr(_invalid_at, 'isoformat') and callable(_invalid_at.isoformat):
+                        _invalid_at = _invalid_at.isoformat()
+                except Exception:
+                    pass
+
                 graph_results.append(
                     GraphSearchResult(
                         fact=r.get("fact", ""),
-                        uuid=r.get("uuid", ""),
-                        valid_at=r.get("valid_at"),
-                        invalid_at=r.get("invalid_at"),
-                        source_node_uuid=r.get("source_node_uuid")
+                        uuid=_uuid,
+                        valid_at=_valid_at,
+                        invalid_at=_invalid_at,
+                        source_node_uuid=_src_uuid
                     )
                 )
             except Exception as conversion_error:
@@ -377,29 +445,35 @@ async def hybrid_search_tool(input_data: HybridSearchInput) -> List[ChunkResult]
             text_weight=input_data.text_weight,
             collection_ids=input_data.collection_ids,
             document_ids=input_data.document_ids,
+            chunk_ids=input_data.chunk_ids,
         )
         
         # Combine results, prioritizing title matches
         combined_results = []
         
         # Add title matches first (boost their scores)
-        for r in title_results[:5]:  # Top 5 title matches
-            combined_results.append(
-                ChunkResult(
-                    chunk_id=str(r["chunk_id"]),
-                    document_id=str(r["document_id"]),
-                    content=r["content"],
-                    score=min(0.98, r.get("similarity", 0.9) + 0.3),  # Boost title matches
-                    metadata={**r["metadata"], "match_type": "title_match"},
-                    document_title=r["document_title"],
-                    document_source=r["document_source"]
+        if title_results:
+            for r in title_results[:5]:  # Top 5 title matches
+                if _looks_like_binary_text(r["content"]):
+                    continue
+                combined_results.append(
+                    ChunkResult(
+                        chunk_id=str(r["chunk_id"]),
+                        document_id=str(r["document_id"]),
+                        content=r["content"],
+                        score=min(0.98, r.get("similarity", 0.9) + 0.3),  # Boost title matches
+                        metadata={**r["metadata"], "match_type": "title_match"},
+                        document_title=r["document_title"],
+                        document_source=r["document_source"]
+                    )
                 )
-            )
         
         # Add hybrid results, avoiding duplicates
         title_chunk_ids = {r["chunk_id"] for r in title_results}
         for r in hybrid_results:
             if r["chunk_id"] not in title_chunk_ids:
+                if _looks_like_binary_text(r["content"]):
+                    continue
                 combined_results.append(
                     ChunkResult(
                         chunk_id=str(r["chunk_id"]),

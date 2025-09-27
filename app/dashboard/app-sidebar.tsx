@@ -77,6 +77,12 @@ const data = {
       badge: "Organize"
     },
     {
+      title: "Proposals",
+      url: "/dashboard/proposals",
+      icon: IconFileWord,
+      badge: "Generator"
+    },
+    {
       title: "Prompts Library",
       url: "/dashboard/prompts",
       icon: IconBrain,

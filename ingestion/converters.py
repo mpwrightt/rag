@@ -15,6 +15,29 @@ logger = logging.getLogger(__name__)
 
 # Optional heavy deps imported lazily
 
+def _looks_like_binary_text(text: str) -> bool:
+    """Detect binary/gibberish text such as raw PDF bytes or ZIP/XML bodies.
+    Returns True if content should be considered non-readable.
+    """
+    if not text:
+        return False
+    t = text.strip()
+    # Common PDF/ZIP markers near the start
+    if any(m in t[:300] for m in ("%PDF-", "startxref", "endobj", "PK\x03\x04")):
+        return True
+    # Heuristic: if fewer than 70% characters are letters/digits/basic punctuation
+    import re as _re
+    allowed = _re.compile(r"[\w\s\.,;:'\-\(\)\[\]/&%]", _re.UNICODE)
+    total = len(t)
+    if total >= 24:
+        allowed_count = sum(1 for ch in t if allowed.match(ch))
+        if allowed_count / max(1, total) < 0.7:
+            return True
+    # Extremely long unbroken tokens (compressed-looking)
+    if any(len(tok) > 120 for tok in t.split()):
+        return True
+    return False
+
 def _read_text(path: str, encodings=("utf-8", "latin-1")) -> str:
     for enc in encodings:
         try:
@@ -136,8 +159,12 @@ def convert_to_markdown(file_path: str) -> Tuple[str, Dict[str, Any]]:
                     except Exception as e:
                         logger.warning("OCR fallback failed: %s", e)
 
-            # Final fallback: try raw decode
-            return _normalize_text(_read_text(str(p))), {**meta, "warning": "pdf extraction failed; raw decode used"}
+            # Final fallback: try raw decode but drop if binary
+            _raw = _read_text(str(p))
+            if _looks_like_binary_text(_raw):
+                logger.warning("PDF extraction failed and looked binary for %s; dropping text", p.name)
+                return "", {**meta, "warning": "pdf extraction failed; no readable text"}
+            return _normalize_text(_raw), {**meta, "warning": "pdf extraction failed; raw decode used"}
 
         if ext in {"docx"}:
             try:
@@ -150,7 +177,8 @@ def convert_to_markdown(file_path: str) -> Tuple[str, Dict[str, Any]]:
                 return text, meta
             except Exception as e:
                 logger.warning("DOCX conversion failed: %s", e)
-                return _read_text(str(p)), {**meta, "warning": "docx read failed"}
+                # Don't return raw ZIP bytes
+                return "", {**meta, "warning": "docx read failed; no readable text"}
 
         if ext in {"pptx"}:
             try:
@@ -169,7 +197,8 @@ def convert_to_markdown(file_path: str) -> Tuple[str, Dict[str, Any]]:
                 return "\n\n---\n\n".join(slides_text), meta
             except Exception as e:
                 logger.warning("PPTX conversion failed: %s", e)
-                return _read_text(str(p)), {**meta, "warning": "pptx read failed"}
+                # Don't return raw ZIP bytes
+                return "", {**meta, "warning": "pptx read failed; no readable text"}
 
         if ext in {"html", "htm"}:
             try:
@@ -240,7 +269,8 @@ def convert_to_markdown(file_path: str) -> Tuple[str, Dict[str, Any]]:
                     return "".join(md_parts), {**meta, "note": "excel parsed via openpyxl fallback"}
                 except Exception as e2:
                     logger.warning("Excel conversion via openpyxl failed: %s", e2)
-                    return _read_text(str(p)), {**meta, "warning": "excel to md failed"}
+                    # Don't return raw binary
+                    return "", {**meta, "warning": "excel to md failed; no readable text"}
 
         # Images and others: best-effort (no OCR by default)
         if ext in {"png", "jpg", "jpeg", "gif", "webp", "svg"}:

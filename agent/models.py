@@ -196,8 +196,6 @@ class AgentDependencies(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
-
-
 class AgentContext(BaseModel):
     """Agent execution context."""
     session_id: str
@@ -421,3 +419,91 @@ class HealthStatus(BaseModel):
     llm_connection: bool
     version: str
     timestamp: datetime
+
+
+# Proposal Generator models
+class CitationRef(BaseModel):
+    """Reference linking a statement to a source chunk."""
+    marker: int
+    chunk_id: str
+    document_source: str
+    document_title: Optional[str] = None
+    snippet: Optional[str] = None
+    page: Optional[int] = None
+
+
+class ProposalSection(BaseModel):
+    """A structured section of a proposal with optional citations."""
+    key: str
+    title: str
+    content: Optional[str] = None
+    citations: List[CitationRef] = Field(default_factory=list)
+    generation_meta: Dict[str, Any] = Field(default_factory=dict)
+
+
+class Proposal(BaseModel):
+    """Top-level proposal entity."""
+    id: Optional[str] = None
+    title: str
+    client_fields: Dict[str, Any] = Field(default_factory=dict)
+    project_fields: Dict[str, Any] = Field(default_factory=dict)
+    status: str = "draft"
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class ProposalVersion(BaseModel):
+    """Immutable snapshot of a proposal."""
+    id: Optional[str] = None
+    proposal_id: str
+    html: Optional[str] = None
+    sections: List[ProposalSection] = Field(default_factory=list)
+    citations: List[CitationRef] = Field(default_factory=list)
+    created_at: Optional[datetime] = None
+
+
+class ProposalCreateRequest(BaseModel):
+    """Create a new proposal draft."""
+    title: str
+    client_fields: Dict[str, Any] = Field(default_factory=dict)
+    project_fields: Dict[str, Any] = Field(default_factory=dict)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ProposalGenerateRequest(BaseModel):
+    """Generate a proposal section (stream or non-stream)."""
+    proposal_id: Optional[str] = None
+    section_title: str
+    section_instructions: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    search_type: SearchType = Field(default=SearchType.HYBRID)
+
+
+# Pricing Models
+class PricingItem(BaseModel):
+    """A line item for pricing tables."""
+    service: str = Field(..., description="Name of the service or item")
+    unit_price: float = Field(..., ge=0, description="Unit price of the service")
+    quantity: float = Field(default=1.0, ge=0, description="Quantity for the service")
+    description: Optional[str] = Field(default=None, description="Optional description")
+    currency_symbol: str = Field(default="$", description="Currency symbol to display, e.g., $ or €")
+
+
+class PricingParseResponse(BaseModel):
+    """Response from parsing a CSV/XLSX file of pricing items."""
+    items: List[PricingItem]
+    subtotal: float
+    total: float
+
+
+class PricingRenderRequest(BaseModel):
+    """Request to render pricing items into HTML table."""
+    items: List[PricingItem]
+    tax_rate_percent: float = Field(default=0.0, ge=0, description="Optional tax rate as percent, e.g., 8.25")
+    discount_amount: float = Field(default=0.0, ge=0, description="Optional discount flat amount")
+
+
+class PricingRenderResponse(BaseModel):
+    html: str
+    totals: Dict[str, float]

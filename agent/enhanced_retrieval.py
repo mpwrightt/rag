@@ -13,8 +13,11 @@ from .query_processor import QueryProcessor, ProcessedQuery, QueryIntent
 from .tools import (
     vector_search_tool,
     graph_search_tool,
+    get_document_tool,
     VectorSearchInput,
-    GraphSearchInput
+    GraphSearchInput,
+    DocumentInput,
+    _looks_like_binary_text,
 )
 from .context import emit_retrieval_event
 
@@ -287,6 +290,7 @@ class EnhancedRetriever:
                 limit=config.get("vector_limit", 20),
                 collection_ids=config.get("collection_ids"),
                 document_ids=config.get("document_ids"),
+                chunk_ids=config.get("chunk_ids"),
             )
             raw_results = await vector_search_tool(vector_input)
             
@@ -313,6 +317,7 @@ class EnhancedRetriever:
                         limit=5,
                         collection_ids=config.get("collection_ids"),
                         document_ids=config.get("document_ids"),
+                        chunk_ids=config.get("chunk_ids"),
                     )
                     exp_results = await vector_search_tool(exp_input)
                     for r in exp_results:
@@ -329,10 +334,43 @@ class EnhancedRetriever:
                             },
                             "relevance_score": r.score * 0.85
                         })
-            
+
+            # Fallback: if still nothing but we're scoped to specific docs, seed with their first chunks
+            if not results and config.get("document_ids"):
+                doc_ids = list(config.get("document_ids") or [])[:8]
+                for doc_id in doc_ids:
+                    try:
+                        doc = await get_document_tool(DocumentInput(document_id=doc_id))
+                        if not doc:
+                            continue
+                        chunks = (doc.get("chunks") or [])
+                        # Find the first readable chunk
+                        seed = None
+                        for ch in chunks:
+                            ctext = (ch or {}).get("content", "")
+                            if ctext and not _looks_like_binary_text(ctext):
+                                seed = ch
+                                break
+                        if not seed:
+                            continue
+                        results.append({
+                            "type": "seed_chunk",
+                            "content": seed.get("content", ""),
+                            "metadata": {
+                                "chunk_id": seed.get("id") or seed.get("chunk_id"),
+                                "document_title": doc.get("title"),
+                                "document_source": doc.get("source"),
+                                "original_score": 0.55,
+                                "seed": True
+                            },
+                            "relevance_score": 0.55
+                        })
+                    except Exception as se:
+                        logger.warning(f"Seeding chunk for doc {doc_id} failed: {se}")
         except Exception as e:
-            logger.error(f"Vector search failed: {e}")
-        
+            logger.error(f"Vector search stage failed: {e}", exc_info=True)
+            # Ensure results is defined
+            results = results or []
         # Log step
         step = RetrievalStep(
             step_name="vector_search",
@@ -349,9 +387,8 @@ class EnhancedRetriever:
             }
         )
         context.steps.append(step)
-        
         return results
-    
+
     async def _fuse_results(self, context: RetrievalContext) -> List[Dict]:
         """Fuse and rerank results from different sources."""
         step_start = datetime.now()

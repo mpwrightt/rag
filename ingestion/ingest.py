@@ -48,7 +48,8 @@ class DocumentIngestionPipeline:
         self,
         config: IngestionConfig,
         documents_folder: str = "documents",
-        clean_before_ingest: bool = False
+        clean_before_ingest: bool = False,
+        default_metadata: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize ingestion pipeline.
@@ -61,6 +62,7 @@ class DocumentIngestionPipeline:
         self.config = config
         self.documents_folder = documents_folder
         self.clean_before_ingest = clean_before_ingest
+        self.default_metadata = default_metadata or {}
         
         # Initialize components
         self.chunker_config = ChunkingConfig(
@@ -127,7 +129,8 @@ class DocumentIngestionPipeline:
     
     async def ingest_documents(
         self,
-        progress_callback: Optional[callable] = None
+        progress_callback: Optional[callable] = None,
+        extra_metadata: Optional[Dict[str, Any]] = None,
     ) -> List[IngestionResult]:
         """
         Ingest all documents from the documents folder.
@@ -160,7 +163,10 @@ class DocumentIngestionPipeline:
             try:
                 logger.info(f"Processing file {i+1}/{len(markdown_files)}: {file_path}")
                 
-                result = await self._ingest_single_document(file_path)
+                result = await self._ingest_single_document(
+                    file_path,
+                    extra_metadata=extra_metadata,
+                )
                 results.append(result)
                 
                 if progress_callback:
@@ -186,7 +192,7 @@ class DocumentIngestionPipeline:
         
         return results
     
-    async def _ingest_single_document(self, file_path: str) -> IngestionResult:
+    async def _ingest_single_document(self, file_path: str, *, extra_metadata: Optional[Dict[str, Any]] = None) -> IngestionResult:
         """
         Ingest a single document.
         
@@ -203,8 +209,24 @@ class DocumentIngestionPipeline:
         document_title = self._extract_title(document_content, file_path)
         document_source = os.path.relpath(file_path, self.documents_folder)
         
-        # Extract metadata from content
+        # Extract metadata from content and merge defaults/overrides
         document_metadata = self._extract_document_metadata(document_content, file_path)
+        try:
+            merged: Dict[str, Any] = {}
+            # default_metadata from pipeline init
+            if isinstance(self.default_metadata, dict):
+                merged.update(self.default_metadata)
+            # extracted
+            if isinstance(document_metadata, dict):
+                # extracted should not override explicit defaults like proposal_id unless missing
+                merged.update({k: v for k, v in document_metadata.items() if k not in merged})
+            # per-call overrides
+            if isinstance(extra_metadata, dict):
+                merged.update(extra_metadata)
+            document_metadata = merged
+        except Exception:
+            # if anything goes wrong, keep extracted
+            pass
         
         logger.info(f"Processing document: {document_title}")
         

@@ -90,6 +90,7 @@ async def vector_search(
         limit=limit,
         collection_ids=filters.get('collection_ids'),
         document_ids=filters.get('document_ids'),
+        chunk_ids=filters.get('chunk_ids'),
     )
     
     # Emit retrieval start
@@ -169,6 +170,19 @@ async def graph_search(
     Returns:
         List of facts with associated episodes and temporal data
     """
+    # Respect scoping: if the request is scoped to documents/collections, skip graph search
+    session_id = getattr(getattr(ctx, 'deps', None), 'session_id', None)
+    filters = getattr(getattr(ctx, 'deps', None), 'search_preferences', {}) or {}
+    if filters.get('collection_ids') or filters.get('document_ids'):
+        if session_id:
+            await emit_retrieval_event(session_id, {
+                "type": "retrieval",
+                "event": "skip",
+                "tool": "graph_search",
+                "reason": "scoped_to_documents_or_collections"
+            })
+        return []
+
     # Ensure graph client is initialized
     from .graph_utils import graph_client
     try:
@@ -179,7 +193,6 @@ async def graph_search(
     input_data = GraphSearchInput(query=query)
 
     # Emit retrieval start
-    session_id = getattr(getattr(ctx, 'deps', None), 'session_id', None)
     start_ts = time.perf_counter()
     if session_id:
         await emit_retrieval_event(session_id, {
@@ -262,6 +275,7 @@ async def hybrid_search(
         text_weight=text_weight,
         collection_ids=filters.get('collection_ids'),
         document_ids=filters.get('document_ids'),
+        chunk_ids=filters.get('chunk_ids'),
     )
     
     # Emit retrieval start
@@ -346,13 +360,16 @@ async def guided_retrieval(
     
     # Configuration for retrieval
     filters = getattr(getattr(ctx, 'deps', None), 'search_preferences', {}) or {}
+    # If scoped to specific docs/collections, avoid unscoped graph facts
+    scoped = bool(filters.get("collection_ids") or filters.get("document_ids"))
     config = {
-        "use_graph": True,
+        "use_graph": False if scoped else True,
         "use_vector": True,
         "use_query_expansion": True,
         "vector_limit": limit * 2,  # Get more candidates for reranking
         "collection_ids": filters.get("collection_ids"),
         "document_ids": filters.get("document_ids"),
+        "chunk_ids": filters.get("chunk_ids"),
     }
     
     # Execute enhanced retrieval

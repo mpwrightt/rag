@@ -251,6 +251,30 @@ CREATE INDEX IF NOT EXISTS idx_search_analytics_created_at ON search_analytics (
 CREATE INDEX IF NOT EXISTS idx_processing_jobs_document_id ON processing_jobs (document_id);
 CREATE INDEX IF NOT EXISTS idx_processing_jobs_status ON processing_jobs (status, job_type);
 
+-- Proposals and Versions (Proposal Generator)
+CREATE TABLE IF NOT EXISTS proposals (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    title TEXT NOT NULL,
+    client_fields JSONB DEFAULT '{}',
+    project_fields JSONB DEFAULT '{}',
+    status TEXT DEFAULT 'draft',
+    metadata JSONB DEFAULT '{}',
+    created_by TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS proposal_versions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    proposal_id UUID NOT NULL REFERENCES proposals(id) ON DELETE CASCADE,
+    html TEXT,
+    sections JSONB DEFAULT '[]',
+    citations JSONB DEFAULT '[]',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_proposal_versions_proposal_id ON proposal_versions (proposal_id);
+
 -- Analytics Functions
 CREATE OR REPLACE FUNCTION get_chat_activity_metrics(
     start_date TIMESTAMP WITH TIME ZONE DEFAULT NOW() - INTERVAL '7 days',
