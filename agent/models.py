@@ -2,6 +2,7 @@
 Pydantic models for data validation and serialization.
 """
 
+import os
 from typing import List, Dict, Any, Optional, Literal
 from datetime import datetime
 from uuid import UUID
@@ -158,8 +159,17 @@ class Chunk(BaseModel):
     @classmethod
     def validate_embedding(cls, v: Optional[List[float]]) -> Optional[List[float]]:
         """Validate embedding dimensions."""
-        if v is not None and len(v) != 1536:  # OpenAI text-embedding-3-small
-            raise ValueError(f"Embedding must have 1536 dimensions, got {len(v)}")
+        if v is None:
+            return None
+        valid_dims = {768, 1536, 3072}
+        env_dim = os.getenv("VECTOR_DIMENSION")
+        if env_dim:
+            try:
+                valid_dims.add(int(env_dim))
+            except ValueError:
+                pass
+        if len(v) not in valid_dims:
+            raise ValueError(f"Embedding must have one of the supported dimensions {sorted(valid_dims)}, got {len(v)}")
         return v
 
 
@@ -186,16 +196,6 @@ class Message(BaseModel):
 
 
 # Agent Models
-class AgentDependencies(BaseModel):
-    """Dependencies for the agent."""
-    session_id: str
-    database_url: Optional[str] = None
-    neo4j_uri: Optional[str] = None
-    openai_api_key: Optional[str] = None
-    
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-
 class AgentContext(BaseModel):
     """Agent execution context."""
     session_id: str
@@ -421,89 +421,36 @@ class HealthStatus(BaseModel):
     timestamp: datetime
 
 
-# Proposal Generator models
-class CitationRef(BaseModel):
-    """Reference linking a statement to a source chunk."""
-    marker: int
-    chunk_id: str
-    document_source: str
-    document_title: Optional[str] = None
-    snippet: Optional[str] = None
-    page: Optional[int] = None
-
-
-class ProposalSection(BaseModel):
-    """A structured section of a proposal with optional citations."""
-    key: str
-    title: str
-    content: Optional[str] = None
-    citations: List[CitationRef] = Field(default_factory=list)
-    generation_meta: Dict[str, Any] = Field(default_factory=dict)
-
-
-class Proposal(BaseModel):
-    """Top-level proposal entity."""
-    id: Optional[str] = None
-    title: str
-    client_fields: Dict[str, Any] = Field(default_factory=dict)
-    project_fields: Dict[str, Any] = Field(default_factory=dict)
-    status: str = "draft"
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
-
-
-class ProposalVersion(BaseModel):
-    """Immutable snapshot of a proposal."""
-    id: Optional[str] = None
-    proposal_id: str
-    html: Optional[str] = None
-    sections: List[ProposalSection] = Field(default_factory=list)
-    citations: List[CitationRef] = Field(default_factory=list)
-    created_at: Optional[datetime] = None
-
-
-class ProposalCreateRequest(BaseModel):
-    """Create a new proposal draft."""
-    title: str
-    client_fields: Dict[str, Any] = Field(default_factory=dict)
-    project_fields: Dict[str, Any] = Field(default_factory=dict)
+# Phase 1 Incremental Update Request Models
+class DocumentMetadataUpdateRequest(BaseModel):
+    """Request payload to update a document's metadata only (no re-embedding)."""
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
-class ProposalGenerateRequest(BaseModel):
-    """Generate a proposal section (stream or non-stream)."""
-    proposal_id: Optional[str] = None
-    section_title: str
-    section_instructions: Optional[str] = None
+class ChunkMetadataBatchUpdateRequest(BaseModel):
+    """Bulk update metadata for multiple chunks."""
+    chunk_ids: List[str]
     metadata: Dict[str, Any] = Field(default_factory=dict)
-    search_type: SearchType = Field(default=SearchType.HYBRID)
 
 
-# Pricing Models
-class PricingItem(BaseModel):
-    """A line item for pricing tables."""
-    service: str = Field(..., description="Name of the service or item")
-    unit_price: float = Field(..., ge=0, description="Unit price of the service")
-    quantity: float = Field(default=1.0, ge=0, description="Quantity for the service")
-    description: Optional[str] = Field(default=None, description="Optional description")
-    currency_symbol: str = Field(default="$", description="Currency symbol to display, e.g., $ or €")
+class AddTagsRequest(BaseModel):
+    """Add tags to a document (idempotent)."""
+    tags: List[str]
 
 
-class PricingParseResponse(BaseModel):
-    """Response from parsing a CSV/XLSX file of pricing items."""
-    items: List[PricingItem]
-    subtotal: float
-    total: float
+class UpdateClassificationChunkCategory(BaseModel):
+    """Chunk category update item used in classification updates."""
+    chunk_ids: List[str]
+    category: str
 
 
-class PricingRenderRequest(BaseModel):
-    """Request to render pricing items into HTML table."""
-    items: List[PricingItem]
-    tax_rate_percent: float = Field(default=0.0, ge=0, description="Optional tax rate as percent, e.g., 8.25")
-    discount_amount: float = Field(default=0.0, ge=0, description="Optional discount flat amount")
+class UpdateClassificationRequest(BaseModel):
+    """Update document classification and optional chunk categories without re-embedding."""
+    domain: Optional[str] = None
+    domain_confidence: Optional[float] = None
+    chunk_category_updates: List[UpdateClassificationChunkCategory] = Field(default_factory=list)
 
 
-class PricingRenderResponse(BaseModel):
-    html: str
-    totals: Dict[str, float]
+class UpdateCollectionsRequest(BaseModel):
+    """Add or remove collection memberships for a document."""
+    collection_ids: List[str]

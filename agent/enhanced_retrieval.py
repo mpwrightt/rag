@@ -220,8 +220,8 @@ class EnhancedRetriever:
             raw_results = await graph_search_tool(graph_input)
             logger.info(f"Graph search returned {len(raw_results)} results")
             
-            # Convert to standardized format
-            for r in raw_results[:20]:  # Limit to top 20
+            # Convert to standardized format (optimized for 1M context)
+            for r in raw_results[:50]:  # Increased from 20 to 50
                 results.append({
                     "type": "graph_fact",
                     "content": r.fact,
@@ -238,9 +238,9 @@ class EnhancedRetriever:
             if len(raw_results) == 0:
                 logger.warning("No graph results found - graph may be empty")
             
-            for entity in query.entities[:3]:  # Top 3 entities
+            for entity in query.entities[:5]:  # Increased to top 5 entities
                 entity_facts = await self._search_entity_facts(entity["text"])
-                for fact in entity_facts[:5]:  # Top 5 facts per entity
+                for fact in entity_facts[:10]:  # Increased to top 10 facts per entity
                     results.append({
                         "type": "entity_fact",
                         "content": fact["content"],
@@ -284,10 +284,10 @@ class EnhancedRetriever:
         results = []
         
         try:
-            # Initial vector search
+            # Initial vector search (optimized for 1M context)
             vector_input = VectorSearchInput(
                 query=query.vector_query,
-                limit=config.get("vector_limit", 20),
+                limit=config.get("vector_limit", 100),  # Increased from 20 to 100
                 collection_ids=config.get("collection_ids"),
                 document_ids=config.get("document_ids"),
                 chunk_ids=config.get("chunk_ids"),
@@ -308,13 +308,13 @@ class EnhancedRetriever:
                     "relevance_score": r.score
                 })
             
-            # Query expansion for better recall
+            # Query expansion for better recall (leveraging 1M context)
             if config.get("use_query_expansion", True):
                 expanded_queries = self._expand_query(query)
-                for exp_query in expanded_queries[:2]:  # Top 2 expansions
+                for exp_query in expanded_queries[:3]:  # Increased to top 3 expansions
                     exp_input = VectorSearchInput(
                         query=exp_query,
-                        limit=5,
+                        limit=20,  # Increased from 5 to 20
                         collection_ids=config.get("collection_ids"),
                         document_ids=config.get("document_ids"),
                         chunk_ids=config.get("chunk_ids"),

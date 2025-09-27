@@ -392,15 +392,26 @@ export default function ModernRAGChatPage() {
     try {
       const controller = new AbortController()
       const startTime = Date.now()
-      // Generate a valid UUID v4 for session ID
-      const sessionId = crypto.randomUUID()
+
+      // Generate session ID only once per conversation, then reuse it
+      if (!sessionIdRef.current) {
+        sessionIdRef.current = crypto.randomUUID()
+      }
+
+      // Include conversation history for context retention
+      const conversationHistory = [...messages, userMessage].map(msg => ({
+        role: msg.role,
+        content: msg.content
+      }))
+
       const res = await fetch(`${API_BASE}/chat/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'bypass-tunnel-reminder': 'true' },
         body: JSON.stringify({
           message: prompt,
+          conversation_history: conversationHistory,
           search_type: chatSettings.searchMode,
-          session_id: sessionId,
+          session_id: sessionIdRef.current,
           metadata: {
             force_guided: true,
             selectedCollections: chatSettings.selectedCollections || [],
@@ -553,7 +564,7 @@ export default function ModernRAGChatPage() {
       setIsLoading(false)
       setStreamingText('')
     }
-  }, [API_BASE, chatSettings.searchMode, isLoading])
+  }, [API_BASE, chatSettings.searchMode, isLoading, messages])
 
   // Copy confidence metrics helper
   const copyConfidenceMetrics = useCallback((message: ChatMessage) => {
@@ -703,6 +714,8 @@ export default function ModernRAGChatPage() {
   const clearChat = useCallback(() => {
     setMessages([])
     setActiveSources([])
+    setLiveRetrieval([])
+    // Reset session ID to start a new conversation
     sessionIdRef.current = null
   }, [])
 

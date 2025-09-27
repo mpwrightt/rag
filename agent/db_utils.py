@@ -172,11 +172,59 @@ async def initialize_database():
         await ensure_summary_jobs_table()
     except Exception as e:
         logger.warning(f"Failed to ensure summary_jobs table: {e}")
+    # Ensure Phase 2 incremental update schema
+    try:
+        await ensure_incremental_update_schema()
+    except Exception as e:
+        logger.warning(f"Failed to ensure incremental update schema: {e}")
 
 
 async def close_database():
     """Close database connection pool."""
     await db_pool.close()
+
+
+async def ensure_incremental_update_schema():
+    """
+    Ensure Phase 2 incremental update columns and indexes exist on documents/chunks.
+    Non-fatal if tables/columns already exist.
+    """
+    async with db_pool.acquire() as conn:
+        try:
+            # Use a transaction and IF NOT EXISTS to keep this idempotent
+            async with conn.transaction():
+                # Documents table alterations
+                await conn.execute("""
+                    ALTER TABLE documents
+                        ADD COLUMN IF NOT EXISTS version INTEGER DEFAULT 1,
+                        ADD COLUMN IF NOT EXISTS content_hash TEXT,
+                        ADD COLUMN IF NOT EXISTS last_content_update TIMESTAMPTZ DEFAULT NOW();
+                """)
+
+                # Chunks table alterations
+                await conn.execute("""
+                    ALTER TABLE chunks
+                        ADD COLUMN IF NOT EXISTS last_updated TIMESTAMPTZ DEFAULT NOW(),
+                        ADD COLUMN IF NOT EXISTS change_type TEXT DEFAULT 'original',
+                        ADD COLUMN IF NOT EXISTS archived BOOLEAN DEFAULT FALSE;
+                """)
+
+                # Indexes
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_documents_content_hash ON documents(content_hash);
+                """)
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_chunks_last_updated ON chunks(last_updated);
+                """)
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_chunks_archived ON chunks(archived) WHERE archived = FALSE;
+                """)
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_chunks_change_type ON chunks(change_type);
+                """)
+        except Exception:
+            logger.exception("ensure_incremental_update_schema failed")
+            raise
 
 
 # -------------------------
@@ -484,6 +532,145 @@ async def get_session_messages(
             }
             for row in results
         ]
+
+
+# -------------------------
+# Incremental Update Helpers (Phase 1)
+# -------------------------
+async def update_document_metadata_only(document_id: str, metadata: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    Merge new metadata into an existing document's metadata JSONB without touching content/embeddings.
+
+    Args:
+        document_id: Document UUID
+        metadata: Top-level keys to merge into metadata (new values override existing keys)
+
+    Returns:
+        Updated document summary (id, metadata, updated_at) or None if not found
+    """
+    if not isinstance(metadata, dict) or not metadata:
+        return None
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            UPDATE documents
+            SET metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = $1::uuid
+            RETURNING id::text AS id, metadata, updated_at
+            """,
+            document_id,
+            json.dumps(metadata),
+        )
+        if not row:
+            return None
+        return {
+            "id": row["id"],
+            "metadata": row["metadata"] if isinstance(row["metadata"], dict) else (json.loads(row["metadata"]) if row["metadata"] else {}),
+            "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+        }
+
+
+async def update_chunk_metadata_batch(chunk_ids: List[str], metadata: Dict[str, Any]) -> int:
+    """
+    Bulk-merge metadata into multiple chunks without changing content/embeddings.
+
+    Args:
+        chunk_ids: List of chunk UUIDs
+        metadata: Metadata keys/values to merge
+
+    Returns:
+        Number of chunks updated
+    """
+    if not chunk_ids or not isinstance(metadata, dict) or not metadata:
+        return 0
+
+    # Validate UUIDs defensively to avoid transaction aborts
+    valid_ids: List[str] = []
+    for cid in chunk_ids:
+        try:
+            valid_ids.append(str(UUID(str(cid))))
+        except Exception:
+            continue
+    if not valid_ids:
+        return 0
+
+    async with db_pool.acquire() as conn:
+        result = await conn.execute(
+            """
+            UPDATE chunks
+            SET metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb
+            WHERE id = ANY($1::uuid[])
+            """,
+            valid_ids,
+            json.dumps(metadata),
+        )
+        # result e.g. 'UPDATE 5'
+        try:
+            return int(result.split()[-1]) if result and result.startswith("UPDATE") else 0
+        except Exception:
+            return 0
+
+
+async def add_document_tags(document_id: str, tags: List[str]) -> int:
+    """
+    Ensure tag records exist and link them to a document (idempotent).
+
+    Args:
+        document_id: Document UUID
+        tags: List of tag names to add
+
+    Returns:
+        Number of new tag links created (existing links are ignored)
+    """
+    if not tags:
+        return 0
+
+    # Normalize and dedupe tag names
+    tag_names = sorted({(t or '').strip() for t in tags if (t or '').strip()})
+    if not tag_names:
+        return 0
+
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            # Insert any missing tags
+            await conn.execute(
+                """
+                INSERT INTO tags (name)
+                SELECT name FROM UNNEST($1::text[]) AS u(name)
+                ON CONFLICT (name) DO NOTHING
+                """,
+                tag_names,
+            )
+
+            # Fetch tag ids
+            rows = await conn.fetch(
+                """
+                SELECT id::uuid AS id, name FROM tags WHERE name = ANY($1::text[])
+                """,
+                tag_names,
+            )
+            tag_ids = [str(r["id"]) for r in rows]
+            if not tag_ids:
+                return 0
+
+            # Link tags to document (idempotent)
+            inserted = await conn.fetchval(
+                """
+                WITH ids AS (
+                    SELECT t::uuid AS tag_id FROM UNNEST($2::text[]) AS t(t)
+                ), ins AS (
+                    INSERT INTO document_tags (document_id, tag_id)
+                    SELECT $1::uuid, i.tag_id FROM ids i
+                    ON CONFLICT (document_id, tag_id) DO NOTHING
+                    RETURNING 1
+                )
+                SELECT COALESCE(COUNT(*), 0)::int FROM ins
+                """,
+                document_id,
+                tag_ids,
+            )
+            return int(inserted or 0)
 
 
 # Document Management Functions
@@ -1160,6 +1347,106 @@ async def list_collection_documents_db(
             for r in rows
         ]
         return docs, int(total or 0)
+
+
+async def list_document_collections_ids(document_id: str) -> List[str]:
+    """Return collection IDs that a document belongs to."""
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT collection_id::text AS cid FROM collection_documents WHERE document_id = $1::uuid",
+            document_id,
+        )
+        return [r["cid"] for r in rows]
+
+
+async def update_document_collections_db(
+    document_id: str,
+    collection_ids: List[str],
+    *,
+    added_by: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Set the exact set of collections for a document by diffing current memberships.
+
+    Args:
+        document_id: Document UUID
+        collection_ids: Desired collection IDs (strings) for the document
+        added_by: Optional actor identifier to stamp on new links
+
+    Returns:
+        {"added": int, "removed": int, "collections": List[str]}
+    """
+    # Normalize and validate UUIDs
+    desired: List[str] = []
+    for cid in collection_ids or []:
+        try:
+            desired.append(str(UUID(str(cid))))
+        except Exception:
+            continue
+
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            # Current memberships
+            current_rows = await conn.fetch(
+                "SELECT collection_id::text AS cid FROM collection_documents WHERE document_id = $1::uuid",
+                document_id,
+            )
+            current = {r["cid"] for r in current_rows}
+            desired_set = set(desired)
+
+            to_add = sorted(list(desired_set - current))
+            to_remove = sorted(list(current - desired_set))
+
+            added_count = 0
+            removed_count = 0
+
+            if to_add:
+                # Insert links in bulk, ignore conflicts
+                await conn.execute(
+                    """
+                    INSERT INTO collection_documents (collection_id, document_id, added_by)
+                    SELECT c::uuid, $1::uuid, $3 FROM UNNEST($2::text[]) AS t(c)
+                    ON CONFLICT (collection_id, document_id) DO NOTHING
+                    """,
+                    document_id,
+                    to_add,
+                    added_by,
+                )
+                # Count actual inserted by checking now-membership
+                now_rows = await conn.fetch(
+                    "SELECT collection_id::text AS cid FROM collection_documents WHERE document_id = $1::uuid AND collection_id = ANY($2::uuid[])",
+                    document_id,
+                    to_add,
+                )
+                added_count = len(now_rows) - len(current.intersection(set(to_add)))
+
+            if to_remove:
+                res = await conn.execute(
+                    "DELETE FROM collection_documents WHERE document_id = $1::uuid AND collection_id = ANY($2::uuid[])",
+                    document_id,
+                    to_remove,
+                )
+                try:
+                    removed_count = int(res.split()[-1]) if res and res.startswith("DELETE") else 0
+                except Exception:
+                    removed_count = 0
+
+            # Sync document_count for affected collections
+            affected = list(set(to_add + to_remove))
+            if affected:
+                await conn.execute(
+                    """
+                    UPDATE collections c
+                    SET document_count = (
+                        SELECT COUNT(*) FROM collection_documents cd WHERE cd.collection_id = c.id
+                    ),
+                    updated_at = CURRENT_TIMESTAMP
+                    WHERE c.id = ANY($1::uuid[])
+                    """,
+                    affected,
+                )
+
+            return {"added": added_count, "removed": removed_count, "collections": sorted(list(desired_set))}
 
 
 # Vector Search Functions

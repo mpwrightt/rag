@@ -8,12 +8,13 @@ import json
 import logging
 import tempfile
 import shutil
+from pathlib import Path
 import re
 import glob
-from pathlib import Path
+from contextlib import asynccontextmanager
+from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
 import uuid
-from typing import Dict, Any, List, Optional
 
 from fastapi import FastAPI, HTTPException, Request, Depends, UploadFile, File, Form
 from fastapi.responses import StreamingResponse, Response, JSONResponse
@@ -21,7 +22,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 import uvicorn
 from dotenv import load_dotenv
-from contextlib import asynccontextmanager
 
 from .agent import rag_agent, AgentDependencies
 from .enhanced_retrieval import EnhancedRetriever
@@ -40,6 +40,10 @@ from .db_utils import (
     get_graph_statistics,
     search_facts,
     search_facts_websearch,
+    # Incremental update helpers
+    update_document_metadata_only,
+    update_chunk_metadata_batch,
+    add_document_tags,
     # Collections
     list_collections_db,
     create_collection_db,
@@ -48,6 +52,7 @@ from .db_utils import (
     add_documents_to_collection_db,
     remove_document_from_collection_db,
     list_collection_documents_db,
+    update_document_collections_db,
     # Summary jobs
     create_summary_job,
     update_summary_job_status,
@@ -55,18 +60,6 @@ from .db_utils import (
     get_summary_job,
     cancel_summary_job,
     is_summary_job_cancelled,
-    # Proposals
-    create_proposal_db,
-    get_proposal_db,
-    list_proposals_db,
-    create_proposal_version_db,
-    get_latest_proposal_version_db,
-    get_proposal_version_db,
-    list_proposal_versions_db,
-    update_proposal_db,
-    update_document_metadata,
-    list_proposal_documents_db,
-    delete_document,
 )
 from .graph_utils import (
     initialize_graph,
@@ -76,8 +69,6 @@ from .graph_utils import (
     search_knowledge_graph as kg_search_knowledge_graph,
 )
 from .query_processor import QueryProcessor
-from ingestion.converters import convert_to_markdown
-from .proposal_analyzer import analyze_example_text
 from .models import (
     ChatRequest,
     ChatResponse,
@@ -95,12 +86,11 @@ from .models import (
     DocumentUsageStats,
     UserEngagementMetrics,
     AnalyticsDashboardResponse,
-    ProposalCreateRequest,
-    ProposalGenerateRequest,
-    PricingItem,
-    PricingParseResponse,
-    PricingRenderRequest,
-    PricingRenderResponse,
+    DocumentMetadataUpdateRequest,
+    ChunkMetadataBatchUpdateRequest,
+    AddTagsRequest,
+    UpdateClassificationRequest,
+    UpdateCollectionsRequest,
 )
 from .tools import (
     vector_search_tool,
@@ -170,30 +160,6 @@ except ImportError as e:
     def create_google_drive_integration(*args, **kwargs): return None
     def create_dropbox_integration(*args, **kwargs): return None
     def create_onedrive_integration(*args, **kwargs): return None
-
-# WeasyPrint (PDF export)
-try:
-    from weasyprint import HTML, CSS  # type: ignore
-    WEASYPRINT_AVAILABLE = True
-except Exception as e:
-    WEASYPRINT_AVAILABLE = False
-    logger.warning(f"WeasyPrint not available: {e}")
-
-# Optional: Pandas for CSV/XLSX pricing parsing
-try:
-    import pandas as pd  # type: ignore
-    PANDAS_AVAILABLE = True
-except Exception as e:
-    PANDAS_AVAILABLE = False
-    logger.warning(f"Pandas not available: {e}")
-
-# Optional: python-docx for DOCX export
-try:
-    from docx import Document  # type: ignore
-    DOCX_AVAILABLE = True
-except Exception as e:
-    DOCX_AVAILABLE = False
-    logger.warning(f"python-docx not available: {e}")
 
 # Application configuration
 APP_ENV = os.getenv("APP_ENV", "development")
@@ -830,104 +796,105 @@ async def api_add_documents_to_collection(collection_id: str, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/proposals/{proposal_id}/regulatory")
-async def list_proposal_regulatory(proposal_id: str):
-    """List regulatory docs linked to this proposal."""
+# -------------------------
+# Phase 1: Incremental Update Endpoints (metadata-only, no embeddings)
+# -------------------------
+
+@app.patch("/documents/{document_id}/metadata")
+async def patch_document_metadata(document_id: str, req: DocumentMetadataUpdateRequest):
+    """Merge metadata into a document without re-embedding."""
     try:
-        prop = await get_proposal_db(proposal_id)
-        if not prop:
-            raise HTTPException(status_code=404, detail="Proposal not found")
-        docs = await list_proposal_documents_db(proposal_id, source_type="regulatory")
-        return {"proposal_id": proposal_id, "documents": docs}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"List proposal regulatory failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/proposals/{proposal_id}/regulatory/upload")
-async def upload_proposal_regulatory(
-    proposal_id: str,
-    file: UploadFile = File(...),
-    fast: bool = True,
-):
-    """Upload regulatory doc for a proposal and ingest it with proposal scoping."""
-    if not INGESTION_AVAILABLE:
-        raise HTTPException(status_code=503, detail="Document ingestion pipeline is not available")
-    try:
-        prop = await get_proposal_db(proposal_id)
-        if not prop:
-            raise HTTPException(status_code=404, detail="Proposal not found")
-
-        allowed_extensions = {'.txt', '.md', '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.csv', '.tsv'}
-        ext = os.path.splitext(file.filename or '')[1].lower()
-        if ext not in allowed_extensions:
-            raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # Save upload
-            src_path = Path(temp_dir) / (file.filename or 'upload')
-            size_bytes = 0
-            with open(src_path, 'wb') as f:
-                while True:
-                    chunk = await file.read(8 * 1024 * 1024)
-                    if not chunk:
-                        break
-                    size_bytes += len(chunk)
-                    f.write(chunk)
-
-            # Convert to markdown
-            md_text, conv_meta = convert_to_markdown(str(src_path))
-            if not md_text or not md_text.strip():
-                raise HTTPException(status_code=400, detail="No extractable text content found in the uploaded file")
-            md_path = Path(temp_dir) / f"{Path(file.filename or 'upload').stem}.md"
-            with open(md_path, 'w', encoding='utf-8') as f_md:
-                f_md.write(md_text)
-
-            # Ingest with proposal metadata
-            config = IngestionConfig(
-                chunk_size=int(os.getenv("CHUNK_SIZE", "800")),
-                chunk_overlap=int(os.getenv("CHUNK_OVERLAP", "150")),
-                max_chunk_size=int(os.getenv("MAX_CHUNK_SIZE", "1500")),
-                use_semantic_splitting=False,
-                # Skip knowledge graph building for faster uploads unless fast=false is provided
-                skip_graph_building=bool(fast),
-            )
-            pipeline = DocumentIngestionPipeline(
-                config=config,
-                documents_folder=temp_dir,
-                clean_before_ingest=False,
-                default_metadata={"proposal_id": proposal_id, "proposal_source_type": "regulatory"},
-            )
-            results = await pipeline.ingest_documents()
-            # Document and chunks are saved before graph building; return IDs regardless of graph errors.
-            doc_ids = [r.document_id for r in results if getattr(r, 'document_id', '')]
-            return {"success": True, "document_ids": doc_ids}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Upload proposal regulatory failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.delete("/proposals/{proposal_id}/regulatory/{document_id}")
-async def delete_proposal_regulatory(proposal_id: str, document_id: str):
-    """Delete a regulatory document from this proposal."""
-    try:
-        # Ensure doc belongs to proposal
-        docs = await list_proposal_documents_db(proposal_id, source_type="regulatory")
-        if not any(d.get("id") == document_id for d in docs):
-            raise HTTPException(status_code=404, detail="Document not found for this proposal")
-        ok = await delete_document(document_id)
-        if not ok:
+        if not req or not isinstance(req.metadata, dict) or not req.metadata:
+            raise HTTPException(status_code=400, detail="metadata is required and must be a non-empty object")
+        updated = await update_document_metadata_only(document_id, req.metadata)
+        if not updated:
             raise HTTPException(status_code=404, detail="Document not found")
-        return {"success": True}
+        return {"document_id": updated["id"], "metadata": updated["metadata"], "updated_at": updated["updated_at"]}
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Delete proposal regulatory failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Failed to update document metadata: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to update document metadata")
+
+
+@app.patch("/chunks/metadata")
+async def patch_chunks_metadata(req: ChunkMetadataBatchUpdateRequest):
+    """Bulk-merge metadata for multiple chunks without re-embedding."""
+    try:
+        if not req or not req.chunk_ids or not isinstance(req.metadata, dict) or not req.metadata:
+            raise HTTPException(status_code=400, detail="chunk_ids and non-empty metadata are required")
+        updated_count = await update_chunk_metadata_batch(req.chunk_ids, req.metadata)
+        return {"updated": updated_count}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to update chunk metadata batch: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to update chunk metadata")
+
+
+@app.post("/documents/{document_id}/tags")
+async def post_document_tags(document_id: str, req: AddTagsRequest):
+    """Add tags to a document (idempotent)."""
+    try:
+        if not req or not req.tags:
+            raise HTTPException(status_code=400, detail="tags array is required")
+        added = await add_document_tags(document_id, req.tags)
+        return {"document_id": document_id, "added": added}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to add document tags: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to add document tags")
+
+
+@app.post("/documents/{document_id}/classification")
+async def post_document_classification(document_id: str, req: UpdateClassificationRequest):
+    """Update document domain classification and optional chunk categories without re-embedding."""
+    try:
+        total_chunk_updates = 0
+        # Update document-level classification in metadata if provided
+        doc_meta: Dict[str, Any] = {}
+        if req and req.domain:
+            doc_meta["domain"] = req.domain
+        if req and req.domain_confidence is not None:
+            doc_meta["domain_confidence"] = req.domain_confidence
+        if doc_meta:
+            updated = await update_document_metadata_only(document_id, doc_meta)
+            if not updated:
+                raise HTTPException(status_code=404, detail="Document not found")
+
+        # Update chunk categories in batch per group
+        if req and req.chunk_category_updates:
+            for update in req.chunk_category_updates:
+                if update.chunk_ids and update.category:
+                    total_chunk_updates += await update_chunk_metadata_batch(update.chunk_ids, {"category": update.category})
+
+        return {
+            "document_id": document_id,
+            "chunk_category_updates": total_chunk_updates,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to update classification: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to update classification")
+
+
+@app.put("/documents/{document_id}/collections")
+async def put_document_collections(document_id: str, req: UpdateCollectionsRequest, request: Request):
+    """Set the exact set of collections for a document (add/remove memberships)."""
+    try:
+        if not req or not isinstance(req.collection_ids, list):
+            raise HTTPException(status_code=400, detail="collection_ids array is required")
+        actor = request.headers.get("x-user-id")
+        result = await update_document_collections_db(document_id, req.collection_ids, added_by=actor)
+        return {"document_id": document_id, **result}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to update document collections: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to update document collections")
+
 
 @app.delete("/collections/{collection_id}/documents/{document_id}")
 async def api_remove_document_from_collection(collection_id: str, document_id: str):
@@ -941,8 +908,6 @@ async def api_remove_document_from_collection(collection_id: str, document_id: s
     except Exception as e:
         logger.exception("Failed to remove document from collection: %s", e)
         raise HTTPException(status_code=500, detail="Failed to remove document from collection")
-
-
 @app.get("/health", response_model=HealthStatus)
 async def health_check():
     """Health check endpoint."""
@@ -992,11 +957,6 @@ async def chat(request: ChatRequest):
             prefs["document_ids"] = meta.get("document_ids")
         if isinstance(meta.get("selectedDocuments"), list):
             prefs["document_ids"] = meta.get("selectedDocuments")
-        # New: allow scoping to explicit chunk IDs
-        if isinstance(meta.get("chunk_ids"), list):
-            prefs["chunk_ids"] = meta.get("chunk_ids")
-        if isinstance(meta.get("selectedChunks"), list):
-            prefs["chunk_ids"] = meta.get("selectedChunks")
 
         # Execute agent
         response, tools_used, sources = await execute_agent(
@@ -1104,11 +1064,6 @@ async def chat_stream_legacy(request: ChatRequest):
                     prefs["document_ids"] = meta.get("document_ids")
                 if isinstance(meta.get("selectedDocuments"), list):
                     prefs["document_ids"] = meta.get("selectedDocuments")
-                # New: allow scoping to explicit chunk IDs
-                if isinstance(meta.get("chunk_ids"), list):
-                    prefs["chunk_ids"] = meta.get("chunk_ids")
-                if isinstance(meta.get("selectedChunks"), list):
-                    prefs["chunk_ids"] = meta.get("selectedChunks")
 
                 deps = AgentDependencies(
                     session_id=session_id,
@@ -1179,10 +1134,7 @@ async def chat_stream_legacy(request: ChatRequest):
                                 "use_graph": True,
                                 "use_vector": True,
                                 "use_query_expansion": True,
-                                "vector_limit": 20,
-                                "collection_ids": prefs.get("collection_ids"),
-                                "document_ids": prefs.get("document_ids"),
-                                "chunk_ids": prefs.get("chunk_ids"),
+                                "vector_limit": 100,  # Optimized for 1M context
                             }
                             # This will emit granular retrieval_step events via emit_retrieval_event
                             await retriever.retrieve(
@@ -1199,7 +1151,7 @@ async def chat_stream_legacy(request: ChatRequest):
                         guided_task = None
 
                 if use_mock:
-                    # Emit mock staged retrieval events (guided_retrieval: graph → vector)
+                    # Emit mock staged retrieval events (guided_retrieval: graph -> vector)
                     async def _emit_mock_retrieval_events():
                         try:
                             # Orchestrator start
@@ -1207,7 +1159,7 @@ async def chat_stream_legacy(request: ChatRequest):
                                 "type": "retrieval",
                                 "event": "start",
                                 "tool": "guided_retrieval",
-                                "args": {"query": request.message, "limit": 5}
+                                "args": {"query": request.message, "limit": 50}  # Increased for 1M context
                             })
 
                             # Graph stage
@@ -1244,7 +1196,7 @@ async def chat_stream_legacy(request: ChatRequest):
                                 "event": "start",
                                 "tool": "guided_retrieval",
                                 "stage": "vector",
-                                "args": {"limit": 5}
+                                "args": {"limit": 30}  # Increased for 1M context
                             })
                             await asyncio.sleep(0.05)
                             mock_vector = [
@@ -1311,7 +1263,7 @@ async def chat_stream_legacy(request: ChatRequest):
                                         from pydantic_ai.messages import PartStartEvent, PartDeltaEvent, TextPartDelta
                                         
                                         if isinstance(event, PartStartEvent) and event.part.part_kind == 'text':
-                                            delta_content = _sanitize_generated_text(event.part.content)
+                                            delta_content = event.part.content
                                             yield f"data: {json.dumps({'type': 'text', 'content': delta_content})}\n\n"
                                             full_response += delta_content
                                             
@@ -1325,7 +1277,7 @@ async def chat_stream_legacy(request: ChatRequest):
                                                     pass
                                             
                                         elif isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
-                                            delta_content = _sanitize_generated_text(event.delta.content_delta)
+                                            delta_content = event.delta.content_delta
                                             yield f"data: {json.dumps({'type': 'text', 'content': delta_content})}\n\n"
                                             full_response += delta_content
                                             
@@ -1485,1166 +1437,1892 @@ async def chat_stream_legacy(request: ChatRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/chat/stream/legacy")  # Renamed to avoid conflict with enhanced endpoint
-async def chat_stream_legacy(request: ChatRequest):
-    """Streaming chat endpoint using Server-Sent Events."""
+@app.post("/search/vector")
+async def search_vector(request: SearchRequest):
+    """Vector search endpoint."""
     try:
-        # Get or create session
-        session_id = await get_or_create_session(request)
+        input_data = VectorSearchInput(
+            query=request.query,
+            limit=request.limit
+        )
         
-        async def generate_stream():
-            """Generate streaming response using agent.iter() pattern."""
-            try:
-                yield f"data: {json.dumps({'type': 'session', 'session_id': session_id})}\n\n"
-                
-                # Create dependencies
-                # Build search preferences from metadata
-                prefs: Dict[str, Any] = {}
-                meta = request.metadata or {}
-                if isinstance(meta.get("collection_ids"), list):
-                    prefs["collection_ids"] = meta.get("collection_ids")
-                if isinstance(meta.get("selectedCollections"), list):
-                    prefs["collection_ids"] = meta.get("selectedCollections")
-                if isinstance(meta.get("document_ids"), list):
-                    prefs["document_ids"] = meta.get("document_ids")
-                if isinstance(meta.get("selectedDocuments"), list):
-                    prefs["document_ids"] = meta.get("selectedDocuments")
-                # New: allow scoping to explicit chunk IDs
-                if isinstance(meta.get("chunk_ids"), list):
-                    prefs["chunk_ids"] = meta.get("chunk_ids")
-                if isinstance(meta.get("selectedChunks"), list):
-                    prefs["chunk_ids"] = meta.get("selectedChunks")
-
-                deps = AgentDependencies(
-                    session_id=session_id,
-                    user_id=request.user_id,
-                    search_preferences=prefs,
-                )
-                
-                # Get conversation context
-                context = await get_conversation_context(session_id)
-                
-                # Build input with context
-                full_prompt = request.message
-                if context:
-                    context_str = "\n".join([
-                        f"{msg['role']}: {msg['content']}"
-                        for msg in context[-6:]
-                    ])
-                    full_prompt = f"Previous conversation:\n{context_str}\n\nCurrent question: {request.message}"
-                
-                # Save user message immediately (best-effort)
-                try:
-                    await add_message(
-                        session_id=session_id,
-                        role="user",
-                        content=request.message,
-                        metadata={"user_id": request.user_id}
-                    )
-                except Exception as e:
-                    logger.warning("Failed to persist user message; continuing stream: %s", e)
-                
-                full_response = ""
-                # Register live retrieval events listener for this session (graceful fallback)
-                retrieval_queue = None
-                guided_task = None
-                try:
-                    retrieval_queue = register_retrieval_listener(session_id)
-                    logger.info(f"Registered retrieval listener for session {session_id}, queue={retrieval_queue}")
-                except Exception as e:
-                    logger.error(f"Failed to register retrieval listener: {e}")
-                    retrieval_queue = None
-                
-                # Determine if mock streaming mode is enabled
-                use_mock = False
-                try:
-                    use_mock = bool(
-                        (getattr(request, "metadata", {}) or {}).get("mock_stream")
-                        or (getattr(request, "metadata", {}) or {}).get("mock")
-                        or os.getenv("MOCK_STREAM") == "1"
-                    )
-                except Exception:
-                    use_mock = False
-
-                # Optionally force Enhanced Graph → Vector retrieval to run and emit retrieval_step events
-                force_guided = False
-                try:
-                    force_guided = bool(
-                        ((getattr(request, "metadata", {}) or {}).get("force_guided"))
-                        or os.getenv("FORCE_GUIDED_RETRIEVAL") == "1"
-                    )
-                except Exception:
-                    force_guided = os.getenv("FORCE_GUIDED_RETRIEVAL") == "1"
-
-                if force_guided and not use_mock:
-                    async def _run_enhanced_retrieval():
-                        try:
-                            retriever = EnhancedRetriever()
-                            config = {
-                                "use_graph": True,
-                                "use_vector": True,
-                                "use_query_expansion": True,
-                                "vector_limit": 20,
-                                "collection_ids": prefs.get("collection_ids"),
-                                "document_ids": prefs.get("document_ids"),
-                                "chunk_ids": prefs.get("chunk_ids"),
-                            }
-                            # This will emit granular retrieval_step events via emit_retrieval_event
-                            await retriever.retrieve(
-                                query=request.message,
-                                session_id=session_id,
-                                config=config,
-                            )
-                        except Exception as e:
-                            logger.warning(f"Forced guided retrieval failed: {e}")
-
-                    try:
-                        guided_task = asyncio.create_task(_run_enhanced_retrieval())
-                    except Exception:
-                        guided_task = None
-
-                if use_mock:
-                    # Emit mock staged retrieval events (guided_retrieval: graph → vector)
-                    async def _emit_mock_retrieval_events():
-                        try:
-                            # Orchestrator start
-                            await emit_retrieval_event(session_id, {
-                                "type": "retrieval",
-                                "event": "start",
-                                "tool": "guided_retrieval",
-                                "args": {"query": request.message, "limit": 5}
-                            })
-
-                            # Graph stage
-                            await emit_retrieval_event(session_id, {
-                                "type": "retrieval",
-                                "event": "start",
-                                "tool": "guided_retrieval",
-                                "stage": "graph"
-                            })
-                            await asyncio.sleep(0.05)
-                            mock_graph = [
-                                {"fact": "Company X acquired Startup Y in 2023", "uuid": "g-1"},
-                                {"fact": "Startup Y builds vector databases", "uuid": "g-2"}
-                            ]
-                            await emit_retrieval_event(session_id, {
-                                "type": "retrieval",
-                                "event": "results",
-                                "tool": "guided_retrieval",
-                                "stage": "graph",
-                                "results": mock_graph
-                            })
-                            await emit_retrieval_event(session_id, {
-                                "type": "retrieval",
-                                "event": "end",
-                                "tool": "guided_retrieval",
-                                "stage": "graph",
-                                "count": len(mock_graph),
-                                "elapsed_ms": 60
-                            })
-
-                            # Vector stage
-                            await emit_retrieval_event(session_id, {
-                                "type": "retrieval",
-                                "event": "start",
-                                "tool": "guided_retrieval",
-                                "stage": "vector",
-                                "args": {"limit": 5}
-                            })
-                            await asyncio.sleep(0.05)
-                            mock_vector = [
-                                {"content": "Mock result A", "score": 0.91, "document_title": "Doc A", "document_source": "mock", "chunk_id": "mock-a"},
-                                {"content": "Mock result B", "score": 0.83, "document_title": "Doc B", "document_source": "mock", "chunk_id": "mock-b"}
-                            ]
-                            await emit_retrieval_event(session_id, {
-                                "type": "retrieval",
-                                "event": "results",
-                                "tool": "guided_retrieval",
-                                "stage": "vector",
-                                "results": mock_vector
-                            })
-                            await emit_retrieval_event(session_id, {
-                                "type": "retrieval",
-                                "event": "end",
-                                "tool": "guided_retrieval",
-                                "stage": "vector",
-                                "count": len(mock_vector),
-                                "elapsed_ms": 70
-                            })
-
-                            # Orchestrator end
-                            await emit_retrieval_event(session_id, {
-                                "type": "retrieval",
-                                "event": "end",
-                                "tool": "guided_retrieval",
-                                "count": len(mock_graph) + len(mock_vector),
-                                "elapsed_ms": 140
-                            })
-                        except Exception:
-                            # Never let mock emissions break streaming
-                            pass
-
-                    try:
-                        asyncio.create_task(_emit_mock_retrieval_events())
-                    except Exception:
-                        pass
-
-                    # Stream mock token chunks
-                    for chunk in ["This ", "is ", "a ", "mock ", "stream ", "response."]:
-                        await asyncio.sleep(0.05)
-                        yield f"data: {json.dumps({'type': 'text', 'content': chunk})}\n\n"
-                        full_response += chunk
-                        # Drain any pending retrieval events and stream them
-                        if retrieval_queue is not None:
-                            try:
-                                while True:
-                                    ev = retrieval_queue.get_nowait()
-                                    yield f"data: {json.dumps({'type': 'retrieval', 'session_id': session_id, 'data': ev})}\n\n"
-                            except asyncio.QueueEmpty:
-                                pass
-
-                    # No tool calls when in mock mode
-                    tools_used = []
-                else:
-                    # Stream using agent.iter() pattern
-                    async with rag_agent.iter(full_prompt, deps=deps) as run:
-                        async for node in run:
-                            if rag_agent.is_model_request_node(node):
-                                # Stream tokens from the model
-                                async with node.stream(run.ctx) as request_stream:
-                                    async for event in request_stream:
-                                        from pydantic_ai.messages import PartStartEvent, PartDeltaEvent, TextPartDelta
-                                        
-                                        if isinstance(event, PartStartEvent) and event.part.part_kind == 'text':
-                                            delta_content = _sanitize_generated_text(event.part.content)
-                                            yield f"data: {json.dumps({'type': 'text', 'content': delta_content})}\n\n"
-                                            full_response += delta_content
-                                            
-                                            # Drain any pending retrieval events and stream them
-                                            if retrieval_queue is not None:
-                                                try:
-                                                    while True:
-                                                        ev = retrieval_queue.get_nowait()
-                                                        yield f"data: {json.dumps({'type': 'retrieval', 'session_id': session_id, 'data': ev})}\n\n"
-                                                except asyncio.QueueEmpty:
-                                                    pass
-                                            
-                                        elif isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
-                                            delta_content = _sanitize_generated_text(event.delta.content_delta)
-                                            yield f"data: {json.dumps({'type': 'text', 'content': delta_content})}\n\n"
-                                            full_response += delta_content
-                                            
-                                            # Drain any pending retrieval events and stream them
-                                            if retrieval_queue is not None:
-                                                try:
-                                                    while True:
-                                                        ev = retrieval_queue.get_nowait()
-                                                        yield f"data: {json.dumps({'type': 'retrieval', 'session_id': session_id, 'data': ev})}\n\n"
-                                                except asyncio.QueueEmpty:
-                                                    pass
-                    
-                    # Extract tools used from the final result
-                    result = run.result
-                    
-                    # Fallback: if no token chunks were streamed but we have a final result,
-                    # emit it as a single text event so the client gets an answer.
-                    try:
-                        final_text = getattr(result, "data", None)
-                        if (not full_response.strip()) and isinstance(final_text, str) and final_text.strip():
-                            yield f"data: {json.dumps({'type': 'text', 'content': final_text})}\n\n"
-                            full_response += final_text
-                    except Exception:
-                        pass
-
-                    tools_used = extract_tool_calls(result)
-
-                    # If we launched guided retrieval, give it a brief moment to finish and flush events
-                    if guided_task is not None:
-                        try:
-                            await asyncio.wait_for(guided_task, timeout=1.0)
-                        except Exception:
-                            pass
-
-                    # Final drain of retrieval events to ensure 'complete' and 'summary' reach the client
-                    if retrieval_queue is not None:
-                        try:
-                            while True:
-                                ev = retrieval_queue.get_nowait()
-                                yield f"data: {json.dumps({'type': 'retrieval', 'session_id': session_id, 'data': ev})}\n\n"
-                        except asyncio.QueueEmpty:
-                            pass
-                
-                # Final drain of retrieval events after model finished
-                if retrieval_queue is not None:
-                    try:
-                        while True:
-                            ev = retrieval_queue.get_nowait()
-                            yield f"data: {json.dumps({'type': 'retrieval', 'session_id': session_id, 'data': ev})}\n\n"
-                    except asyncio.QueueEmpty:
-                        pass
-
-                # Send tools used information
-                if tools_used:
-                    tools_data = [
-                        {
-                            "tool_name": tool.tool_name,
-                            "args": tool.args,
-                            "tool_call_id": tool.tool_call_id
-                        }
-                        for tool in tools_used
-                    ]
-                    yield f"data: {json.dumps({'type': 'tools', 'tools': tools_data})}\n\n"
-                
-                # Optionally build and stream a live knowledge graph payload
-                graph_included = False
-                live_graph = None
-                try:
-                    wants_graph = "graph" in (request.message or "").lower()
-                    used_graph_tool = any(
-                        getattr(t, "tool_name", "").lower().find("graph") != -1 for t in tools_used
-                    )
-                    if wants_graph or used_graph_tool:
-                        live_graph = await build_live_graph_payload(request.message, tools_used)
-                        if live_graph and (live_graph.get("nodes") or live_graph.get("edges")):
-                            # Stream the graph payload as its own SSE event
-                            yield f"data: {json.dumps({'type': 'graph', 'graph': live_graph})}\n\n"
-                            graph_included = True
-                except Exception:
-                    # Never block streaming on graph construction issues
-                    pass
-                
-                # If we attached a graph, adjust the assistant message to acknowledge it
-                if graph_included:
-                    try:
-                        safe_response = full_response or ""
-                        lower_resp = safe_response.lower()
-                        negative_phrases = [
-                            "unable to generate a visual graph",
-                            "cannot generate a visual graph",
-                            "can not generate a visual graph",
-                            "unable to generate a graph",
-                            "cannot generate a graph",
-                            "can not generate a graph",
-                            "i am unable to generate a graph",
-                            "i cannot generate a graph",
-                            "i'm unable to generate a graph",
-                        ]
-                        for phrase in negative_phrases:
-                            if phrase in lower_resp:
-                                idx = lower_resp.find(phrase)
-                                safe_response = (
-                                    safe_response[:idx]
-                                    + "I've generated an interactive knowledge graph below."
-                                    + safe_response[idx + len(phrase):]
-                                )
-                                lower_resp = safe_response.lower()
-                        if "knowledge graph" not in lower_resp:
-                            safe_response = (
-                                "I've generated an interactive knowledge graph below.\n\n"
-                                + safe_response
-                            )
-                        response_for_save = safe_response
-                    except Exception:
-                        # Do not fail the stream due to message post-processing
-                        pass
-                else:
-                    response_for_save = full_response
-
-                # Save assistant message after streaming completes (best-effort)
-                try:
-                    await add_message(
-                        session_id=session_id,
-                        role="assistant",
-                        content=response_for_save,
-                        metadata={"user_id": request.user_id}
-                    )
-                except Exception as e:
-                    logger.warning("Failed to persist assistant message; continuing: %s", e)
-
-                # Final end event
-                yield f"data: {json.dumps({'type': 'end'})}\n\n"
-            except Exception as e:
-                # Stream error event and end
-                yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
-                yield f"data: {json.dumps({'type': 'end'})}\n\n"
-            finally:
-                # Ensure we always unregister the retrieval listener
-                try:
-                    if retrieval_queue is not None:
-                        unregister_retrieval_listener(session_id, retrieval_queue)
-                except Exception:
-                    pass
+        start_time = datetime.now()
+        results = await vector_search_tool(input_data)
+        end_time = datetime.now()
         
-        return StreamingResponse(
-            generate_stream(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "Content-Type": "text/event-stream"
-            }
+        query_time = (end_time - start_time).total_seconds() * 1000
+        
+        return SearchResponse(
+            results=results,
+            total_results=len(results),
+            search_type="vector",
+            query_time_ms=query_time
         )
         
     except Exception as e:
-        logger.error(f"Streaming chat failed: {e}")
+        logger.error(f"Vector search failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/proposals/{proposal_id}/generate/stream")
-async def proposal_generate_stream(proposal_id: str, request: ProposalGenerateRequest):
-    """Stream generation of a proposal section with retrieval SSE events."""
+@app.post("/search/graph")
+async def search_graph(request: SearchRequest):
+    """Knowledge graph search endpoint."""
     try:
-        # Ensure proposal exists and fetch context
-        proposal = await get_proposal_db(proposal_id)
-        if not proposal:
-            raise HTTPException(status_code=404, detail="Proposal not found")
-
-        # Build a context-rich prompt for the section (include example style + draft excerpt if available)
-        meta = request.metadata or {}
-        import json as _json
-        pmeta = proposal.get("metadata", {}) or {}
-        example = pmeta.get("example_analysis") or {}
-        style_prompt = example.get("style_prompt") or ""
-        phrase_bank = example.get("phrase_bank") or []
-        example_outline = [s.get("title") for s in (example.get("sections") or []) if isinstance(s, dict) and s.get("title")]
-        draft_text = pmeta.get("draft_text") or ""
-        draft_excerpt_chars = int(os.getenv("DRAFT_EXCERPT_CHARS", "1500"))
-        
-        # Local helpers to guard against binary/gibberish content leaking into prompts/outputs
-        import re as _re
-        def _looks_like_binary_text(text: str) -> bool:
-            if not text:
-                return False
-            t = str(text).strip()
-            if any(m in t[:300] for m in ("%PDF-", "startxref", "endobj", "/XRef", "FlateDecode")):
-                return True
-            allowed = _re.compile(r"[\w\s\.,;:'\-\(\)\[\]/&%]", _re.UNICODE)
-            total = len(t)
-            if total >= 24:
-                allowed_count = sum(1 for ch in t if allowed.match(ch))
-                if allowed_count / max(1, total) < 0.7:
-                    return True
-            if any(len(tok) > 120 for tok in t.split()):
-                return True
-            return False
-
-        def _sanitize_generated_text(s: str) -> str:
-            if not s:
-                return s
-            # Drop typical PDF markers/objects and compressed-looking segments
-            patterns = [r"%PDF-[^\n]*\n", r"\bstartxref\b.*", r"\bendobj\b", r"/XRef", r"FlateDecode", r"\bobj\b <<[^>]*>>", r"\bxref\b[\s\S]*?\bendstream\b"]
-            out = s
-            for pat in patterns:
-                out = _re.sub(pat, "", out, flags=_re.IGNORECASE)
-            return out
-
-        draft_excerpt = (draft_text[:draft_excerpt_chars] + ("…" if len(draft_text) > draft_excerpt_chars else "")) if draft_text else ""
-        if _looks_like_binary_text(draft_excerpt):
-            draft_excerpt = ""
-
-        context_lines = [
-            f"You are drafting the '{request.section_title}' section of a professional proposal.",
-            "STRICT SCOPE: Only use information found in the retrieved sources that are in-scope for this proposal (selected documents/collections). Do not use outside knowledge or prior training. If retrieval yields nothing relevant, respond with: 'No relevant regulatory content found for this section.'",
-            "Use the client/project context below. Cite regulatory claims with inline markers like [1], [2] and ground them in retrieved sources.",
-            "If evidence is insufficient for any claim, clearly mark it with 'REQUIRES REVIEW' and do not invent content.",
-            "Never output any PDF/binary markers (e.g., %PDF-, endobj, startxref, FlateDecode).",
-            "Write clear, structured prose suitable for export.",
-            "",
-            "Client fields:",
-            _json.dumps(proposal.get("client_fields", {}), indent=2),
-            "",
-            "Project fields:",
-            _json.dumps(proposal.get("project_fields", {}), indent=2),
-        ]
-        if style_prompt:
-            context_lines += ["", style_prompt]
-        if phrase_bank:
-            context_lines += ["", f"Preferred phrases (from example): {', '.join(phrase_bank[:12])}"]
-        if example_outline:
-            context_lines += ["", "Example outline titles:", " - " + "\n - ".join(example_outline[:15])]
-        if draft_excerpt:
-            context_lines += ["", "Draft excerpt:", draft_excerpt]
-        if request.section_instructions:
-            context_lines += ["", "Section instructions:", request.section_instructions]
-        full_prompt = "\n".join(context_lines)
-
-        # Reuse chat session utilities
-        # Default to proposal-scoped regulatory docs if caller didn't specify
+        # Use query understanding to make NL queries graph-friendly
         try:
-            if not (isinstance(meta.get("selectedDocuments"), list) and meta.get("selectedDocuments")):
-                try:
-                    regs = await list_proposal_documents_db(proposal_id, source_type="regulatory")
-                except Exception:
-                    regs = []
-                doc_ids = [d.get("id") for d in regs if isinstance(d, dict) and d.get("id")]
-                if doc_ids:
-                    meta["selectedDocuments"] = doc_ids
-                    meta["contextMode"] = "documents"
+            qp = QueryProcessor()
+            processed = qp.process(request.query)
+            effective_query = processed.graph_query or processed.cleaned or request.query
         except Exception:
-            pass
+            effective_query = request.query
 
-        chat_like = ChatRequest(
-            message=full_prompt,
-            session_id=None,
-            user_id=None,
-            metadata=meta,
-            search_type=request.search_type,
+        input_data = GraphSearchInput(
+            query=effective_query
         )
-        session_id = await get_or_create_session(chat_like)
 
-        async def generate_stream():
-            retrieval_queue = None
-            guided_task = None
-            full_response = ""
+        start_time = datetime.now()
+        results = await graph_search_tool(input_data)
+
+        # Hard fallback: if no results via tool, hit DB directly with broader websearch
+        if not results:
             try:
-                yield f"data: {json.dumps({'type': 'session', 'session_id': session_id, 'proposal_id': proposal_id, 'section_title': request.section_title})}\n\n"
+                # First try websearch on the optimized query
+                raw = await search_facts_websearch(effective_query, request.limit)
+                # If still nothing and we altered the query, try the original as a last resort
+                if not raw and effective_query != request.query:
+                    raw = await search_facts_websearch(request.query, request.limit)
+                fallback = [
+                    GraphSearchResult(
+                        fact=r.get("content", ""),
+                        uuid=str(r.get("fact_id")),
+                        valid_at=r.get("valid_at"),
+                        invalid_at=r.get("invalid_at"),
+                        source_node_uuid=str(r.get("node_id")) if r.get("node_id") else None
+                    ) for r in raw
+                ]
+                results = fallback
+            except Exception as fe:
+                logger.warning(f"KG fallback (websearch) failed: {fe}")
 
-                # Build search preferences from metadata (collections/documents scoping)
-                prefs: Dict[str, Any] = {}
-                if isinstance(meta.get("collection_ids"), list):
-                    prefs["collection_ids"] = meta.get("collection_ids")
-                if isinstance(meta.get("selectedCollections"), list):
-                    prefs["collection_ids"] = meta.get("selectedCollections")
-                if isinstance(meta.get("document_ids"), list):
-                    prefs["document_ids"] = meta.get("document_ids")
-                if isinstance(meta.get("selectedDocuments"), list):
-                    prefs["document_ids"] = meta.get("selectedDocuments")
-                # New: allow scoping to explicit chunk IDs
-                if isinstance(meta.get("chunk_ids"), list):
-                    prefs["chunk_ids"] = meta.get("chunk_ids")
-                if isinstance(meta.get("selectedChunks"), list):
-                    prefs["chunk_ids"] = meta.get("selectedChunks")
+        end_time = datetime.now()
+        query_time = (end_time - start_time).total_seconds() * 1000
 
-                deps = AgentDependencies(
-                    session_id=session_id,
-                    user_id=None,
-                    search_preferences=prefs,
-                )
-
-                # Listen for retrieval events for this session
-                try:
-                    retrieval_queue = register_retrieval_listener(session_id)
-                except Exception:
-                    retrieval_queue = None
-
-                # Determine mock and force-guided flags
-                use_mock = False
-                try:
-                    use_mock = bool(meta.get("mock_stream") or meta.get("mock") or os.getenv("MOCK_STREAM") == "1")
-                except Exception:
-                    use_mock = False
-
-                force_guided = False
-                try:
-                    force_guided = bool(meta.get("force_guided") or os.getenv("FORCE_GUIDED_RETRIEVAL") == "1")
-                except Exception:
-                    force_guided = os.getenv("FORCE_GUIDED_RETRIEVAL") == "1"
-
-                pre_results = None
-                if force_guided and not use_mock:
-                    try:
-                        retriever = EnhancedRetriever()
-                        # Honor proposal-level scoping for retrieval visibility
-                        cfg_collection_ids = prefs.get("collection_ids") if isinstance(prefs, dict) else None
-                        cfg_document_ids = prefs.get("document_ids") if isinstance(prefs, dict) else None
-                        cfg_chunk_ids = prefs.get("chunk_ids") if isinstance(prefs, dict) else None
-                        # If scoped to specific docs/collections, avoid unscoped graph facts
-                        config = {
-                            "use_graph": False if (cfg_collection_ids or cfg_document_ids) else True,
-                            "use_vector": True,
-                            "use_query_expansion": True,
-                            "vector_limit": 20,
-                            "collection_ids": cfg_collection_ids,
-                            "document_ids": cfg_document_ids,
-                            "chunk_ids": cfg_chunk_ids,
-                        }
-                        pre_results, pre_ctx = await retriever.retrieve(
-                            query=request.section_title + ": " + (request.section_instructions or ""),
-                            session_id=session_id,
-                            config=config,
-                        )
-                        # If no valid vector chunks found, short-circuit with scoped-empty message
-                        def _is_valid_chunk(r: dict) -> bool:
-                            try:
-                                c = r.get("content", "")
-                                if not c or _looks_like_binary_text(c):
-                                    return False
-                                t = r.get("type", "")
-                                # Accept vector types and seeded readable chunks
-                                return t.startswith("vector_") or t in ("vector_chunk", "seed_chunk")
-                            except Exception:
-                                return False
-                        has_valid = any(_is_valid_chunk(r) for r in (pre_results or []))
-                        if not has_valid:
-                            msg = "No relevant regulatory content found for this section. Please attach or select the appropriate documents and try again."
-                            yield f"data: {json.dumps({'type': 'text', 'content': msg})}\n\n"
-                            # Drain any pending retrieval events for completeness
-                            if retrieval_queue is not None:
-                                try:
-                                    while True:
-                                        ev = retrieval_queue.get_nowait()
-                                        yield f"data: {json.dumps({'type': 'retrieval', 'session_id': session_id, 'data': ev})}\n\n"
-                                except asyncio.QueueEmpty:
-                                    pass
-                            yield f"data: {json.dumps({'type': 'end'})}\n\n"
-                            return
-                    except Exception as e:
-                        logger.warning(f"Forced guided retrieval failed: {e}")
-
-                if use_mock:
-                    # Emit staged mock retrieval events
-                    async def _emit_mock():
-                        try:
-                            await emit_retrieval_event(session_id, {"type": "retrieval", "event": "start", "tool": "guided_retrieval"})
-                            await asyncio.sleep(0.05)
-                            await emit_retrieval_event(session_id, {"type": "retrieval", "event": "results", "tool": "guided_retrieval", "stage": "vector", "results": [{"content": "Mock regulation chunk", "chunk_id": "mock-1", "score": 0.9}]})
-                            await emit_retrieval_event(session_id, {"type": "retrieval", "event": "end", "tool": "guided_retrieval"})
-                        except Exception:
-                            pass
-                    try:
-                        asyncio.create_task(_emit_mock())
-                    except Exception:
-                        pass
-
-                    for chunk in ["Generating ", "mock ", "section ", "content ", "for ", f"{request.section_title}."]:
-                        await asyncio.sleep(0.05)
-                        yield f"data: {json.dumps({'type': 'text', 'content': chunk})}\n\n"
-                        full_response += chunk
-                        if retrieval_queue is not None:
-                            try:
-                                while True:
-                                    ev = retrieval_queue.get_nowait()
-                                    yield f"data: {json.dumps({'type': 'retrieval', 'session_id': session_id, 'data': ev})}\n\n"
-                            except asyncio.QueueEmpty:
-                                pass
-                    tools_used = []
-                else:
-                    # Stream via rag_agent
-                    async with rag_agent.iter(full_prompt, deps=deps) as run:
-                        async for node in run:
-                            if rag_agent.is_model_request_node(node):
-                                async with node.stream(run.ctx) as request_stream:
-                                    async for event in request_stream:
-                                        from pydantic_ai.messages import PartStartEvent, PartDeltaEvent, TextPartDelta
-                                        if isinstance(event, PartStartEvent) and event.part.part_kind == 'text':
-                                            delta_content = _sanitize_generated_text(event.part.content)
-                                            yield f"data: {json.dumps({'type': 'text', 'content': delta_content})}\n\n"
-                                            full_response += delta_content
-                                            if retrieval_queue is not None:
-                                                try:
-                                                    while True:
-                                                        ev = retrieval_queue.get_nowait()
-                                                        yield f"data: {json.dumps({'type': 'retrieval', 'session_id': session_id, 'data': ev})}\n\n"
-                                                except asyncio.QueueEmpty:
-                                                    pass
-                                        elif isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
-                                            delta_content = _sanitize_generated_text(event.delta.content_delta)
-                                            yield f"data: {json.dumps({'type': 'text', 'content': delta_content})}\n\n"
-                                            full_response += delta_content
-                                            if retrieval_queue is not None:
-                                                try:
-                                                    while True:
-                                                        ev = retrieval_queue.get_nowait()
-                                                        yield f"data: {json.dumps({'type': 'retrieval', 'session_id': session_id, 'data': ev})}\n\n"
-                                                except asyncio.QueueEmpty:
-                                                    pass
-                    result = run.result
-                    tools_used = extract_tool_calls(result)
-                    if retrieval_queue is not None:
-                        try:
-                            while True:
-                                ev = retrieval_queue.get_nowait()
-                                yield f"data: {json.dumps({'type': 'retrieval', 'session_id': session_id, 'data': ev})}\n\n"
-                        except asyncio.QueueEmpty:
-                            pass
-                    if tools_used:
-                        tools_data = [
-                            {"tool_name": t.tool_name, "args": t.args, "tool_call_id": t.tool_call_id}
-                            for t in tools_used
-                        ]
-                        yield f"data: {json.dumps({'type': 'tools', 'tools': tools_data})}\n\n"
-
-                # End event
-                yield f"data: {json.dumps({'type': 'end'})}\n\n"
-            except Exception as e:
-                yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
-                yield f"data: {json.dumps({'type': 'end'})}\n\n"
-            finally:
-                try:
-                    if retrieval_queue is not None:
-                        unregister_retrieval_listener(session_id, retrieval_queue)
-                except Exception:
-                    pass
-
-        return StreamingResponse(
-            generate_stream(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "Content-Type": "text/event-stream",
-            },
+        return SearchResponse(
+            graph_results=results,
+            total_results=len(results),
+            search_type="graph",
+            query_time_ms=query_time
         )
-    except HTTPException:
-        raise
+        
     except Exception as e:
-        logger.error(f"Proposal generate stream failed: {e}")
+        logger.error(f"Graph search failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/graph/stats")
+async def graph_stats():
+    """Return live knowledge graph statistics (nodes, edges, facts)."""
+    try:
+        stats = await get_graph_statistics()
+        # Ensure a predictable JSON shape
+        return {
+            "graph_initialized": bool(stats.get("graph_initialized", True)),
+            "total_nodes": int(stats.get("total_nodes", 0) or 0),
+            "total_edges": int(stats.get("total_edges", 0) or 0),
+            "total_facts": int(stats.get("total_facts", 0) or 0),
+            "nodes_by_type": stats.get("nodes_by_type", {})
+        }
+    except Exception as e:
+        logger.error(f"Graph stats failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/proposals/{proposal_id}/versions")
-async def list_proposal_versions(proposal_id: str, limit: int = 20, offset: int = 0):
+@app.post("/search/hybrid")
+async def search_hybrid(request: SearchRequest):
+    """Hybrid search endpoint."""
     try:
-        versions = await list_proposal_versions_db(proposal_id, limit=limit, offset=offset)
-        return {"proposal_id": proposal_id, "versions": versions, "limit": limit, "offset": offset}
+        input_data = HybridSearchInput(
+            query=request.query,
+            limit=request.limit
+        )
+        
+        start_time = datetime.now()
+        results = await hybrid_search_tool(input_data)
+        end_time = datetime.now()
+        
+        query_time = (end_time - start_time).total_seconds() * 1000
+        
+        return SearchResponse(
+            results=results,
+            total_results=len(results),
+            search_type="hybrid",
+            query_time_ms=query_time
+        )
+        
     except Exception as e:
-        logger.error(f"List proposal versions failed: {e}")
+        logger.error(f"Hybrid search failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/proposals/{proposal_id}/example/upload")
-async def upload_example_proposal(proposal_id: str, file: UploadFile = File(...)):
-    """Upload an example proposal (pdf/docx/txt/md) and store extracted style/structure in proposal.metadata.example_analysis."""
+@app.get("/documents")
+async def list_documents_endpoint(
+    limit: int = 20,
+    offset: int = 0
+):
+    """List documents endpoint."""
     try:
-        # Ensure proposal exists
-        prop = await get_proposal_db(proposal_id)
-        if not prop:
-            raise HTTPException(status_code=404, detail="Proposal not found")
+        input_data = DocumentListInput(limit=limit, offset=offset)
+        documents = await list_documents_tool(input_data)
+        
+        # Get total count from database
+        from .db_utils import db_pool
+        async with db_pool.acquire() as conn:
+            total_count_result = await conn.fetchrow("SELECT COUNT(*) as total FROM documents")
+            total_count = total_count_result["total"] if total_count_result else 0
+        
+        return {
+            "documents": documents,
+            "total": total_count,
+            "limit": limit,
+            "offset": offset
+        }
+        
+    except Exception as e:
+        logger.error(f"Document listing failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-        # Persist temp file
-        filename = file.filename or "example"
-        _, ext = os.path.splitext(filename)
-        import tempfile
-        with tempfile.NamedTemporaryFile(delete=False, suffix=ext or "") as tmp:
-            content = await file.read()
-            tmp.write(content)
-            temp_path = tmp.name
+
+@app.delete("/documents/{document_id}")
+async def delete_document_endpoint(document_id: str):
+    """Delete document endpoint."""
+    try:
+        # Validate UUID format
         try:
-            text, meta = convert_to_markdown(temp_path)
-        finally:
-            try:
-                os.remove(temp_path)
-            except Exception:
-                pass
-
-        analysis = analyze_example_text(text or "")
-        # Merge into metadata
-        meta0 = (prop.get("metadata") or {}).copy()
-        meta0["example_analysis"] = analysis
-        meta0["example_file"] = {"name": filename, "ext": ext, "source_meta": meta}
-        updated = await update_proposal_db(proposal_id, metadata=meta0)
-        return {"success": True, "analysis": analysis, "proposal": updated}
+            uuid.UUID(document_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid document ID format")
+        
+        success = await delete_document(document_id)
+        
+        if not success:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        return {
+            "success": True,
+            "message": f"Document {document_id} deleted successfully"
+        }
+        
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Upload example failed: {e}")
+        logger.error(f"Document deletion failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+def _extract_text_from_document(doc: Dict[str, Any]) -> Optional[str]:
+    """Best-effort text extraction from a document dict."""
+    if not isinstance(doc, dict):
+        return None
 
-@app.post("/proposals/{proposal_id}/draft/upload")
-async def upload_draft(proposal_id: str, file: UploadFile = File(...)):
-    """Upload a draft (pdf/docx/txt/md); store plaintext into proposal.metadata.draft_text."""
+    # Try direct fields
+    direct_candidates = [
+        doc.get("content"),
+        doc.get("text"),
+        doc.get("plain_text"),
+        doc.get("plaintext"),
+        doc.get("full_text"),
+        doc.get("raw_text"),
+        doc.get("body"),
+        doc.get("markdown"),
+        doc.get("md"),
+        doc.get("snippet"),
+        doc.get("preview"),
+        (doc.get("stats") or {}).get("content"),
+        (doc.get("stats") or {}).get("text"),
+        (doc.get("metadata") or {}).get("content"),
+        (doc.get("metadata") or {}).get("text"),
+        (doc.get("metadata") or {}).get("raw_text"),
+        (doc.get("metadata") or {}).get("markdown"),
+    ]
+    for c in direct_candidates:
+        if isinstance(c, str) and c.strip():
+            return c
+
+    # If content looks like JSON string, parse for common fields
     try:
-        prop = await get_proposal_db(proposal_id)
-        if not prop:
-            raise HTTPException(status_code=404, detail="Proposal not found")
+        if isinstance(doc.get("content"), str) and doc["content"].strip().startswith("{"):
+            data = json.loads(doc["content"])  # type: ignore
+            for k in ("content", "text", "markdown", "md", "body"):
+                v = data.get(k)
+                if isinstance(v, str) and v.strip():
+                    return v
+    except Exception:
+        pass
 
-        filename = file.filename or "draft"
-        _, ext = os.path.splitext(filename)
-        import tempfile
-        with tempfile.NamedTemporaryFile(delete=False, suffix=ext or "") as tmp:
-            content = await file.read()
-            tmp.write(content)
-            temp_path = tmp.name
-        try:
-            text, meta = convert_to_markdown(temp_path)
-        finally:
-            try:
-                os.remove(temp_path)
-            except Exception:
-                pass
+    # Try chunks
+    chunks = doc.get("chunks")
+    if isinstance(chunks, list) and chunks:
+        parts: List[str] = []
+        for ch in chunks[:50]:
+            if not isinstance(ch, dict):
+                continue
+            t = ch.get("content") or ch.get("text") or ch.get("body")
+            if isinstance(t, str) and t.strip():
+                parts.append(t.strip())
+            if len("\n\n".join(parts)) > 8000:
+                break
+        if parts:
+            return "\n\n".join(parts)
 
-        # Merge into metadata
-        meta0 = (prop.get("metadata") or {}).copy()
-        meta0["draft_text"] = text or ""
-        meta0["draft_file"] = {"name": filename, "ext": ext, "source_meta": meta}
-        updated = await update_proposal_db(proposal_id, metadata=meta0)
-        return {"success": True, "characters": len(text or ""), "proposal": updated}
+    # Try pages array
+    pages = doc.get("pages")
+    if isinstance(pages, list) and pages:
+        parts: List[str] = []
+        for p in pages[:20]:
+            if not isinstance(p, dict):
+                continue
+            t = p.get("content") or p.get("text")
+            if isinstance(t, str) and t.strip():
+                parts.append(t.strip())
+            if len("\n\n".join(parts)) > 8000:
+                break
+        if parts:
+            return "\n\n".join(parts)
+
+    return None
+
+
+@app.get("/documents/{document_id}")
+async def get_document_endpoint(document_id: str):
+    """Return a complete document with chunks for preview/enrichment."""
+    try:
+        input_data = DocumentInput(document_id=document_id)
+        document = await get_document_tool(input_data)
+        if not document:
+            raise HTTPException(status_code=404, detail="Document not found")
+        return document
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Upload draft failed: {e}")
+        logger.error(f"Get document failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/proposals/{proposal_id}/validate")
-async def validate_proposal(proposal_id: str, request: Request):
-    """Lightweight validation: ensure sections exist, warn if citations are missing in key sections, and basic structure checks.
-    Body can include {"version_id": "..."}. If omitted, validates latest version.
+@app.get("/documents/{document_id}/{variant}")
+async def get_document_content_endpoint(document_id: str, variant: str):
+    """Return raw textual content for a document in various variants for preview."""
+    allowed = {
+        "content", "raw", "text", "plaintext", "plain", "body",
+        "markdown", "md", "preview", "download", "file"
+    }
+    if variant not in allowed:
+        raise HTTPException(status_code=404, detail="Unknown variant")
+
+    try:
+        input_data = DocumentInput(document_id=document_id)
+        document = await get_document_tool(input_data)
+        if not document:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        text = _extract_text_from_document(document)
+        if not text or not text.strip():
+            raise HTTPException(status_code=404, detail="No textual content available for preview")
+
+        # Decide media type
+        title = (document.get("title") or "").lower() if isinstance(document, dict) else ""
+        source = (document.get("source") or "").lower() if isinstance(document, dict) else ""
+        is_markdown = variant in {"markdown", "md"} or title.endswith(".md") or source.endswith(".md")
+        media_type = "text/markdown; charset=utf-8" if is_markdown else "text/plain; charset=utf-8"
+        return Response(content=text, media_type=media_type)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Get document content failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/documents/{document_id}/summary")
+async def generate_dbr_summary(
+    document_id: str,
+    request: Request
+):
+    """
+    Generate a comprehensive summary of a DBR document using the RAG system.
+    
+    Args:
+        document_id: UUID of the document to summarize
+        request: Optional configuration for summary generation
     """
     try:
-        body = {}
+        from .summarizer import dbr_summarizer
+        
+        # Parse request body
         try:
-            body = await request.json()
+            body = await request.json() if request else {}
+        except:
+            body = {}
+            
+        include_context = body.get("include_context", True)
+        context_queries = body.get("context_queries")
+        summary_type = body.get("summary_type", "comprehensive")
+        force_regenerate = body.get("force_regenerate", False)
+        
+        # Validate summary type
+        valid_types = {"comprehensive", "executive", "financial", "operational"}
+        if summary_type not in valid_types:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid summary_type. Must be one of: {', '.join(valid_types)}"
+            )
+        
+        cache_action = "regenerating" if force_regenerate else "checking cache for"
+        logger.info(f"Processing {summary_type} summary for document {document_id} ({cache_action})")
+        
+        # Generate summary (with caching logic)
+        summary_result = await dbr_summarizer.summarize_dbr(
+            document_id=document_id,
+            include_context=include_context,
+            context_queries=context_queries,
+            summary_type=summary_type,
+            force_regenerate=force_regenerate
+        )
+        
+        return summary_result
+        
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"DBR summary generation failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Summary generation failed: {str(e)}")
+
+
+@app.post("/documents/{document_id}/summary_async")
+async def start_dbr_summary_job(
+    document_id: str,
+    request: Request
+):
+    """
+    Start an asynchronous summary generation job and return a job_id immediately.
+    This avoids long-running HTTP requests that can time out on proxies.
+    """
+    try:
+        from .summarizer import dbr_summarizer
+
+        try:
+            body = await request.json() if request else {}
         except Exception:
             body = {}
-        version_id = body.get("version_id")
 
-        if version_id:
-            version = await get_proposal_version_db(version_id)
-        else:
-            version = await get_latest_proposal_version_db(proposal_id)
-        if not version:
-            raise HTTPException(status_code=404, detail="Proposal version not found")
+        include_context = body.get("include_context", True)
+        context_queries = body.get("context_queries")
+        summary_type = body.get("summary_type", "comprehensive")
+        force_regenerate = body.get("force_regenerate", False)
 
-        sections = version.get("sections") or []
-        citations = version.get("citations") or []
-        html = version.get("html") or ""
+        job_id = await create_summary_job(document_id, summary_type)
 
-        warnings: List[str] = []
-        errors: List[str] = []
-
-        # Required sections by convention
-        required_sections = [
-            "Executive Summary",
-            "Scope of Work",
-            "Methodology",
-            "Regulatory Compliance",
-            "Deliverables",
-            "Timeline",
-            "Pricing",
-            "Team & Qualifications",
-            "Assumptions & Exclusions",
-            "Terms & Conditions",
-        ]
-
-        titles = { (s.get("title") or s.get("key") or "").strip() for s in sections if isinstance(s, dict) }
-        missing = [s for s in required_sections if s not in titles]
-        if missing:
-            warnings.append(f"Missing recommended sections: {', '.join(missing)}")
-
-        # Check citations presence in Regulatory Compliance
-        reg_sections = [s for s in sections if (s.get("title") or "").strip().lower() == "regulatory compliance"]
-        if reg_sections:
-            has_cites = any((s.get("citations") or []) for s in reg_sections)
-            if not has_cites:
-                warnings.append("No citations found in 'Regulatory Compliance' section")
-        else:
-            warnings.append("'Regulatory Compliance' section not present for validation")
-
-        # Basic citation structure check
-        bad_cites = []
-        for idx, c in enumerate(citations):
-            if not isinstance(c, dict):
-                bad_cites.append(idx)
-                continue
-            if not (c.get("chunk_id") or c.get("source") or c.get("document_id")):
-                bad_cites.append(idx)
-        if bad_cites:
-            warnings.append(f"{len(bad_cites)} citations missing identifiers (chunk_id/source/document_id)")
-
-        # HTML presence check
-        if not html and not sections:
-            errors.append("No content to validate: both html and sections are empty")
-
-        status = "ok" if not errors and not warnings else ("warnings" if not errors else "errors")
-        return {"proposal_id": proposal_id, "version_id": version.get("id"), "status": status, "warnings": warnings, "errors": errors}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Validate proposal failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/proposals/{proposal_id}/export")
-async def export_proposal_pdf(proposal_id: str, version_id: Optional[str] = None, download: bool = True):
-    """Export a proposal version to PDF. If version_id not provided, exports latest version.
-    Returns application/pdf. If WeasyPrint unavailable, returns 503 with guidance.
-    """
-    try:
-        if version_id:
-            version = await get_proposal_version_db(version_id)
-        else:
-            version = await get_latest_proposal_version_db(proposal_id)
-        if not version:
-            raise HTTPException(status_code=404, detail="Proposal version not found")
-
-        # Build HTML if not provided
-        sections = version.get("sections") or []
-        citations = version.get("citations") or []
-        title = (await get_proposal_db(proposal_id) or {}).get("title", "Proposal")
-        html = version.get("html")
-        if not html:
-            # Assemble from sections and citations
-            def esc(s: Any) -> str:
+        async def _run_job():
+            await update_summary_job_status(job_id, "running")
+            try:
+                result = await dbr_summarizer.summarize_dbr(
+                    document_id=document_id,
+                    include_context=include_context,
+                    context_queries=context_queries,
+                    summary_type=summary_type,
+                    force_regenerate=force_regenerate,
+                    job_id=job_id,
+                )
+                await set_summary_job_result(job_id, result)
+            except Exception as e:
+                logger.exception("Async summary job failed: %s", e)
+                # If the job was cancelled, keep status as 'cancelled'
                 try:
-                    return (s or "").replace("<&>", "")
+                    if await is_summary_job_cancelled(job_id):
+                        await update_summary_job_status(job_id, "cancelled", error=str(e))
+                    else:
+                        await update_summary_job_status(job_id, "error", error=str(e))
                 except Exception:
-                    return str(s)
-            parts = [
-                "<html>",
-                "<head>",
-                "<meta charset='utf-8' />",
-                "<style>",
-                "body{font-family:Inter,Segoe UI,Arial, sans-serif;color:#111827;padding:48px;}",
-                "h1{font-size:28px;margin:0 0 16px 0;color:#111827;}",
-                "h2{font-size:20px;margin:24px 0 8px 0;color:#111827;}",
-                "p{line-height:1.6;margin:8px 0;}",
-                ".header{display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid #e5e7eb;padding-bottom:12px;margin-bottom:24px;}",
-                ".brand{font-weight:700;color:#0ea5e9;}",
-                ".footer{position:fixed;bottom:24px;left:48px;right:48px;color:#6b7280;font-size:12px;}",
-                ".citation{font-size:12px;color:#6b7280;margin-top:4px;}",
-                "</style>",
-                "</head>",
-                "<body>",
-                f"<div class='header'><div class='brand'>&nbsp;</div><div>{datetime.utcnow().strftime('%Y-%m-%d')}</div></div>",
-                f"<h1>{esc(title)}</h1>",
-            ]
-            for s in sections:
-                stitle = esc((s or {}).get("title") or (s or {}).get("key") or "Section")
-                scontent = (s or {}).get("content") or ""
-                parts.append(f"<h2>{stitle}</h2>")
-                parts.append(f"<div>{scontent}</div>")
-                scites = (s or {}).get("citations") or []
-                if scites:
-                    parts.append("<div class='citation'>")
-                    for i, c in enumerate(scites, start=1):
-                        src = (c or {}).get("source") or (c or {}).get("document_title") or "Source"
-                        parts.append(f"[{i}] {esc(src)}<br/>")
-                    parts.append("</div>")
-            if citations:
-                parts.append("<h2>References</h2><div class='citation'>")
-                for i, c in enumerate(citations, start=1):
-                    src = (c or {}).get("source") or (c or {}).get("document_title") or "Source"
-                    parts.append(f"[{i}] {esc(src)}<br/>")
-                parts.append("</div>")
-            parts.append("<div class='footer'>Generated by Proposal Generator</div>")
-            parts.append("</body></html>")
-            html = "".join(parts)
+                    await update_summary_job_status(job_id, "error", error=str(e))
 
-        if not WEASYPRINT_AVAILABLE:
-            raise HTTPException(status_code=503, detail="PDF export unavailable: WeasyPrint not installed. Install 'weasyprint' and system dependencies (Cairo/Pango).")
+        # Fire-and-forget
+        asyncio.create_task(_run_job())
 
-        # Render PDF
-        pdf_bytes = HTML(string=html).write_pdf()
-        headers = {"Content-Type": "application/pdf"}
-        if download:
-            headers["Content-Disposition"] = f"attachment; filename=proposal_{proposal_id}.pdf"
-        return Response(content=pdf_bytes, media_type="application/pdf", headers=headers)
-    except HTTPException:
-        raise
+        return JSONResponse(status_code=202, content={
+            "job_id": job_id,
+            "status": "queued",
+            "document_id": document_id,
+            "summary_type": summary_type,
+        })
     except Exception as e:
-        logger.error(f"Export proposal failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Failed to start summary job: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to start job: {str(e)}")
 
 
-@app.get("/proposals/{proposal_id}/export/docx")
-async def export_proposal_docx(proposal_id: str, version_id: Optional[str] = None, download: bool = True):
-    """Export a proposal version to DOCX for client editing off-app."""
-    try:
-        if not DOCX_AVAILABLE:
-            raise HTTPException(status_code=503, detail="DOCX export unavailable: python-docx not installed.")
-
-        if version_id:
-            version = await get_proposal_version_db(version_id)
-        else:
-            version = await get_latest_proposal_version_db(proposal_id)
-        if not version:
-            raise HTTPException(status_code=404, detail="Proposal version not found")
-
-        sections = version.get("sections") or []
-        citations = version.get("citations") or []
-        title = (await get_proposal_db(proposal_id) or {}).get("title", "Proposal")
-
-        # Build DOCX
-        from io import BytesIO
-        doc = Document()
-        doc.add_heading(title, level=0)
-
-        def strip_html(html: str) -> str:
-            try:
-                from bs4 import BeautifulSoup
-                soup = BeautifulSoup(html, "html.parser")
-                return soup.get_text("\n")
-            except Exception:
-                # Fallback: naive tag removal
-                import re as _re
-                return _re.sub(r"<[^>]+>", "", html)
-
-        if sections:
-            for s in sections:
-                stitle = (s or {}).get("title") or (s or {}).get("key") or "Section"
-                scontent = (s or {}).get("content") or ""
-                doc.add_heading(stitle, level=1)
-                text = strip_html(scontent)
-                # split into paragraphs
-                for para in [p for p in text.split("\n\n") if p.strip()]:
-                    doc.add_paragraph(para)
-        else:
-            # Fallback: if html exists, strip and include
-            html = version.get("html") or ""
-            text = strip_html(html)
-            for para in [p for p in text.split("\n\n") if p.strip()]:
-                doc.add_paragraph(para)
-
-        if citations:
-            doc.add_heading("References", level=1)
-            for i, c in enumerate(citations, start=1):
-                src = (c or {}).get("source") or (c or {}).get("document_title") or "Source"
-                doc.add_paragraph(f"[{i}] {src}")
-
-        buf = BytesIO()
-        doc.save(buf)
-        data = buf.getvalue()
-        headers = {"Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
-        if download:
-            headers["Content-Disposition"] = f"attachment; filename=proposal_{proposal_id}.docx"
-        return Response(content=data, media_type=headers["Content-Type"], headers=headers)
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Export DOCX failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+@app.get("/jobs/{job_id}/status")
+async def get_job_status(job_id: str):
+    job = await get_summary_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    # Do not include the full result here to keep polling payload small
+    job.pop("result", None)
+    # Normalize keys for client compatibility
+    job["job_id"] = job.pop("id")
+    return job
 
 
-@app.post("/pricing/parse", response_model=PricingParseResponse)
-async def parse_pricing_file(file: UploadFile = File(...)):
-    """Parse a CSV or XLSX file of pricing items with columns like: service, unit_price (or price), quantity, description.
-    Returns items and computed totals.
+@app.get("/jobs/{job_id}/result")
+async def get_job_result(job_id: str):
+    job = await get_summary_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.get("status") != "done":
+        return JSONResponse(status_code=202, content={
+            "job_id": job_id,
+            "status": job.get("status"),
+            "error": job.get("error"),
+        })
+    return {
+        "job_id": job.get("id", job_id),
+        "status": job.get("status"),
+        "result": job.get("result"),
+    }
+
+
+@app.post("/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str):
+    ok = await cancel_summary_job(job_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Job not found or cannot cancel")
+    return {"job_id": job_id, "cancelled": True}
+
+
+@app.get("/documents/{document_id}/summary/{summary_type}")
+async def get_dbr_summary_typed(document_id: str, summary_type: str):
+    """
+    Generate a typed summary of a DBR document.
+    Convenience endpoint for specific summary types.
+    """
+    from fastapi import Request
+    import json
+    
+    # Create a mock request object with the summary type
+    class MockRequest:
+        async def json(self):
+            return {"summary_type": summary_type, "include_context": True}
+    
+    return await generate_dbr_summary(document_id, MockRequest())
+
+
+@app.get("/documents/{document_id}/summaries")
+async def list_cached_summaries(document_id: str):
+    """
+    List all cached summaries for a document.
     """
     try:
-        if not PANDAS_AVAILABLE:
-            raise HTTPException(status_code=503, detail="Pandas not available for parsing. Please install 'pandas'.")
-
-        filename = (file.filename or '').lower()
-        content = await file.read()
-        if not content:
-            raise HTTPException(status_code=400, detail="Empty file")
-
-        import io
-        buf = io.BytesIO(content)
-
-        if filename.endswith('.csv'):
-            df = pd.read_csv(buf)
-        elif filename.endswith('.xlsx') or filename.endswith('.xls'):
-            df = pd.read_excel(buf)
-        else:
-            raise HTTPException(status_code=400, detail="Unsupported file type. Please upload .csv or .xlsx")
-
-        # Normalize columns
-        df.columns = [str(c).strip().lower() for c in df.columns]
-
-        def find_col(names):
-            for n in names:
-                if n in df.columns:
-                    return n
-            return None
-
-        service_col = find_col(["service", "item", "name", "description", "title"])
-        price_col = find_col(["unit_price", "price", "rate", "unit price"])  # spaces after lower()
-        qty_col = find_col(["quantity", "qty", "count", "units"])   
-        desc_col = find_col(["description", "notes", "detail"]) if service_col not in ("description",) else None
-
-        if not service_col or not price_col:
-            raise HTTPException(status_code=400, detail="Missing required columns. Include at least 'service' and 'price' (or 'unit_price').")
-
-        def to_float(x):
-            try:
-                if isinstance(x, str):
-                    x = x.replace('$', '').replace(',', '').strip()
-                return float(x)
-            except Exception:
-                return 0.0
-
-        items: List[Dict[str, Any]] = []
-        for _, row in df.iterrows():
-            service = str(row.get(service_col) or "").strip()
-            if not service:
-                continue
-            unit_price = to_float(row.get(price_col))
-            quantity = to_float(row.get(qty_col)) if qty_col else 1.0
-            description = None
-            if desc_col:
-                description = str(row.get(desc_col) or "").strip() or None
-            items.append({
-                "service": service,
-                "unit_price": unit_price,
-                "quantity": quantity,
-                "description": description,
-                "currency_symbol": "$",
-            })
-
-        subtotal = sum((it["unit_price"] or 0.0) * (it["quantity"] or 0.0) for it in items)
-        total = subtotal
+        from .db_utils import list_document_summaries
+        
+        summaries = await list_document_summaries(document_id)
         return {
-            "items": items,
-            "subtotal": round(subtotal, 2),
-            "total": round(total, 2),
+            "document_id": document_id,
+            "cached_summaries": summaries,
+            "total_count": len(summaries)
         }
+        
+    except Exception as e:
+        logger.error(f"Failed to list cached summaries: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list summaries: {str(e)}")
+
+
+@app.delete("/documents/{document_id}/summaries")
+async def clear_document_summaries(document_id: str, summary_type: str = None):
+    """
+    Clear cached summaries for a document.
+    Query parameter summary_type can specify which type to clear, or clear all if omitted.
+    """
+    try:
+        from .db_utils import delete_summary
+        
+        success = await delete_summary(document_id, summary_type)
+        if success:
+            message = f"Cleared {summary_type or 'all'} summaries for document {document_id}"
+            return {"message": message, "success": True}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to clear summaries")
+            
+    except Exception as e:
+        logger.error(f"Failed to clear summaries: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to clear summaries: {str(e)}")
+
+
+@app.get("/summaries/statistics")
+async def get_summary_cache_statistics():
+    """
+    Get statistics about the summary cache.
+    """
+    try:
+        from .db_utils import get_summary_statistics
+        
+        stats = await get_summary_statistics()
+        return {
+            "cache_statistics": stats,
+            "cache_enabled": True
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to get summary statistics: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get statistics: {str(e)}")
+
+
+@app.post("/upload")
+async def upload_document(file: UploadFile = File(...)):
+    """Upload and ingest document endpoint."""
+    if not INGESTION_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="Document ingestion pipeline is not available"
+        )
+    
+    try:
+        # Validate file type
+        allowed_extensions = {'.txt', '.md', '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.csv', '.tsv'}
+        file_extension = os.path.splitext(file.filename)[1].lower() if file.filename else ''
+        
+        if file_extension not in allowed_extensions:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"File type {file_extension} not supported. Allowed: {', '.join(allowed_extensions)}"
+            )
+        
+        # Stream upload to disk with configurable size limit (default 200MB)
+        try:
+            max_mb = int(os.getenv("MAX_UPLOAD_MB", "200"))
+        except Exception:
+            max_mb = 200
+        max_size = max_mb * 1024 * 1024
+        
+        # Create temporary directory for processing
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_file_path = Path(temp_dir) / file.filename
+            
+            # Write the uploaded file to disk in chunks to avoid high memory usage
+            size_bytes = 0
+            with open(temp_file_path, 'wb') as temp_file:
+                chunk_size = 8 * 1024 * 1024  # 8MB
+                while True:
+                    chunk = await file.read(chunk_size)
+                    if not chunk:
+                        break
+                    size_bytes += len(chunk)
+                    if size_bytes > max_size:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"File too large. Maximum size is {max_mb}MB, got {size_bytes / 1024 / 1024:.1f}MB"
+                        )
+                    temp_file.write(chunk)
+
+            # Convert to Markdown using converter (handles pdf/docx/xlsx/etc.)
+            try:
+                md_text, conv_meta = convert_to_markdown(str(temp_file_path))
+            except Exception as e:
+                logger.exception("Conversion to markdown failed: %s", e)
+                raise HTTPException(status_code=500, detail="Failed to convert file to markdown")
+            if not md_text or not md_text.strip():
+                raise HTTPException(status_code=400, detail="No extractable text content found in the uploaded file")
+
+            # Write markdown to a file that the ingestion pipeline will pick up
+            md_name = f"{Path(file.filename).stem}.md"
+            md_path = Path(temp_dir) / md_name
+            with open(md_path, 'w', encoding='utf-8') as f_md:
+                f_md.write(md_text)
+            
+            # Pre-ingestion diagnostics: list markdown files in staging
+            found_md = sorted(glob.glob(str(Path(temp_dir) / "**/*.md"), recursive=True))
+
+            # Create ingestion configuration (only supported fields)
+            config = IngestionConfig(
+                chunk_size=int(os.getenv("CHUNK_SIZE", "800")),
+                chunk_overlap=int(os.getenv("CHUNK_OVERLAP", "150")),
+                max_chunk_size=int(os.getenv("MAX_CHUNK_SIZE", "1500")),
+                use_semantic_splitting=os.getenv("USE_SEMANTIC_SPLITTING", "1") not in ("0", "false", "False"),
+                extract_entities=os.getenv("EXTRACT_ENTITIES", "1") not in ("0", "false", "False"),
+                skip_graph_building=os.getenv("INGESTION_SKIP_GRAPH_BUILDING", "0") in ("1", "true", "True"),
+            )
+            
+            # Initialize ingestion pipeline
+            pipeline = DocumentIngestionPipeline(
+                config=config,
+                documents_folder=str(temp_dir),
+                clean_before_ingest=False
+            )
+            
+            # Process the document with optional global timeout
+            try:
+                global_timeout = float(os.getenv("INGEST_GLOBAL_TIMEOUT", "0"))
+            except Exception:
+                global_timeout = 0.0
+            if global_timeout > 0:
+                results = await asyncio.wait_for(pipeline.ingest_documents(), timeout=global_timeout)
+            else:
+                results = await pipeline.ingest_documents()
+
+            # Check if results were successful (successful if document_id is not empty and no errors)
+            successful_results = [r for r in results if r.document_id and len(r.errors) == 0]
+            failed_results = [r for r in results if not r.document_id or len(r.errors) > 0]
+
+            if not successful_results:
+                # Return diagnostics to help identify conversion/ingestion issues
+                diag = {
+                    "message": "Document processing failed: No results returned",
+                    "converted_markdown_chars": len(md_text or ""),
+                    "found_markdown_files": found_md,
+                    "ingestion_errors": [err for r in failed_results for err in (r.errors or [])],
+                }
+                logger.warning("Upload diagnostics: %s", diag)
+                raise HTTPException(status_code=500, detail=diag)
+            
+            # Aggregate statistics from all successful results
+            total_chunks = sum(r.chunks_created for r in successful_results)
+            total_entities = sum(r.entities_extracted for r in successful_results)
+            total_relationships = sum(r.relationships_created for r in successful_results)
+            total_processing_time = sum(r.processing_time_ms for r in successful_results)
+            
+            logger.info(f"Successfully ingested document: {file.filename}")
+            
+            return {
+                "success": True,
+                "message": f"File {file.filename} uploaded and processed successfully",
+                "filename": file.filename,
+                "size": size_bytes,
+                "converted_markdown_chars": len(md_text or ""),
+                "found_markdown_files": found_md,
+                "documents_processed": len(successful_results),
+                "chunks_created": total_chunks,
+                "embeddings_created": total_chunks,  # Each chunk gets an embedding
+                "graph_entities": total_entities,
+                "graph_relationships": total_relationships,
+                "processing_time_ms": total_processing_time,
+                "failed_documents": len(failed_results)
+            }
+        
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Parse pricing failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"File upload and ingestion failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
 
-@app.post("/pricing/render", response_model=PricingRenderResponse)
-async def render_pricing_table(req: PricingRenderRequest):
-    """Render pricing items into an HTML table with totals. Suitable for embedding into a Proposal section."""
+@app.post("/upload_async")
+async def upload_document_async(file: UploadFile = File(...)):
+    """Asynchronous upload endpoint.
+
+    Saves the uploaded file to a staging directory and immediately returns 202,
+    then converts + ingests in a background task to avoid long-running requests
+    that can time out at proxies (e.g., Replit gateway).
+    """
+    if not INGESTION_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="Document ingestion pipeline is not available"
+        )
+
     try:
-        items = req.items or []
+        allowed_extensions = {'.txt', '.md', '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.csv', '.tsv'}
+        original_name = file.filename or "upload.bin"
+        file_extension = os.path.splitext(original_name)[1].lower()
 
-        def money(v: float, sym: str = "$") -> str:
-            try:
-                return f"{sym}{float(v):,.2f}"
-            except Exception:
-                return f"{sym}{v}"
-
-        rows_html = []
-        subtotal = 0.0
-        currency = items[0].currency_symbol if items else "$"
-        for it in items:
-            amount = (it.unit_price or 0.0) * (it.quantity or 0.0)
-            subtotal += amount
-            rows_html.append(
-                f"<tr><td>{it.service}</td><td class='num'>{it.quantity:g}</td><td class='num'>{money(it.unit_price, it.currency_symbol)}</td><td class='num'>{money(amount, it.currency_symbol)}</td></tr>"
+        if file_extension not in allowed_extensions:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File type {file_extension} not supported. Allowed: {', '.join(allowed_extensions)}"
             )
 
-        tax = subtotal * (req.tax_rate_percent / 100.0)
-        total_before_discount = subtotal + tax
-        total = max(0.0, total_before_discount - req.discount_amount)
+        try:
+            max_mb = int(os.getenv("MAX_UPLOAD_MB", "200"))
+        except Exception:
+            max_mb = 200
+        max_size = max_mb * 1024 * 1024
 
-        html = "".join([
-            "<style>",
-            "table.pricing{width:100%;border-collapse:collapse;margin:12px 0;}",
-            "table.pricing th,table.pricing td{border:1px solid #e5e7eb;padding:8px;font-size:14px;}",
-            "table.pricing th{background:#f8fafc;text-align:left;}",
-            "table.pricing td.num{text-align:right;}",
-            "table.pricing tfoot td{font-weight:600;}",
-            "</style>",
-            "<table class='pricing'>",
-            "<thead><tr><th>Service</th><th>Qty</th><th>Unit Price</th><th>Amount</th></tr></thead>",
-            "<tbody>",
-            *rows_html,
-            "</tbody>",
-            "<tfoot>",
-            f"<tr><td colspan='3'>Subtotal</td><td class='num'>{money(subtotal, currency)}</td></tr>",
-            f"<tr><td colspan='3'>Tax ({req.tax_rate_percent:.2f}%)</td><td class='num'>{money(tax, currency)}</td></tr>",
-            f"<tr><td colspan='3'>Discount</td><td class='num'>-{money(req.discount_amount, currency)}</td></tr>",
-            f"<tr><td colspan='3'>Total</td><td class='num'>{money(total, currency)}</td></tr>",
-            "</tfoot>",
-            "</table>",
-        ])
+        # Persist staging dir across background task lifecycle
+        staging_dir = tempfile.mkdtemp(prefix="rag_upload_")
+        temp_file_path = Path(staging_dir) / original_name
+
+        # Stream write uploaded file
+        size_bytes = 0
+        with open(temp_file_path, 'wb') as temp_file:
+            chunk_size = 8 * 1024 * 1024  # 8MB
+            while True:
+                chunk = await file.read(chunk_size)
+                if not chunk:
+                    break
+                size_bytes += len(chunk)
+                if size_bytes > max_size:
+                    # Cleanup and abort
+                    try:
+                        shutil.rmtree(staging_dir, ignore_errors=True)
+                    except Exception:
+                        pass
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"File too large. Maximum size is {max_mb}MB, got {size_bytes / 1024 / 1024:.1f}MB"
+                    )
+                temp_file.write(chunk)
+
+        # Create an ingest job and return job_id immediately
+        job_id = str(uuid.uuid4())
+        INGEST_JOBS[job_id] = {
+            "status": "queued",
+            "error": None,
+            "result": None,
+            "filename": original_name,
+            "size": size_bytes,
+            "stage": "queued",
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+
+        async def _process_async_upload():
+            """Background task to convert to markdown and ingest, then cleanup."""
+            try:
+                # Mark running
+                try:
+                    job = INGEST_JOBS.get(job_id)
+                    if job is not None:
+                        job["status"] = "running"
+                        job["updated_at"] = datetime.utcnow().isoformat()
+                except Exception:
+                    pass
+
+                # Stage: converting
+                try:
+                    job = INGEST_JOBS.get(job_id)
+                    if job is not None:
+                        job["stage"] = "converting"
+                        job["updated_at"] = datetime.utcnow().isoformat()
+                except Exception:
+                    pass
+                # Convert to Markdown
+                try:
+                    md_text, conv_meta = convert_to_markdown(str(temp_file_path))
+                except Exception as e:
+                    logger.exception("Conversion to markdown failed (async): %s", e)
+                    try:
+                        job = INGEST_JOBS.get(job_id)
+                        if job is not None:
+                            job["status"] = "error"
+                            job["error"] = f"conversion_failed: {e}"
+                            job["updated_at"] = datetime.utcnow().isoformat()
+                    except Exception:
+                        pass
+                    return
+                if not md_text or not md_text.strip():
+                    logger.warning("No extractable text found in async upload: %s", original_name)
+                    try:
+                        job = INGEST_JOBS.get(job_id)
+                        if job is not None:
+                            job["status"] = "error"
+                            job["error"] = "no_text_extracted"
+                            job["updated_at"] = datetime.utcnow().isoformat()
+                    except Exception:
+                        pass
+                    return
+
+                md_name = f"{Path(original_name).stem}.md"
+                md_path = Path(staging_dir) / md_name
+                with open(md_path, 'w', encoding='utf-8') as f_md:
+                    f_md.write(md_text)
+
+                # Stage: converted
+                try:
+                    job = INGEST_JOBS.get(job_id)
+                    if job is not None:
+                        job["stage"] = "converted"
+                        job["updated_at"] = datetime.utcnow().isoformat()
+                except Exception:
+                    pass
+
+                # Pre-ingestion diagnostics
+                found_md = sorted(glob.glob(str(Path(staging_dir) / "**/*.md"), recursive=True))
+
+                # Ingestion config
+                config = IngestionConfig(
+                    chunk_size=int(os.getenv("CHUNK_SIZE", 800)),
+                    chunk_overlap=int(os.getenv("CHUNK_OVERLAP", 150)),
+                    max_chunk_size=int(os.getenv("MAX_CHUNK_SIZE", 1500)),
+                    embedding_model=os.getenv("EMBEDDING_MODEL", "text-embedding-004"),
+                    vector_dimension=int(os.getenv("VECTOR_DIMENSION", 768)),
+                    llm_choice=os.getenv("INGESTION_LLM_CHOICE", os.getenv("LLM_CHOICE", "gemini-1.5-flash")),
+                    enable_graph=True,
+                    clean_before_ingest=False,
+                )
+
+                pipeline = DocumentIngestionPipeline(
+                    config=config,
+                    documents_folder=staging_dir,
+                    clean_before_ingest=False,
+                )
+
+                results = await pipeline.ingest_documents()
+                successful_results = [r for r in results if r.document_id and len(r.errors) == 0]
+                failed_results = [r for r in results if not r.document_id or len(r.errors) > 0]
+
+                if successful_results:
+                    logger.info(
+                        "Async upload ingested %d document(s) (chunks=%d) for %s",
+                        len(successful_results),
+                        sum(r.chunks_created for r in successful_results),
+                        original_name,
+                    )
+                else:
+                    logger.warning("Async upload produced no successful results for %s; errors=%s; found_md=%s",
+                                   original_name,
+                                   [err for r in failed_results for err in (r.errors or [])],
+                                   found_md)
+            except Exception as e:
+                logger.exception("Async upload processing failed: %s", e)
+            finally:
+                # Cleanup staging dir
+                try:
+                    shutil.rmtree(staging_dir, ignore_errors=True)
+                except Exception:
+                    pass
+
+        # Kick off background processing and return immediately
+        asyncio.create_task(_process_async_upload())
+
+        return JSONResponse(status_code=202, content={
+            "success": True,
+            "status": "queued",
+            "filename": original_name,
+            "size": size_bytes,
+            "job_id": job_id,
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"File async upload scheduling failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Upload scheduling failed: {str(e)}")
+
+
+@app.post("/uploads/initiate")
+async def initiate_multipart_upload(request: Request):
+    """Initiate a multipart upload session for large files.
+
+    Body JSON:
+      - filename: original filename
+      - total_parts: expected number of chunks (int)
+    """
+    try:
+        body = await request.json()
+        filename = (body.get("filename") or "upload.bin").strip()
+        total_parts = int(body.get("total_parts"))
+        if not filename or total_parts <= 0:
+            raise HTTPException(status_code=400, detail="filename and total_parts are required")
+
+        # Create staging dir for this session
+        staging_dir = tempfile.mkdtemp(prefix="rag_mpu_")
+        upload_id = str(uuid.uuid4())
+        UPLOAD_SESSIONS[upload_id] = {
+            "filename": filename,
+            "total_parts": total_parts,
+            "staging_dir": staging_dir,
+            "created_at": datetime.utcnow().isoformat(),
+        }
+        return {"upload_id": upload_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to initiate multipart upload: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to initiate upload")
+
+
+@app.post("/uploads/{upload_id}/part")
+async def upload_multipart_part(upload_id: str, index: int = Form(...), chunk: UploadFile = File(...)):
+    """Upload a single part for a multipart upload session.
+
+    Accepts multipart/form-data with fields:
+      - index: 0-based part index
+      - chunk: file part payload
+    """
+    session = UPLOAD_SESSIONS.get(upload_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Upload session not found")
+    try:
+        staging_dir = session["staging_dir"]
+        total_parts = int(session.get("total_parts") or 0)
+        if index < 0 or (total_parts and index >= total_parts):
+            raise HTTPException(status_code=400, detail="Invalid part index")
+
+        part_path = Path(staging_dir) / f"part_{index:06d}"
+        # Write part to disk
+        size_bytes = 0
+        with open(part_path, "wb") as f:
+            while True:
+                data = await chunk.read(8 * 1024 * 1024)
+                if not data:
+                    break
+                size_bytes += len(data)
+                f.write(data)
+        return {"ok": True, "index": index, "size": size_bytes}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to write multipart part: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to write part")
+
+
+@app.post("/uploads/{upload_id}/complete")
+async def complete_multipart_upload(upload_id: str):
+    """Complete multipart upload: stitch parts and start async ingestion."""
+    session = UPLOAD_SESSIONS.get(upload_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Upload session not found")
+    staging_dir = session["staging_dir"]
+    filename = session["filename"]
+    total_parts = int(session.get("total_parts") or 0)
+
+    try:
+        staging = Path(staging_dir)
+        # Validate parts
+        parts = sorted(staging.glob("part_*"))
+        if total_parts and len(parts) != total_parts:
+            raise HTTPException(status_code=400, detail=f"Expected {total_parts} parts, got {len(parts)}")
+
+        assembled_path = staging / filename
+        # Stitch parts
+        with open(assembled_path, "wb") as out_f:
+            for p in parts:
+                with open(p, "rb") as in_f:
+                    shutil.copyfileobj(in_f, out_f, length=8 * 1024 * 1024)
+
+        # Background processing similar to /upload_async
+        # Create an ingest job for this session
+        job_id = str(uuid.uuid4())
+        INGEST_JOBS[job_id] = {
+            "status": "queued",
+            "error": None,
+            "result": None,
+            "filename": filename,
+            "stage": "queued",
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+
+        async def _process_assembled():
+            try:
+                # Mark running
+                try:
+                    job = INGEST_JOBS.get(job_id)
+                    if job is not None:
+                        job["status"] = "running"
+                        job["updated_at"] = datetime.utcnow().isoformat()
+                except Exception:
+                    pass
+                # Stage: converting
+                try:
+                    job = INGEST_JOBS.get(job_id)
+                    if job is not None:
+                        job["stage"] = "converting"
+                        job["updated_at"] = datetime.utcnow().isoformat()
+                except Exception:
+                    pass
+                # Convert to markdown
+                md_text, conv_meta = convert_to_markdown(str(assembled_path))
+                if not md_text or not md_text.strip():
+                    logger.warning("No extractable text in assembled file %s", assembled_path)
+                    try:
+                        job = INGEST_JOBS.get(job_id)
+                        if job is not None:
+                            job["status"] = "error"
+                            job["stage"] = "error"
+                            job["error"] = "no_text_extracted"
+                            job["updated_at"] = datetime.utcnow().isoformat()
+                    except Exception:
+                        pass
+                    return
+                md_path = staging / f"{Path(filename).stem}.md"
+                with open(md_path, "w", encoding="utf-8") as f_md:
+                    f_md.write(md_text)
+
+                config = IngestionConfig(
+                    chunk_size=int(os.getenv("CHUNK_SIZE", 800)),
+                    chunk_overlap=int(os.getenv("CHUNK_OVERLAP", 150)),
+                    max_chunk_size=int(os.getenv("MAX_CHUNK_SIZE", 1500)),
+                    embedding_model=os.getenv("EMBEDDING_MODEL", "text-embedding-004"),
+                    vector_dimension=int(os.getenv("VECTOR_DIMENSION", 768)),
+                    llm_choice=os.getenv("INGESTION_LLM_CHOICE", os.getenv("LLM_CHOICE", "gemini-1.5-flash")),
+                    enable_graph=True,
+                    clean_before_ingest=False,
+                )
+                pipeline = DocumentIngestionPipeline(
+                    config=config,
+                    documents_folder=staging_dir,
+                    clean_before_ingest=False,
+                )
+                # Stage: ingesting
+                try:
+                    job = INGEST_JOBS.get(job_id)
+                    if job is not None:
+                        job["stage"] = "ingesting"
+                        job["updated_at"] = datetime.utcnow().isoformat()
+                except Exception:
+                    pass
+
+                results = await pipeline.ingest_documents()
+                ok = [r for r in results if getattr(r, "document_id", "") and len(getattr(r, "errors", []) or []) == 0]
+                try:
+                    job = INGEST_JOBS.get(job_id)
+                    if job is not None:
+                        job["status"] = "done"
+                        job["stage"] = "done"
+                        job["result"] = {"document_ids": [r.document_id for r in ok if r.document_id]}
+                        job["updated_at"] = datetime.utcnow().isoformat()
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.exception("Multipart completion failed: %s", e)
+                try:
+                    job = INGEST_JOBS.get(job_id)
+                    if job is not None:
+                        job["status"] = "error"
+                        job["stage"] = "error"
+                        job["error"] = str(e)
+                        job["updated_at"] = datetime.utcnow().isoformat()
+                except Exception:
+                    pass
+            finally:
+                # Cleanup session and staging
+                try:
+                    shutil.rmtree(staging_dir, ignore_errors=True)
+                finally:
+                    UPLOAD_SESSIONS.pop(upload_id, None)
+
+        asyncio.create_task(_process_assembled())
+        return JSONResponse(status_code=202, content={"success": True, "status": "queued", "job_id": job_id})
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to complete multipart upload: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to complete upload")
+
+
+@app.get("/ingest/jobs/{job_id}/status")
+async def get_ingest_job_status(job_id: str):
+    """Return current status of an ingestion job created by upload_async or multipart complete."""
+    job = INGEST_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job_not_found")
+    # Return a copy to avoid accidental mutation
+    return {
+        "job_id": job_id,
+        "status": job.get("status"),
+        "stage": job.get("stage"),
+        "error": job.get("error"),
+        "result": job.get("result"),
+        "filename": job.get("filename"),
+        "size": job.get("size"),
+        "created_at": job.get("created_at"),
+        "updated_at": job.get("updated_at"),
+    }
+
+
+@app.get("/ingest/jobs/{job_id}/result")
+async def get_ingest_job_result(job_id: str):
+    """Return job result when done. Returns 202 while still processing."""
+    job = INGEST_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job_not_found")
+    status = (job.get("status") or "").lower()
+    if status == "done":
+        return {
+            "job_id": job_id,
+            "status": status,
+            "result": job.get("result") or {},
+        }
+    if status == "error":
+        return JSONResponse(status_code=500, content={
+            "job_id": job_id,
+            "status": status,
+            "error": job.get("error") or "unknown_error",
+        })
+    # queued or running
+    return JSONResponse(status_code=202, content={
+        "job_id": job_id,
+        "status": status or "queued",
+    })
+
+
+@app.get("/ingest/jobs")
+async def list_ingest_jobs(status: Optional[str] = None):
+    """List ingestion jobs (ephemeral, in-memory). Optional filter by status.
+
+    Query params:
+      - status: queued | running | done | error
+    """
+    try:
+        items = []
+        for jid, job in INGEST_JOBS.items():
+            if status and (job.get("status") or "").lower() != status.lower():
+                continue
+            items.append({
+                "job_id": jid,
+                "status": job.get("status"),
+                "stage": job.get("stage"),
+                "error": job.get("error"),
+                "result": job.get("result"),
+                "filename": job.get("filename"),
+                "size": job.get("size"),
+                "created_at": job.get("created_at"),
+                "updated_at": job.get("updated_at"),
+            })
+        # Sort newest first by created_at when available
+        try:
+            items.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+        except Exception:
+            pass
+        return {"jobs": items, "count": len(items)}
+    except Exception as e:
+        logger.error(f"Failed to list ingest jobs: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list ingest jobs")
+
+
+@app.post("/convert")
+async def convert_only(file: UploadFile = File(...)):
+    """Server-side conversion to Markdown without ingestion.
+
+    Returns JSON with diagnostics: original ext, markdown length, and preview.
+    Useful on Replit to verify converters (python-docx, openpyxl, pdfminer/ocr) work.
+    """
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Filename is required")
+
+    try:
+        # Validate extension (same as /upload)
+        allowed_extensions = {'.txt', '.md', '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.csv', '.tsv'}
+        ext = os.path.splitext(file.filename)[1].lower()
+        if ext not in allowed_extensions:
+            raise HTTPException(status_code=400, detail=f"Unsupported extension {ext}")
+
+        # Size limit
+        try:
+            max_mb = int(os.getenv("MAX_UPLOAD_MB", "200"))
+        except Exception:
+            max_mb = 200
+        max_size = max_mb * 1024 * 1024
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_file_path = Path(temp_dir) / file.filename
+            size_bytes = 0
+            with open(temp_file_path, 'wb') as temp_file:
+                chunk_size = 8 * 1024 * 1024
+                while True:
+                    chunk = await file.read(chunk_size)
+                    if not chunk:
+                        break
+                    size_bytes += len(chunk)
+                    if size_bytes > max_size:
+                        raise HTTPException(status_code=413, detail=f"File too large (> {max_mb}MB)")
+                    temp_file.write(chunk)
+
+            # Convert to markdown
+            md_text, meta = convert_to_markdown(str(temp_file_path))
+            md_text = md_text or ""
+            preview = md_text[:1000]
+            ocr_enabled = os.getenv("OCR_PDF", "0").lower() in {"1", "true", "yes", "on"}
+            return {
+                "success": True,
+                "filename": file.filename,
+                "original_ext": ext,
+                "size": size_bytes,
+                "converted_markdown_chars": len(md_text),
+                "preview": preview,
+                "ocr_enabled": ocr_enabled,
+                "meta": meta,
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Conversion failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/ingest/folder")
+async def ingest_folder(request: Request):
+    """Bulk-ingest a local folder. Converts supported files to Markdown first, then ingests.
+
+    Body JSON:
+      - path: absolute path to a folder containing source files
+      - collection_id (optional): add ingested documents to this collection
+    """
+    if not INGESTION_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Document ingestion pipeline is not available")
+
+    try:
+        body = await request.json()
+        folder_path = body.get("path")
+        collection_id = body.get("collection_id")
+        if not folder_path or not isinstance(folder_path, str):
+            raise HTTPException(status_code=400, detail="'path' is required")
+        src = Path(folder_path)
+        if not src.exists() or not src.is_dir():
+            raise HTTPException(status_code=400, detail="Provided path does not exist or is not a directory")
+
+        allowed_exts = {".txt", ".md", ".markdown", ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".tsv", ".html", ".htm", ".pptx"}
+
+        with tempfile.TemporaryDirectory() as staging_dir:
+            staging = Path(staging_dir)
+            converted_count = 0
+            errors: List[str] = []
+
+            # Walk and convert
+            for path in src.rglob("*"):
+                if not path.is_file():
+                    continue
+                if path.suffix.lower() not in allowed_exts:
+                    continue
+                try:
+                    text, meta = convert_to_markdown(str(path))
+                    if not text or not text.strip():
+                        errors.append(f"No text extracted: {path.name}")
+                        continue
+                    # write .md preserving relative structure
+                    rel = path.relative_to(src)
+                    out_path = staging / rel.with_suffix(".md")
+                    out_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(out_path, 'w', encoding='utf-8') as f:
+                        f.write(text)
+                    converted_count += 1
+                except Exception as e:
+                    logger.warning("Failed to convert %s: %s", path, e)
+                    errors.append(f"{path.name}: {e}")
+
+            if converted_count == 0:
+                return {"success": False, "message": "No convertible files found", "errors": errors}
+
+            # Build ingestion config
+            config = IngestionConfig(
+                chunk_size=int(os.getenv("CHUNK_SIZE", 800)),
+                chunk_overlap=int(os.getenv("CHUNK_OVERLAP", 150)),
+                max_chunk_size=int(os.getenv("MAX_CHUNK_SIZE", 1500)),
+                embedding_model=os.getenv("EMBEDDING_MODEL", "text-embedding-004"),
+                vector_dimension=int(os.getenv("VECTOR_DIMENSION", 768)),
+                llm_choice=os.getenv("INGESTION_LLM_CHOICE", os.getenv("LLM_CHOICE", "gemini-1.5-flash")),
+                enable_graph=True,
+                clean_before_ingest=False
+            )
+
+            pipeline = DocumentIngestionPipeline(
+                config=config,
+                documents_folder=str(staging),
+                clean_before_ingest=False
+            )
+
+            results = await pipeline.ingest_documents()
+            successful = [r for r in results if r.document_id and len(r.errors) == 0]
+
+            # Optionally add to collection
+            added_to_collection = 0
+            if collection_id and successful:
+                try:
+                    ids = [r.document_id for r in successful]
+                    _ = await add_documents_to_collection_db(collection_id, ids, added_by=request.headers.get("x-user-id"))
+                    added_to_collection = len(ids)
+                except Exception as e:
+                    logger.warning("Failed to add docs to collection %s: %s", collection_id, e)
+
+            return {
+                "success": True,
+                "converted_files": converted_count,
+                "documents_processed": len(successful),
+                "errors": errors,
+                "added_to_collection": added_to_collection,
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Bulk ingest failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _extract_section4(text: str) -> Optional[str]:
+    """Heuristic extraction of Section 4 from a document's text."""
+    if not text:
+        return None
+    # Normalize line endings
+    t = text
+    # Try to find a 'Section 4' header and capture until the next 'Section 5'
+    patterns = [
+        r"(?is)\bsection\s*4\b.*?(?=\n\s*section\s*5\b|\n\s*5\.|\n\s*section\s*V|\Z)",
+        r"(?is)\n\s*4\.?\s+[A-Z].*?(?=\n\s*5\.|\n\s*section\s*5\b|\Z)",
+    ]
+    for pat in patterns:
+        m = re.search(pat, t)
+        if m:
+            return m.group(0).strip()
+    return None
+
+
+@app.post("/reports/generate")
+async def reports_generate(request: Request):
+    """Generate a minimal report focusing on Section 4 (post-maps) for documents in a collection.
+
+    Body JSON:
+      - collection_id: required
+      - limit (optional): limit number of docs processed
+    """
+    try:
+        body = await request.json()
+        collection_id = body.get("collection_id")
+        limit = int(body.get("limit", 50))
+        if not collection_id:
+            raise HTTPException(status_code=400, detail="collection_id is required")
+
+        # List documents in the collection
+        docs, total = await list_collection_documents_db(collection_id, limit=limit, offset=0)
+        from .tools import DocumentInput
+        extracted = []
+        for d in docs:
+            doc_id = d.get("id") or d.get("document_id") or d.get("doc_id")
+            title = d.get("title") or d.get("name") or "Untitled"
+            if not doc_id:
+                continue
+            try:
+                di = DocumentInput(document_id=str(doc_id))
+                doc = await get_document_tool(di)
+                text = _extract_text_from_document(doc) or ""
+                section4 = _extract_section4(text) or ""
+                if section4:
+                    extracted.append({
+                        "document_id": str(doc_id),
+                        "title": title,
+                        "section4": section4[:10000],  # cap
+                        "citation": {
+                            "document_title": title,
+                            "match_index": max(text.lower().find(section4[:50].lower()), 0)
+                        }
+                    })
+            except Exception as e:
+                logger.warning("Failed to extract Section 4 for %s: %s", title, e)
 
         return {
-            "html": html,
-            "totals": {
-                "subtotal": round(subtotal, 2),
-                "tax": round(tax, 2),
-                "discount": round(req.discount_amount, 2),
-                "total": round(total, 2),
-            }
+            "collection_id": collection_id,
+            "total_documents": total,
+            "processed": len(docs),
+            "extracted_count": len(extracted),
+            "results": extracted,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Report generation failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/sessions/{session_id}")
+async def get_session_info(session_id: str):
+    """Get session information."""
+    try:
+        session = await get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        return session
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Session retrieval failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# 3rd Party Integration Endpoints
+_integration_instances = {}  # Store active integration instances
+
+@app.get("/integrations")
+async def list_available_integrations():
+    """List available 3rd party integrations."""
+    if not INTEGRATIONS_AVAILABLE:
+        return {"integrations": []}
+    
+    integrations = [
+        {
+            "name": "google_drive",
+            "display_name": "Google Drive",
+            "description": "Import documents from Google Drive",
+            "auth_required": True,
+            "supported_formats": [".txt", ".md", ".pdf", ".docx", ".doc"]
+        },
+        {
+            "name": "dropbox", 
+            "display_name": "Dropbox",
+            "description": "Import documents from Dropbox",
+            "auth_required": True,
+            "supported_formats": [".txt", ".md", ".pdf", ".docx", ".doc"]
+        },
+        {
+            "name": "onedrive",
+            "display_name": "OneDrive",
+            "description": "Import documents from OneDrive", 
+            "auth_required": True,
+            "supported_formats": [".txt", ".md", ".pdf", ".docx", ".doc"]
+        }
+    ]
+    
+    return {"integrations": integrations}
+
+
+@app.get("/integrations/{service_name}/auth-config")
+async def get_integration_auth_config(service_name: str):
+    """Get OAuth configuration for client-side authentication."""
+    if not INTEGRATIONS_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Integrations not available")
+    
+    # Return public OAuth configuration (no secrets)
+    configs = {
+        "google_drive": {
+            "client_id": os.getenv("GOOGLE_DRIVE_CLIENT_ID", "your_google_client_id"),  # Public client ID
+            "auth_url": "https://accounts.google.com/o/oauth2/v2/auth",
+            "scope": "https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.metadata.readonly",
+            "redirect_uri": "http://localhost:3000/auth/callback/google_drive"
+        },
+        "dropbox": {
+            "client_id": os.getenv("DROPBOX_CLIENT_ID", "your_dropbox_client_id"),  # Public client ID
+            "auth_url": "https://www.dropbox.com/oauth2/authorize",
+            "scope": "files.content.read files.metadata.read",
+            "redirect_uri": "http://localhost:3000/auth/callback/dropbox"
+        },
+        "onedrive": {
+            "client_id": os.getenv("ONEDRIVE_CLIENT_ID", "your_onedrive_client_id"),  # Public client ID
+            "auth_url": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+            "scope": "https://graph.microsoft.com/Files.Read https://graph.microsoft.com/Files.Read.All offline_access",
+            "redirect_uri": "http://localhost:3000/auth/callback/onedrive"
+        }
+    }
+    
+    if service_name not in configs:
+        raise HTTPException(status_code=400, detail=f"Unknown service: {service_name}")
+    
+    return configs[service_name]
+
+
+@app.post("/integrations/{service_name}/store-token")
+async def store_integration_token(service_name: str, request: Request):
+    """Store user's OAuth token for integration."""
+    if not INTEGRATIONS_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Integrations not available")
+    
+    try:
+        body = await request.json()
+        access_token = body.get('access_token')
+        user_id = body.get('user_id', 'anonymous')  # Optional user identification
+        
+        if not access_token:
+            raise HTTPException(status_code=400, detail="Missing access_token")
+        
+        # Create integration instance with user's token
+        # No client secret needed for token-only operations
+        if service_name == "google_drive":
+            integration = GoogleDriveIntegration(IntegrationConfig(
+                client_id="", client_secret="", redirect_uri="", 
+                scopes=[], service_name=service_name
+            ))
+        elif service_name == "dropbox":
+            integration = DropboxIntegration(IntegrationConfig(
+                client_id="", client_secret="", redirect_uri="",
+                scopes=[], service_name=service_name
+            ))
+        elif service_name == "onedrive":
+            integration = OneDriveIntegration(IntegrationConfig(
+                client_id="", client_secret="", redirect_uri="",
+                scopes=[], service_name=service_name
+            ))
+        else:
+            raise HTTPException(status_code=400, detail=f"Unknown service: {service_name}")
+        
+        # Set the user's token
+        integration.set_tokens(access_token)
+        
+        # Store integration session
+        session_id = str(uuid.uuid4())
+        _integration_instances[session_id] = integration
+        
+        return {
+            "success": True,
+            "session_id": session_id,
+            "service_name": service_name,
+            "message": "Token stored successfully"
+        }
+        
+    except Exception as e:
+        logger.error(f"Token storage failed for {service_name}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/integrations/{service_name}/documents")
+async def list_integration_documents(
+    service_name: str,
+    session_id: str,
+    folder_id: Optional[str] = None
+):
+    """List documents from a 3rd party integration."""
+    if not INTEGRATIONS_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Integrations not available")
+    
+    integration = _integration_instances.get(session_id)
+    if not integration:
+        raise HTTPException(status_code=401, detail="Not authenticated or session expired")
+    
+    try:
+        documents = await integration.list_documents(folder_id)
+        return {"documents": documents}
+        
+    except Exception as e:
+        logger.error(f"Failed to list {service_name} documents: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/integrations/{service_name}/import")
+async def import_documents_from_integration(
+    service_name: str,
+    request: Request
+):
+    """Import selected documents from a 3rd party integration."""
+    if not INTEGRATIONS_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Integrations not available")
+    
+    if not INGESTION_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Document ingestion not available")
+    
+    try:
+        body = await request.json()
+        session_id = body.get('session_id')
+        document_ids = body.get('document_ids', [])
+        
+        if not session_id or not document_ids:
+            raise HTTPException(status_code=400, detail="Missing session_id or document_ids")
+        
+        integration = _integration_instances.get(session_id)
+        if not integration:
+            raise HTTPException(status_code=401, detail="Not authenticated or session expired")
+        
+        imported_documents = []
+        failed_documents = []
+        total_documents = len(document_ids)
+        processed_count = 0
+        
+        logger.info(f"Starting sequential import of {total_documents} documents from {service_name}")
+        
+        # Import each document sequentially (one at a time for data integrity)
+        async for document in integration.bulk_import_documents(document_ids):
+            processed_count += 1
+            logger.info(f"Processing document {processed_count}/{total_documents}: {document.name}")
+            
+            try:
+                # Save to temporary file
+                temp_file_path = await integration.save_temp_file(document)
+                
+                # Create ingestion configuration
+                config = IngestionConfig(
+                    chunk_size=int(os.getenv("CHUNK_SIZE", 800)),
+                    chunk_overlap=int(os.getenv("CHUNK_OVERLAP", 150)),
+                    max_chunk_size=int(os.getenv("MAX_CHUNK_SIZE", 1500)),
+                    embedding_model=os.getenv("EMBEDDING_MODEL", "text-embedding-004"),
+                    vector_dimension=int(os.getenv("VECTOR_DIMENSION", 768)),
+                    llm_choice=os.getenv("INGESTION_LLM_CHOICE", os.getenv("LLM_CHOICE", "gemini-1.5-flash")),
+                    enable_graph=True,
+                    clean_before_ingest=False
+                )
+                
+                # Process with ingestion pipeline (sequential processing ensures data integrity)
+                temp_dir = os.path.dirname(temp_file_path)
+                pipeline = DocumentIngestionPipeline(
+                    config=config,
+                    documents_folder=temp_dir,
+                    clean_before_ingest=False
+                )
+                
+                logger.info(f"Starting ingestion for: {document.name}")
+                results = await pipeline.ingest_documents()
+                
+                # Clean up temp file
+                try:
+                    os.unlink(temp_file_path)
+                except:
+                    pass  # Ignore cleanup errors
+                
+                # Process results
+                successful_results = [r for r in results if r.document_id and len(r.errors) == 0]
+                
+                if successful_results:
+                    result = successful_results[0]  # Should only be one document
+                    imported_documents.append({
+                        "id": document.id,
+                        "name": document.name,
+                        "service": service_name,
+                        "chunks_created": result.chunks_created,
+                        "entities_extracted": result.entities_extracted,
+                        "processing_time_ms": result.processing_time_ms,
+                        "processed_at": processed_count,
+                        "total_documents": total_documents
+                    })
+                    logger.info(f"Successfully imported: {document.name} ({result.chunks_created} chunks, {result.entities_extracted} entities)")
+                else:
+                    failed_documents.append({
+                        "id": document.id,
+                        "name": document.name,
+                        "error": "Processing failed - no successful results",
+                        "processed_at": processed_count,
+                        "total_documents": total_documents
+                    })
+                    logger.warning(f"Failed to import: {document.name} - no successful results")
+                    
+            except Exception as e:
+                logger.error(f"Failed to import document {document.id}: {e}")
+                failed_documents.append({
+                    "id": document.id if hasattr(document, 'id') else 'unknown',
+                    "name": document.name if hasattr(document, 'name') else 'unknown',
+                    "error": str(e),
+                    "processed_at": processed_count,
+                    "total_documents": total_documents
+                })
+        
+        return {
+            "success": True,
+            "imported_count": len(imported_documents),
+            "failed_count": len(failed_documents),
+            "imported_documents": imported_documents,
+            "failed_documents": failed_documents
         }
     except Exception as e:
-        logger.error(f"Render pricing failed: {e}")
+        logger.error(f"Bulk import from {service_name} failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+# Analytics endpoints
+@app.get("/api/analytics/real-time", response_model=RealTimeMetrics)
+async def api_get_real_time_metrics():
+    """Get real-time metrics."""
+    metrics = await analytics_tracker.get_real_time_metrics()
+    if metrics is None:
+        metrics = RealTimeMetrics(
+            active_sessions=0,
+            messages_last_hour=0,
+            new_users_last_hour=0,
+            total_documents=0,
+            documents_today=0,
+            public_templates=0,
+            total_collections=0,
+        )
+    return metrics
+
+
+@app.get("/api/analytics/chat-metrics", response_model=ChatMetrics)
+async def api_get_chat_metrics(days: int = 7):
+    """Get aggregated chat metrics over the last N days."""
+    metrics = await analytics_tracker.get_chat_activity_metrics(days=days)
+    if metrics is None:
+        metrics = ChatMetrics(
+            total_messages=0,
+            total_sessions=0,
+            unique_users=0,
+            avg_messages_per_session=0.0,
+            total_tool_calls=0,
+            avg_response_time_ms=0.0,
+        )
+    return metrics
+
+
+@app.get("/api/analytics/document-usage", response_model=DocumentUsageStats)
+async def api_get_document_usage():
+    """Get document usage statistics."""
+    stats = await analytics_tracker.get_document_usage_stats()
+    if stats is None:
+        stats = DocumentUsageStats(
+            total_documents=0,
+            documents_uploaded_today=0,
+            most_referenced_document_id=None,
+            most_referenced_document_title=None,
+            avg_document_size=0,
+        )
+    return stats
+
+
+@app.get("/api/analytics/trending-searches")
+async def api_get_trending_searches(days: int = 7, limit: int = 10):
+    """Get trending searches within the last N days."""
+    searches = await analytics_tracker.get_trending_searches(days=days, limit=limit)
+    return {"trending_searches": searches}
+
+
+@app.get("/api/analytics/user-engagement", response_model=UserEngagementMetrics)
+async def api_get_user_engagement(user_id: Optional[str] = None, days: int = 30):
+    """Get user engagement metrics optionally filtered by user_id."""
+    data = await analytics_tracker.get_user_engagement_metrics(user_id=user_id, days=days)
+    # Provide safe defaults if empty
+    return UserEngagementMetrics(
+        total_sessions=int(data.get("total_sessions", 0) or 0),
+        avg_messages_per_session=float(data.get("avg_messages_per_session", 0) or 0),
+        total_messages=int(data.get("total_messages", 0) or 0),
+        total_tool_calls=int(data.get("total_tool_calls", 0) or 0),
+        total_searches=int(data.get("total_searches", 0) or 0),
+        avg_response_time=float(data.get("avg_response_time", 0) or 0),
+        high_satisfaction_count=int(data.get("high_satisfaction_count", 0) or 0),
+        low_satisfaction_count=int(data.get("low_satisfaction_count", 0) or 0),
+        avg_satisfaction_rating=float(data.get("avg_satisfaction_rating", 0) or 0),
+    )
+
+
+@app.get("/api/analytics/dashboard", response_model=AnalyticsDashboardResponse)
+async def api_get_dashboard(days: int = 7, user_id: Optional[str] = None):
+    """Get combined analytics dashboard data."""
+    real_time = await analytics_tracker.get_real_time_metrics()
+    if real_time is None:
+        real_time = RealTimeMetrics(
+            active_sessions=0,
+            messages_last_hour=0,
+            new_users_last_hour=0,
+            total_documents=0,
+            documents_today=0,
+            public_templates=0,
+            total_collections=0,
+        )
+
+    chat = await analytics_tracker.get_chat_activity_metrics(days=days)
+    if chat is None:
+        chat = ChatMetrics(
+            total_messages=0,
+            total_sessions=0,
+            unique_users=0,
+            avg_messages_per_session=0.0,
+            total_tool_calls=0,
+            avg_response_time_ms=0.0,
+        )
+
+    doc_stats = await analytics_tracker.get_document_usage_stats()
+    if doc_stats is None:
+        doc_stats = DocumentUsageStats(
+            total_documents=0,
+            documents_uploaded_today=0,
+            most_referenced_document_id=None,
+            most_referenced_document_title=None,
+            avg_document_size=0,
+        )
+
+    trending = await analytics_tracker.get_trending_searches(days=days, limit=10)
+    engagement_dict = await analytics_tracker.get_user_engagement_metrics(user_id=user_id, days=days)
+    engagement = UserEngagementMetrics(
+        total_sessions=int(engagement_dict.get("total_sessions", 0) or 0),
+        avg_messages_per_session=float(engagement_dict.get("avg_messages_per_session", 0) or 0),
+        total_messages=int(engagement_dict.get("total_messages", 0) or 0),
+        total_tool_calls=int(engagement_dict.get("total_tool_calls", 0) or 0),
+        total_searches=int(engagement_dict.get("total_searches", 0) or 0),
+        avg_response_time=float(engagement_dict.get("avg_response_time", 0) or 0),
+        high_satisfaction_count=int(engagement_dict.get("high_satisfaction_count", 0) or 0),
+        low_satisfaction_count=int(engagement_dict.get("low_satisfaction_count", 0) or 0),
+        avg_satisfaction_rating=float(engagement_dict.get("avg_satisfaction_rating", 0) or 0),
+    )
+
+    return AnalyticsDashboardResponse(
+        real_time_metrics=real_time,
+        chat_metrics=chat,
+        document_stats=doc_stats,
+        trending_searches=trending,
+        user_engagement=engagement,
+    )
+
+
+# Question Generation Endpoints
+@app.get("/api/questions/generate")
+async def generate_questions(collection_id: Optional[str] = None, limit: int = 6):
+    """Generate relevant questions based on document content."""
+    logger.info(f"Question generation requested - collection_id: {collection_id}, limit: {limit}")
+    
+    if not question_generator:
+        logger.warning("Question generator not initialized")
+        return {"questions": [], "source": "fallback_no_generator", "error": "Question generator not initialized"}
+    
+    try:
+        if collection_id:
+            questions = await question_generator.generate_questions_for_collection(
+                collection_id=collection_id, 
+                limit=limit
+            )
+        else:
+            questions = await question_generator.generate_questions_for_all_documents(
+                limit=limit
+            )
+        
+        logger.info(f"Generated {len(questions)} questions")
+        return {"questions": questions, "source": "ai_generated"}
+    
+    except Exception as e:
+        logger.error(f"Error generating questions: {e}")
+        return {"questions": [], "source": "fallback_error", "error": str(e)}
+
+@app.post("/api/questions/clear-cache")
+async def clear_question_cache():
+    """Clear the question generation cache."""
+    if question_generator:
+        question_generator.clear_cache()
+        return {"message": "Question cache cleared"}
+    return {"message": "Question generator not available"}
+
+@app.get("/api/questions/debug")
+async def debug_questions():
+    """Debug endpoint to check document count and question generation."""
+    try:
+        from .db_utils import db_pool as pool
+        
+        if not pool:
+            return {"error": "Database not connected"}
+            
+        async with pool.acquire() as conn:
+            # Count total documents
+            doc_count = await conn.fetchval("SELECT COUNT(*) FROM documents")
+            
+            # Count chunks
+            chunk_count = await conn.fetchval("SELECT COUNT(*) FROM chunks")
+            
+            # Get sample document titles
+            sample_docs = await conn.fetch("""
+                SELECT title, source, LENGTH(content) as content_length 
+                FROM documents 
+                ORDER BY created_at DESC 
+                LIMIT 5
+            """)
+            
+            return {
+                "document_count": doc_count,
+                "chunk_count": chunk_count,
+                "sample_documents": [
+                    {
+                        "title": doc["title"],
+                        "source": doc["source"],
+                        "content_length": doc["content_length"]
+                    } for doc in sample_docs
+                ],
+                "question_generator_available": question_generator is not None
+            }
+    except Exception as e:
+        logger.error(f"Debug endpoint error: {e}")
+        return {"error": str(e)}
+
+
+# Exception handlers
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Global exception handler."""
+    logger.error(f"Unhandled exception: {exc}")
+    
+    return ErrorResponse(
+        error=str(exc),
+        error_type=type(exc).__name__,
+        request_id=str(uuid.uuid4())
+    )
+
+
+# Development server
+if __name__ == "__main__":
+    uvicorn.run(
+        app,
+        host=APP_HOST,
+        port=APP_PORT,
+        reload=APP_ENV == "development",
+        log_level=LOG_LEVEL.lower(),
+    )

@@ -24,36 +24,23 @@ from .graph_utils import (
     graph_client
 )
 from .models import ChunkResult, GraphSearchResult, DocumentMetadata
-from .providers import get_embedding_client, get_embedding_model
+from .providers import generate_embedding as gemini_generate_embedding, get_embedding_model
 
 # Load environment variables
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-# Initialize embedding client with flexible provider
-embedding_client = get_embedding_client()
+# Gemini embedding configuration
 EMBEDDING_MODEL = get_embedding_model()
 
 
 async def generate_embedding(text: str) -> List[float]:
-    """
-    Generate embedding for text using OpenAI.
-    
-    Args:
-        text: Text to embed
-    
-    Returns:
-        Embedding vector
-    """
+    """Generate an embedding for query-time similarity search."""
     try:
-        response = await embedding_client.embeddings.create(
-            model=EMBEDDING_MODEL,
-            input=text
-        )
-        return response.data[0].embedding
-    except Exception as e:
-        logger.error(f"Failed to generate embedding: {e}")
+        return await gemini_generate_embedding(text, model=EMBEDDING_MODEL)
+    except Exception as exc:
+        logger.error(f"Failed to generate embedding: {exc}")
         raise
 
 
@@ -61,7 +48,7 @@ async def generate_embedding(text: str) -> List[float]:
 class VectorSearchInput(BaseModel):
     """Input for vector search tool."""
     query: str = Field(..., description="Search query")
-    limit: int = Field(default=10, description="Maximum number of results")
+    limit: int = Field(default=50, description="Maximum number of results (optimized for 1M context)")
     collection_ids: Optional[List[str]] = Field(default=None, description="Restrict search to these collection UUIDs")
     document_ids: Optional[List[str]] = Field(default=None, description="Restrict search to these document UUIDs")
     chunk_ids: Optional[List[str]] = Field(default=None, description="Restrict search to these specific chunk UUIDs")
@@ -75,7 +62,7 @@ class GraphSearchInput(BaseModel):
 class HybridSearchInput(BaseModel):
     """Input for hybrid search tool."""
     query: str = Field(..., description="Search query")
-    limit: int = Field(default=10, description="Maximum number of results")
+    limit: int = Field(default=50, description="Maximum number of results (optimized for 1M context)")
     text_weight: float = Field(default=0.3, description="Weight for text similarity (0-1)")
     collection_ids: Optional[List[str]] = Field(default=None, description="Restrict search to these collection UUIDs")
     document_ids: Optional[List[str]] = Field(default=None, description="Restrict search to these document UUIDs")
@@ -89,7 +76,7 @@ class DocumentInput(BaseModel):
 
 class DocumentListInput(BaseModel):
     """Input for listing documents."""
-    limit: int = Field(default=20, description="Maximum number of documents")
+    limit: int = Field(default=100, description="Maximum number of documents (optimized for 1M context)")
     offset: int = Field(default=0, description="Number of documents to skip")
     collection_ids: Optional[List[str]] = Field(default=None, description="Restrict listing to these collection UUIDs")
     document_ids: Optional[List[str]] = Field(default=None, description="Restrict listing to these document UUIDs")
@@ -138,7 +125,7 @@ async def search_by_title(
     query: str,
     collection_ids: Optional[List[str]] = None,
     document_ids: Optional[List[str]] = None,
-    limit: int = 10
+    limit: int = 50  # Optimized for 1M context
 ) -> List[Dict[str, Any]]:
     """
     Search for documents by title or filename, returning their first chunks.
@@ -623,7 +610,7 @@ async def perform_comprehensive_search(
     query: str,
     use_vector: bool = True,
     use_graph: bool = True,
-    limit: int = 10
+    limit: int = 50  # Optimized for 1M context
 ) -> Dict[str, Any]:
     """
     Perform a comprehensive search using multiple methods.
