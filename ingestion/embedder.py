@@ -152,6 +152,21 @@ class EmbeddingGenerator:
         return self.retry_delay * (2 ** attempt)
 
 
+# Factory function expected by ingestion.ingest
+def create_embedder(model: Optional[str] = None, batch_size: int = 100, max_retries: int = 3, retry_delay: float = 1.0) -> EmbeddingGenerator:
+    """Create and return an EmbeddingGenerator instance.
+
+    Keeping a simple factory signature to preserve backwards compatibility with
+    ingestion pipelines that import create_embedder().
+    """
+    return EmbeddingGenerator(
+        model=model or EMBEDDING_MODEL,
+        batch_size=batch_size,
+        max_retries=max_retries,
+        retry_delay=retry_delay,
+    )
+
+
 async def embed_document_chunks(
     chunks: List[DocumentChunk],
     embedding_generator: Optional[EmbeddingGenerator] = None,

@@ -22,6 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 import uvicorn
 from dotenv import load_dotenv
+import csv
 
 from .agent import rag_agent, AgentDependencies
 from .enhanced_retrieval import EnhancedRetriever
@@ -53,6 +54,16 @@ from .db_utils import (
     remove_document_from_collection_db,
     list_collection_documents_db,
     update_document_collections_db,
+    # Proposals
+    create_proposal_db,
+    get_proposal_db,
+    list_proposals_db,
+    create_proposal_version_db,
+    get_latest_proposal_version_db,
+    get_proposal_version_db,
+    list_proposal_versions_db,
+    update_proposal_db,
+    list_proposal_documents_db,
     # Summary jobs
     create_summary_job,
     update_summary_job_status,
@@ -108,6 +119,7 @@ from .tools import (
 # Analytics tracker
 from .analytics import analytics_tracker
 from .question_generator import QuestionGenerator
+from .proposal_analyzer import analyze_example_text
 
 # Load environment variables
 load_dotenv()
@@ -795,6 +807,485 @@ async def api_add_documents_to_collection(collection_id: str, request: Request):
         # Surface underlying error for debugging during integration
         raise HTTPException(status_code=500, detail=str(e))
 
+
+# -------------------------
+# Proposal Management Endpoints
+# -------------------------
+
+@app.get("/proposals")
+async def api_list_proposals(page: int = 1, per_page: int = 50):
+    """List proposals with pagination for dashboard."""
+    try:
+        offset = (page - 1) * per_page
+        items = await list_proposals_db(limit=per_page, offset=offset)
+        total = len(items) if isinstance(items, list) else 0
+        return {"proposals": items, "total": total, "page": page, "per_page": per_page}
+    except Exception as e:
+        logger.exception("Failed to list proposals: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to list proposals")
+
+
+@app.post("/proposals")
+async def api_create_proposal(request: Request):
+    """Create a new proposal and return the created record."""
+    try:
+        body = await request.json()
+        created = await create_proposal_db(
+            title=(body.get("title") or "Untitled Proposal").strip(),
+            client_fields=body.get("client_fields") or {},
+            project_fields=body.get("project_fields") or {},
+            status=body.get("status") or "draft",
+            metadata=body.get("metadata") or {},
+            created_by=request.headers.get("x-user-id"),
+        )
+        return created
+    except Exception as e:
+        logger.exception("Failed to create proposal: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to create proposal")
+
+
+@app.get("/proposals/{proposal_id}")
+async def api_get_proposal(proposal_id: str):
+    """Fetch a single proposal by ID."""
+    try:
+        prop = await get_proposal_db(proposal_id)
+        if not prop:
+            raise HTTPException(status_code=404, detail="Proposal not found")
+        return prop
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to get proposal: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to get proposal")
+
+
+@app.get("/proposals/{proposal_id}/regulatory")
+async def api_list_proposal_regulatory_documents(proposal_id: str):
+    """List regulatory documents attached to a proposal."""
+    try:
+        docs = await list_proposal_documents_db(proposal_id, source_type="regulatory")
+        return {"documents": docs}
+    except Exception as e:
+        logger.exception("Failed to list proposal regulatory documents: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to list regulatory documents")
+
+
+@app.post("/proposals/{proposal_id}/regulatory/upload")
+async def api_upload_proposal_regulatory(proposal_id: str, file: UploadFile = File(...), fast: int = 0):
+    """Upload and ingest a regulatory document scoped to a proposal.
+
+    Query param 'fast=1' skips graph building to reduce processing time.
+    """
+    if not INGESTION_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Document ingestion pipeline is not available")
+    try:
+        # Validate type
+        allowed_extensions = {'.txt', '.md', '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.csv', '.tsv'}
+        ext = os.path.splitext(file.filename or "")[1].lower()
+        if ext not in allowed_extensions:
+            raise HTTPException(status_code=400, detail=f"File type {ext} not supported")
+
+        # Stage upload -> convert to markdown
+        with tempfile.TemporaryDirectory() as temp_dir:
+            raw_path = Path(temp_dir) / (file.filename or "upload.bin")
+            size_bytes = 0
+            with open(raw_path, 'wb') as f:
+                while True:
+                    chunk = await file.read(8 * 1024 * 1024)
+                    if not chunk:
+                        break
+                    size_bytes += len(chunk)
+                    f.write(chunk)
+
+            try:
+                md_text, conv_meta = convert_to_markdown(str(raw_path))
+            except Exception as e:
+                logger.exception("Regulatory conversion failed: %s", e)
+                raise HTTPException(status_code=500, detail="Failed to convert file to markdown")
+            if not md_text or not md_text.strip():
+                raise HTTPException(status_code=400, detail="No extractable text content found")
+
+            md_path = Path(temp_dir) / f"{Path(file.filename or 'upload').stem}.md"
+            with open(md_path, 'w', encoding='utf-8') as f_md:
+                f_md.write(md_text)
+
+            # Configure ingestion
+            config = IngestionConfig(
+                chunk_size=int(os.getenv("CHUNK_SIZE", "800")),
+                chunk_overlap=int(os.getenv("CHUNK_OVERLAP", "150")),
+                max_chunk_size=int(os.getenv("MAX_CHUNK_SIZE", "1500")),
+                use_semantic_splitting=os.getenv("USE_SEMANTIC_SPLITTING", "1") not in ("0", "false", "False"),
+                extract_entities=os.getenv("EXTRACT_ENTITIES", "1") not in ("0", "false", "False"),
+                skip_graph_building=bool(fast),
+            )
+
+            pipeline = DocumentIngestionPipeline(
+                config=config,
+                documents_folder=str(temp_dir),
+                clean_before_ingest=False,
+                default_metadata={
+                    "proposal_id": proposal_id,
+                    "proposal_source_type": "regulatory",
+                },
+            )
+
+            results = await pipeline.ingest_documents()
+            ok = [r for r in results if r.document_id]
+            return {
+                "success": bool(ok),
+                "documents_processed": len(ok),
+                "filename": file.filename,
+                "size": size_bytes,
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to upload regulatory document: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to upload regulatory document")
+
+
+@app.delete("/proposals/{proposal_id}/regulatory/{document_id}")
+async def api_delete_proposal_regulatory(proposal_id: str, document_id: str):
+    """Remove a regulatory document from a proposal by deleting the document."""
+    try:
+        removed = await delete_document(document_id)
+        if not removed:
+            raise HTTPException(status_code=404, detail="Document not found")
+        return {"removed": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to delete regulatory document: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to delete regulatory document")
+
+
+@app.post("/proposals/{proposal_id}/example/upload")
+async def api_upload_proposal_example(proposal_id: str, file: UploadFile = File(...)):
+    """Analyze an example proposal and return structure/style hints."""
+    try:
+        # Convert to markdown/plaintext
+        with tempfile.TemporaryDirectory() as temp_dir:
+            raw_path = Path(temp_dir) / (file.filename or "example.bin")
+            with open(raw_path, 'wb') as f:
+                while True:
+                    chunk = await file.read(4 * 1024 * 1024)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+            try:
+                md_text, _ = convert_to_markdown(str(raw_path))
+            except Exception:
+                # Fallback: try to read as text
+                md_text = raw_path.read_text(encoding='utf-8', errors='ignore')
+
+        analysis = analyze_example_text(md_text or "")
+        return {"analysis": analysis}
+    except Exception as e:
+        logger.exception("Failed to analyze example proposal: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to analyze example proposal")
+
+
+@app.post("/proposals/{proposal_id}/draft/upload")
+async def api_upload_proposal_draft(proposal_id: str, file: UploadFile = File(...)):
+    """Capture draft text for a proposal (for auto-fill later)."""
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            raw_path = Path(temp_dir) / (file.filename or "draft.bin")
+            with open(raw_path, 'wb') as f:
+                while True:
+                    chunk = await file.read(4 * 1024 * 1024)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+            try:
+                md_text, _ = convert_to_markdown(str(raw_path))
+            except Exception:
+                md_text = raw_path.read_text(encoding='utf-8', errors='ignore')
+        return {"characters": len(md_text or "")}
+    except Exception as e:
+        logger.exception("Failed to upload draft: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to upload draft")
+
+
+@app.post("/proposals/{proposal_id}/versions")
+async def api_create_proposal_version(proposal_id: str, request: Request):
+    """Create a version snapshot for a proposal (sections/citations or HTML)."""
+    try:
+        body = await request.json()
+        version = await create_proposal_version_db(
+            proposal_id=proposal_id,
+            html=body.get("html"),
+            sections=body.get("sections"),
+            citations=body.get("citations"),
+        )
+        return version
+    except Exception as e:
+        logger.exception("Failed to create proposal version: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to create proposal version")
+
+
+@app.post("/proposals/{proposal_id}/validate")
+async def api_validate_proposal(proposal_id: str):
+    """Validate latest proposal version. For now, returns a simple OK stub."""
+    try:
+        # Placeholder validation: ensure a version exists
+        latest = await get_latest_proposal_version_db(proposal_id)
+        if not latest:
+            return {"status": "warnings", "warnings": ["No versions saved yet"], "errors": []}
+        return {"status": "ok", "warnings": [], "errors": []}
+    except Exception as e:
+        logger.exception("Failed to validate proposal: %s", e)
+        return {"status": "errors", "warnings": [], "errors": [str(e)]}
+
+
+@app.post("/proposals/{proposal_id}/generate/stream")
+async def proposal_generate_stream(proposal_id: str, request: Request):
+    """Stream generation for a single proposal section with retrieval SSE events.
+
+    Body JSON fields:
+      - section_title: title for the section
+      - section_instructions: optional guidance
+      - metadata: { contextMode, selectedCollections, selectedDocuments, selectedChunks, force_guided? }
+      - search_type: 'hybrid' | 'vector' | 'graph' (optional)
+    """
+    try:
+        body = await request.json()
+        section_title = (body.get("section_title") or "Section").strip()
+        section_instructions = (body.get("section_instructions") or "").strip()
+        meta = body.get("metadata") or {}
+
+        # Build search preferences from metadata
+        prefs: Dict[str, Any] = {}
+        context_mode = (meta.get("contextMode") or "all").lower()
+        if context_mode == "collections":
+            if isinstance(meta.get("selectedCollections"), list):
+                prefs["collection_ids"] = meta.get("selectedCollections")
+        if context_mode == "documents":
+            if isinstance(meta.get("selectedDocuments"), list):
+                prefs["document_ids"] = meta.get("selectedDocuments")
+        if isinstance(meta.get("selectedChunks"), list):
+            prefs["chunk_ids"] = meta.get("selectedChunks")
+
+        # Create a transient session id for this stream
+        session_id = str(uuid.uuid4())
+
+        async def generate_stream():
+            full_response = ""
+            retrieval_queue = None
+            guided_task = None
+            try:
+                # Register retrieval listener
+                try:
+                    retrieval_queue = register_retrieval_listener(session_id)
+                except Exception:
+                    retrieval_queue = None
+
+                # Optionally run EnhancedRetriever in background to emit retrieval events
+                force_guided = True if meta.get("force_guided", True) else False
+                if force_guided:
+                    async def _run_enhanced():
+                        try:
+                            retriever = EnhancedRetriever()
+                            config: Dict[str, Any] = {
+                                "use_graph": True,
+                                "use_vector": True,
+                                "use_query_expansion": True,
+                                "vector_limit": 100,
+                            }
+                            # Apply scoping preferences
+                            if prefs.get("collection_ids"):
+                                config["collection_ids"] = prefs["collection_ids"]
+                            if prefs.get("document_ids"):
+                                config["document_ids"] = prefs["document_ids"]
+                            if prefs.get("chunk_ids"):
+                                config["chunk_ids"] = prefs["chunk_ids"]
+                            await retriever.retrieve(
+                                query=f"Generate section: {section_title}. {section_instructions}",
+                                session_id=session_id,
+                                config=config,
+                            )
+                        except Exception as e:
+                            logger.warning(f"Enhanced retrieval failed in proposal stream: {e}")
+                    try:
+                        guided_task = asyncio.create_task(_run_enhanced())
+                    except Exception:
+                        guided_task = None
+
+                # Build a generation prompt for the section
+                prompt_parts = [
+                    f"Draft the '{section_title}' section of a professional proposal.",
+                ]
+                if section_instructions:
+                    prompt_parts.append(f"Follow these instructions: {section_instructions}")
+                prompt_parts.append(
+                    "Use concise, clear language and maintain consistent branding."
+                )
+                prompt = "\n".join(prompt_parts)
+
+                # Execute using rag_agent with scoping deps
+                deps = AgentDependencies(
+                    session_id=session_id,
+                    user_id=request.headers.get("x-user-id"),
+                    search_preferences=prefs,
+                )
+
+                async with rag_agent.iter(prompt, deps=deps) as run:
+                    async for node in run:
+                        if rag_agent.is_model_request_node(node):
+                            async with node.stream(run.ctx) as request_stream:
+                                from pydantic_ai.messages import PartStartEvent, PartDeltaEvent, TextPartDelta
+                                async for event in request_stream:
+                                    if isinstance(event, PartStartEvent) and event.part.part_kind == 'text':
+                                        delta = event.part.content
+                                        full_response += delta
+                                        yield f"data: {json.dumps({'type': 'text', 'content': delta})}\n\n"
+                                        # Drain retrieval events
+                                        if retrieval_queue is not None:
+                                            try:
+                                                while True:
+                                                    ev = retrieval_queue.get_nowait()
+                                                    yield f"data: {json.dumps({'type': 'retrieval', 'session_id': session_id, 'data': ev})}\n\n"
+                                            except asyncio.QueueEmpty:
+            
+                                                pass
+                                    elif isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
+                                        delta = event.delta.content_delta
+                                        full_response += delta
+                                        yield f"data: {json.dumps({'type': 'text', 'content': delta})}\n\n"
+                                        if retrieval_queue is not None:
+                                            try:
+                                                while True:
+                                                    ev = retrieval_queue.get_nowait()
+                                                    yield f"data: {json.dumps({'type': 'retrieval', 'session_id': session_id, 'data': ev})}\n\n"
+                                            except asyncio.QueueEmpty:
+                                                pass
+
+                    # Give guided task a moment to finish
+                    if guided_task is not None:
+                        try:
+                            await asyncio.wait_for(guided_task, timeout=1.0)
+                        except Exception:
+                            pass
+                    # Final drain
+                    if retrieval_queue is not None:
+                        try:
+                            while True:
+                                ev = retrieval_queue.get_nowait()
+                                yield f"data: {json.dumps({'type': 'retrieval', 'session_id': session_id, 'data': ev})}\n\n"
+                        except asyncio.QueueEmpty:
+                            pass
+
+                # End event
+                yield f"data: {json.dumps({'type': 'end'})}\n\n"
+            except Exception as e:
+                yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+                yield f"data: {json.dumps({'type': 'end'})}\n\n"
+            finally:
+                try:
+                    if retrieval_queue is not None:
+                        unregister_retrieval_listener(session_id, retrieval_queue)
+                except Exception:
+                    pass
+
+        return StreamingResponse(
+            generate_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Content-Type": "text/event-stream",
+            },
+        )
+    except Exception as e:
+        logger.exception("Proposal generate stream failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/pricing/parse")
+async def pricing_parse(file: UploadFile = File(...)):
+    """Parse CSV pricing file into items array."""
+    try:
+        # Only CSV support for now
+        filename = file.filename or "pricing.csv"
+        if not filename.lower().endswith('.csv'):
+            raise HTTPException(status_code=415, detail="Only CSV is supported at the moment")
+        # Read CSV text
+        content = (await file.read()).decode('utf-8', errors='ignore')
+        reader = csv.DictReader(content.splitlines())
+        items = []
+        for row in reader:
+            service = (row.get('service') or row.get('Service') or '').strip()
+            qty = row.get('quantity') or row.get('qty') or row.get('Quantity') or '1'
+            unit = row.get('unit_price') or row.get('price') or row.get('Unit Price') or '0'
+            desc = row.get('description') or row.get('Description') or ''
+            cur = row.get('currency_symbol') or row.get('Currency') or '$'
+            try:
+                quantity = float(str(qty).strip() or '1')
+            except Exception:
+                quantity = 1.0
+            try:
+                unit_price = float(str(unit).strip() or '0')
+            except Exception:
+                unit_price = 0.0
+            items.append({
+                "service": service,
+                "unit_price": unit_price,
+                "quantity": quantity,
+                "description": desc,
+                "currency_symbol": cur or '$'
+            })
+        return {"items": items}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to parse pricing file: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to parse pricing file")
+
+
+@app.post("/pricing/render")
+async def pricing_render(request: Request):
+    """Render a pricing table to HTML and totals."""
+    try:
+        body = await request.json()
+        items = body.get("items") or []
+        tax_rate = float(body.get("tax_rate_percent") or 0)
+        discount = float(body.get("discount_amount") or 0)
+        subtotal = 0.0
+        currency = '$'
+        for it in items:
+            currency = it.get('currency_symbol') or currency
+            try:
+                subtotal += float(it.get('unit_price') or 0) * float(it.get('quantity') or 0)
+            except Exception:
+                pass
+        tax = subtotal * (tax_rate / 100.0)
+        total = max(0.0, subtotal + tax - discount)
+
+        # Create simple HTML table
+        rows = []
+        for it in items:
+            rows.append(
+                f"<tr><td>{it.get('service','')}</td><td style='text-align:right'>{it.get('quantity',0)}</td>"
+                f"<td style='text-align:right'>{currency}{float(it.get('unit_price') or 0):.2f}</td>"
+                f"<td>{(it.get('description') or '')}</td></tr>"
+            )
+        totals_html = (
+            f"<div style='margin-top:8px;text-align:right'>"
+            f"<div>Subtotal: {currency}{subtotal:.2f}</div>"
+            f"<div>Tax ({tax_rate:.2f}%): {currency}{tax:.2f}</div>"
+            f"<div>Discount: -{currency}{discount:.2f}</div>"
+            f"<div><strong>Total: {currency}{total:.2f}</strong></div>"
+            f"</div>"
+        )
+        html = (
+            "<table style='width:100%;border-collapse:collapse'>"
+            "<thead><tr><th style='text-align:left'>Service</th><th style='text-align:right'>Qty</th><th style='text-align:right'>Unit Price</th><th style='text-align:left'>Description</th></tr></thead>"
+            "<tbody>" + "".join(rows) + "</tbody>" + "</table>" + totals_html
+        )
+        return {"html": html, "totals": {"subtotal": subtotal, "tax": tax, "discount": discount, "total": total}}
+    except Exception as e:
+        logger.exception("Failed to render pricing: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to render pricing")
 
 # -------------------------
 # Phase 1: Incremental Update Endpoints (metadata-only, no embeddings)
