@@ -1,0 +1,46 @@
+# Minimal requirements for Replit deployment (without Dolphin)
+# Use this file for Replit: pip install -r requirements-replit.txt
+
+# Core API dependencies
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+pydantic==2.10.3
+httpx==0.28.1
+python-multipart==0.0.20
+jinja2==3.1.4
+
+# Database and storage
+psycopg2-binary==2.9.10
+sqlalchemy==2.0.36
+alembic==1.14.0
+
+# Document processing (lightweight)
+pdfminer.six==20240706
+python-docx==1.1.2
+openpyxl==3.1.5
+markdown==3.7
+
+# AI/LLM
+google-generativeai==0.8.3
+openai==1.57.0
+
+# Text processing
+nltk==3.9.1
+sentence-transformers==3.3.1
+
+# Web scraping
+beautifulsoup4==4.12.3
+requests==2.32.3
+
+# Utilities
+python-dotenv==1.0.1
+asyncio==3.4.3
+aiofiles==24.1.0
+
+# Skip heavy ML dependencies:
+# - torch/transformers (2GB+)
+# - pdf2image + dependencies
+# - opencv-python
+# - numpy/scipy (if not needed)
+
+# Note: Dolphin parser will be disabled automatically when dependencies are missing
