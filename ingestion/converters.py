@@ -18,9 +18,15 @@ logger = logging.getLogger(__name__)
 try:
     from .dolphin_parser import get_dolphin_parser, is_dolphin_available
     DOLPHIN_AVAILABLE = is_dolphin_available()
-except ImportError:
-    DOLPHIN_AVAILABLE = False
-    logger.warning("Dolphin parser not available - falling back to traditional parsers")
+except Exception:
+    # Try alternate implementation with Poppler auto-discovery
+    try:
+        from .dolphin_parser2 import get_dolphin_parser, is_dolphin_available  # type: ignore
+        DOLPHIN_AVAILABLE = is_dolphin_available()
+        logger.info("Loaded Dolphin parser from dolphin_parser2 fallback module")
+    except Exception:
+        DOLPHIN_AVAILABLE = False
+        logger.warning("Dolphin parser not available - falling back to traditional parsers")
 
 def _looks_like_binary_text(text: str) -> bool:
     """Detect binary/gibberish text such as raw PDF bytes or ZIP/XML bodies.
