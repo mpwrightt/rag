@@ -18,7 +18,7 @@ import asyncpg
 from dotenv import load_dotenv
 
 from .chunker import ChunkingConfig, create_chunker, DocumentChunk
-from .embedder import create_embedder
+from .embedder import create_embedder, embed_document_chunks
 from .graph_builder import create_graph_builder
 
 # Import agent utilities
@@ -268,7 +268,7 @@ class DocumentIngestionPipeline:
         
         # Generate embeddings
         t1 = time.perf_counter()
-        embedded_chunks = await self.embedder.embed_chunks(chunks)
+        embedded_chunks = await self._embed_chunks(chunks)
         logger.info(f"Generated embeddings for {len(embedded_chunks)} chunks in {time.perf_counter() - t1:.3f}s")
         
         # Save to PostgreSQL
@@ -450,6 +450,17 @@ class DocumentIngestionPipeline:
                     )
                 
                 return document_id
+
+    async def _embed_chunks(self, chunks: List[DocumentChunk]) -> List[DocumentChunk]:
+        """Generate embeddings while supporting older embedder instances."""
+        if hasattr(self.embedder, "embed_chunks"):
+            return await self.embedder.embed_chunks(chunks)
+
+        embedded_chunks, _ = await embed_document_chunks(
+            chunks,
+            embedding_generator=self.embedder,
+        )
+        return embedded_chunks
     
     async def _clean_databases(self):
         """Clean existing data from databases."""
