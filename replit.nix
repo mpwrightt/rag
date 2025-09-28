@@ -18,6 +18,7 @@
     pkgs.libjpeg
     pkgs.libpng
     pkgs.zlib
+    pkgs.poppler_utils
     
     # System utilities
     pkgs.curl
