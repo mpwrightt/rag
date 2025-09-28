@@ -44,6 +44,17 @@ next-env.d.ts
 # python
 __pycache__/
 *.pyc
+venv/
+env/
+.venv/
+.env/
+
+# ML model files and downloads
+hf_model/
+*.safetensors
+*.bin
+*.onnx
+models/
 
 # local tools (do not commit local Claude settings)
 /.claude/
