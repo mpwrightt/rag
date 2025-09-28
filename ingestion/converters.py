@@ -1,5 +1,6 @@
 """
 Utilities to convert various document types to Markdown for unified ingestion.
+Enhanced with Dolphin multimodal document parser for better structure extraction.
 """
 from __future__ import annotations
 
@@ -14,6 +15,12 @@ from typing import Tuple, Dict, Any
 logger = logging.getLogger(__name__)
 
 # Optional heavy deps imported lazily
+try:
+    from .dolphin_parser import get_dolphin_parser, is_dolphin_available
+    DOLPHIN_AVAILABLE = is_dolphin_available()
+except ImportError:
+    DOLPHIN_AVAILABLE = False
+    logger.warning("Dolphin parser not available - falling back to traditional parsers")
 
 def _looks_like_binary_text(text: str) -> bool:
     """Detect binary/gibberish text such as raw PDF bytes or ZIP/XML bodies.
@@ -99,18 +106,32 @@ def convert_to_markdown(file_path: str) -> Tuple[str, Dict[str, Any]]:
             return text, meta
 
         if ext == "pdf":
-            # First attempt: pdfminer text extraction
+            # First attempt: Dolphin multimodal parser (if available)
+            if DOLPHIN_AVAILABLE and os.getenv("USE_DOLPHIN", "1").lower() in {"1", "true", "yes", "on"}:
+                try:
+                    dolphin_parser = get_dolphin_parser()
+                    markdown_content, dolphin_meta = dolphin_parser.parse_document(str(p))
+                    if markdown_content.strip():
+                        logger.info(f"Successfully parsed {p.name} with Dolphin parser")
+                        return _normalize_text(markdown_content), {**meta, **dolphin_meta}
+                    else:
+                        logger.warning("Dolphin parser returned empty content for %s", p.name)
+                except Exception as e:
+                    logger.warning("Dolphin parsing failed for %s: %s", p.name, e)
+                    logger.info("Falling back to traditional PDF parsers")
+
+            # Second attempt: pdfminer text extraction (fallback)
             try:
                 from pdfminer.high_level import extract_text
                 text = extract_text(str(p)) or ""
                 if text.strip():
-                    return _normalize_text(text), meta
+                    return _normalize_text(text), {**meta, "note": "pdfminer_fallback"}
                 else:
                     logger.warning("PDF conversion via pdfminer returned empty text for %s", p.name)
             except Exception as e:
                 logger.warning("PDF conversion failed via pdfminer: %s", e)
 
-            # Second attempt: PyMuPDF (fitz) if available
+            # Third attempt: PyMuPDF (fitz) if available
             try:
                 import fitz  # PyMuPDF
                 try:

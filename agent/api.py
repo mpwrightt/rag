@@ -1285,6 +1285,7 @@ async def proposal_generate_stream(proposal_id: str, request: Request):
                 style_hint = (PROPOSAL_STYLE_HINTS.get(proposal_id, {}) or {}).get("style_prompt")
                 phrase_bank = (PROPOSAL_STYLE_HINTS.get(proposal_id, {}) or {}).get("phrase_bank")
                 formatting = (PROPOSAL_STYLE_HINTS.get(proposal_id, {}) or {}).get("formatting") or {}
+                structure_analysis = (PROPOSAL_STYLE_HINTS.get(proposal_id, {}) or {}).get("structure_analysis", {})
                 draft_text = PROPOSAL_DRAFT_TEXTS.get(proposal_id, "")
 
                 # Retrieve top-rated examples for this section, if any
@@ -1374,6 +1375,25 @@ async def proposal_generate_stream(proposal_id: str, request: Request):
                     prompt_parts.append(f"Follow these instructions: {section_instructions}")
                 if style_hint:
                     prompt_parts.append(f"Style guidance to mirror:\n{style_hint}")
+
+                # Enhanced: Include Dolphin structure analysis insights
+                if structure_analysis:
+                    structure_guidance = []
+                    if structure_analysis.get("has_tables"):
+                        table_count = structure_analysis.get("table_count", 0)
+                        structure_guidance.append(f"Document contains {table_count} table(s) - use tabular format when presenting structured data")
+                    if structure_analysis.get("has_formulas"):
+                        formula_count = structure_analysis.get("formula_count", 0)
+                        structure_guidance.append(f"Document contains {formula_count} formula(s) - include mathematical notation where appropriate")
+
+                    section_types = structure_analysis.get("section_types", {})
+                    if section_types:
+                        type_summary = ", ".join([f"{count} {stype}" for stype, count in section_types.items()])
+                        structure_guidance.append(f"Document structure includes: {type_summary}")
+
+                    if structure_guidance:
+                        prompt_parts.append("Document structure insights from enhanced parsing:\n- " + "\n- ".join(structure_guidance))
+
                 if formatting_guide:
                     prompt_parts.append(formatting_guide)
                 if top_examples:

@@ -17,6 +17,13 @@ This is a Next.js 15 SaaS starter template with integrated authentication (Clerk
 - `npx convex dev` - Start Convex development server (required for database)
 - Run this in a separate terminal alongside `npm run dev`
 
+### Document Parsing (Dolphin Integration)
+- `python scripts/setup_dolphin.py` - Setup Dolphin multimodal document parser
+- `python scripts/setup_dolphin.py --verify-only` - Verify Dolphin setup without downloading
+- `python scripts/test_dolphin.py --file <path>` - Test Dolphin parser on specific file
+- `python scripts/test_dolphin.py --batch` - Test Dolphin parser on multiple PDFs
+- `python scripts/test_dolphin.py --benchmark` - Run performance benchmark comparison
+
 ## Architecture Overview
 
 ### Tech Stack
@@ -26,6 +33,7 @@ This is a Next.js 15 SaaS starter template with integrated authentication (Clerk
 - **Clerk Billing** for subscription payments
 - **TailwindCSS v4** with custom UI components (shadcn/ui)
 - **TypeScript** throughout
+- **Dolphin Parser** for advanced multimodal document parsing with enhanced proposal generation
 
 ### Key Architectural Patterns
 
@@ -48,6 +56,12 @@ This is a Next.js 15 SaaS starter template with integrated authentication (Clerk
 3. Payment-gated content uses `<ClerkBillingGate>` component
 4. Webhook events update payment status in Convex
 
+#### Enhanced Document Processing (Dolphin Integration)
+1. **Multi-tiered parsing**: Dolphin (primary) → pdfminer → PyMuPDF → OCR (fallbacks)
+2. **Structure preservation**: Tables, formulas, and layout relationships maintained
+3. **Proposal enhancement**: Better template analysis and style extraction
+4. **Real-time generation**: Enhanced prompts with structure insights for proposal creation
+
 ### Project Structure
 ```
 app/
@@ -68,15 +82,45 @@ convex/
 ├── paymentAttempts.ts # Payment tracking
 ├── http.ts           # Webhook handlers
 └── auth.config.ts    # JWT configuration
+
+ingestion/
+├── dolphin_parser.py # Dolphin multimodal parser integration
+├── converters.py     # Enhanced document converters (includes Dolphin)
+├── chunker.py        # Document chunking
+└── embedder.py       # Vector embeddings
+
+agent/
+├── proposal_analyzer.py # Enhanced proposal analysis (Dolphin integration)
+├── api.py           # Enhanced proposal generation API
+└── ...              # Other agent components
+
+scripts/
+├── setup_dolphin.py # Dolphin setup automation
+├── test_dolphin.py  # Testing and benchmarking framework
+└── ...              # Other utility scripts
+
+docs/
+└── DOLPHIN_INTEGRATION.md # Comprehensive integration documentation
 ```
 
 ## Key Integration Points
 
 ### Environment Variables Required
+
+#### Core Platform
 - `CONVEX_DEPLOYMENT` and `NEXT_PUBLIC_CONVEX_URL`
 - `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY`
 - `NEXT_PUBLIC_CLERK_FRONTEND_API_URL` (from Clerk JWT template)
 - `CLERK_WEBHOOK_SECRET` (set in Convex dashboard)
+
+#### Dolphin Document Parser (Optional)
+- `USE_DOLPHIN=1` - Enable/disable Dolphin parser
+- `DOLPHIN_MODEL_PATH=./hf_model` - Path to Dolphin model
+- `DOLPHIN_PARSING_MODE=page` - Parsing mode ('page' or 'element')
+- `DOLPHIN_OUTPUT_FORMAT=markdown` - Output format ('markdown' or 'json')
+- `DOLPHIN_CONFIDENCE_THRESHOLD=0.7` - Confidence threshold for parsing
+- `POPPLER_PATH` - Path to Poppler utilities (for PDF conversion)
+- `OCR_PDF=0` - Enable OCR fallback for PDFs
 
 ### Webhook Configuration
 Clerk webhooks must be configured to:
