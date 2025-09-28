@@ -108,12 +108,15 @@ weasyprint==62.3
 yarl==1.20.1
 zipp==3.23.0
 
+# Extra index to obtain CPU-only PyTorch wheels
+--extra-index-url https://download.pytorch.org/whl/cpu
+
 # Dolphin multimodal document parser dependencies
-transformers>=4.21.0
-torch>=1.13.0
-torchvision>=0.14.0
+transformers==4.53.3
+torch==2.2.2+cpu
+torchvision==0.17.2+cpu
 pdf2image==1.17.0
-Pillow>=8.0.0
+Pillow>=10.4.0
 # Note: huggingface-hub already defined above at line 40
 
 # Optional: for accelerated inference
