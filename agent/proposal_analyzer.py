@@ -6,6 +6,12 @@ from __future__ import annotations
 
 import re
 from typing import Dict, Any, List, Tuple
+from pathlib import Path
+
+try:
+    import fitz  # PyMuPDF
+except ImportError:  # pragma: no cover
+    fitz = None
 
 # Basic English stopwords to avoid pulling filler as phrase bank
 _STOP = set(
@@ -13,6 +19,28 @@ _STOP = set(
     a an and are as at be by for from has he in is it its of on that the to was were will with this those these you your our we us their they i me my or if then else not no yes so also may can shall should could would about above below between into over under more most less few many much very via per which who whom whose when where why how due than across against within without among because while before after during since unless until each any some such include includes included including etc et al
     """.split()
 )
+
+
+def extract_text_or_markdown(file_path: str) -> str:
+    """Convert the source file to plaintext/markdown for downstream analysis."""
+    path = Path(file_path)
+    suffix = path.suffix.lower()
+    if suffix == ".pdf" and fitz is not None:
+        doc = fitz.open(file_path)
+        text = []
+        for page in doc:
+            text.append(page.get_text("text"))
+        doc.close()
+        return "\n".join(text)
+    # Fallback: rely on existing converter (if available)
+    try:
+        from ingestion.converters import convert_to_markdown  # type: ignore
+        md_text, _ = convert_to_markdown(str(path))
+        if md_text:
+            return md_text
+    except Exception:
+        pass
+    return path.read_text(encoding="utf-8", errors="ignore") if path.exists() else ""
 
 
 def _split_headings(text: str) -> List[Dict[str, Any]]:
@@ -57,6 +85,131 @@ def _split_headings(text: str) -> List[Dict[str, Any]]:
         })
     return sections
 
+def _extract_letter_structure(text: str, sections: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Identify cover-letter style blocks (recipient, RE, salutation, intro)."""
+    lines = text.splitlines()
+    if not lines:
+        return {}
+
+    first_heading_idx = sections[0]["start_index"] if sections else len(lines)
+
+    def _strip(idx: int) -> str:
+        return lines[idx].strip()
+
+    idx_re = next((i for i, line in enumerate(lines) if line.strip().upper().startswith("RE:")), None)
+    idx_dear = next((i for i, line in enumerate(lines) if line.strip().lower().startswith("dear ")), None)
+
+    recipient_lines: List[str] = []
+    if idx_re is not None:
+        recipient_lines = [lines[i].strip() for i in range(idx_re) if lines[i].strip()]
+    elif idx_dear is not None:
+        recipient_lines = [lines[i].strip() for i in range(idx_dear) if lines[i].strip()]
+
+    re_line = _strip(idx_re) if idx_re is not None else ""
+    salutation = _strip(idx_dear) if idx_dear is not None else ""
+
+    intro_start = (idx_dear + 1) if idx_dear is not None else ((idx_re + 1) if idx_re is not None else 0)
+    intro_end = min(first_heading_idx, len(lines))
+
+    # Skip leading blanks within intro
+    while intro_start < intro_end and not lines[intro_start].strip():
+        intro_start += 1
+
+    intro_lines: List[str] = []
+    for i in range(intro_start, intro_end):
+        intro_lines.append(lines[i].rstrip())
+    intro_text = "\n".join(intro_lines).strip()
+
+    # Create a shorter preview sentence
+    intro_preview = " ".join(intro_text.split())
+    if len(intro_preview) > 240:
+        intro_preview = intro_preview[:240].rstrip() + "…"
+
+    structure: Dict[str, Any] = {}
+    if recipient_lines:
+        structure["recipient_lines"] = recipient_lines
+    if re_line:
+        structure["re_line"] = re_line
+    if salutation:
+        structure["salutation"] = salutation
+    if intro_text:
+        structure["intro_paragraph"] = intro_text
+        structure["intro_preview"] = intro_preview
+    if sections:
+        structure["first_section_title"] = sections[0].get("title")
+    return structure
+
+
+def _build_section_outline(sections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    outline: List[Dict[str, Any]] = []
+    for sec in sections:
+        content = sec.get("content") or ""
+        preview_words = " ".join(content.split())
+        preview = preview_words[:240].rstrip()
+        if preview_words and len(preview_words) > len(preview):
+            preview += "…"
+        outline.append({
+            "title": sec.get("title", ""),
+            "preview": preview,
+            "word_count": len(re.findall(r"[A-Za-z0-9']+", content)),
+            "start_index": sec.get("start_index"),
+        })
+    return outline
+
+
+def _extract_task_sections(text: str, sections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Identify Task-style sections (e.g., 'Task 1: Administrative and Planning')."""
+    task_pattern = re.compile(r"^Task\s+(\d+[A-Za-z]?)\s*[:\-]\s*(.+)$", re.IGNORECASE)
+    tasks: List[Dict[str, Any]] = []
+    for sec in sections:
+        title = sec.get("title") or ""
+        m = task_pattern.match(title.strip())
+        if not m:
+            continue
+        task_id = m.group(1)
+        task_title = m.group(2).strip()
+        content = sec.get("content") or ""
+        preview = " ".join(content.split())
+        if len(preview) > 200:
+            preview = preview[:200].rstrip() + "…"
+        tasks.append({
+            "task_id": task_id,
+            "title": task_title,
+            "preview": preview,
+            "word_count": len(re.findall(r"[A-Za-z0-9']+", content)),
+        })
+    return tasks
+
+
+def _extract_aoc_actions(text: str) -> List[str]:
+    """Capture detailed AOC action lines (e.g., "AOC-6 – ...") from the example."""
+    actions: List[str] = []
+    seen = set()
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if re.search(r"\bAOC\s*[-–]?\s*\d+", line, flags=re.IGNORECASE):
+            snippet = " ".join(line.split())
+            if snippet.lower() in seen:
+                continue
+            seen.add(snippet.lower())
+            if len(snippet) > 500:
+                snippet = snippet[:497].rstrip() + "…"
+            actions.append(snippet)
+    return actions
+
+
+def _build_section_lookup(sections: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    lookup: Dict[str, Dict[str, Any]] = {}
+    for sec in sections:
+        title = (sec.get("title") or "").strip()
+        if not title:
+            continue
+        key = title.lower()
+        lookup[key] = sec
+    return lookup
+
 
 def _readability(text: str) -> Dict[str, Any]:
     """Compute simple readability metrics without external deps."""
@@ -93,6 +246,11 @@ def analyze_example_text(text: str) -> Dict[str, Any]:
     sections = _split_headings(text)
     metrics = _readability(text)
     phrases = _phrase_bank(text)
+    letter_structure = _extract_letter_structure(text, sections)
+    section_outline = _build_section_outline(sections)
+    task_sections = _extract_task_sections(text, sections)
+    section_lookup = _build_section_lookup(sections)
+    aoc_actions = _extract_aoc_actions(text)
 
     # Style prompt summarizing tone and format
     style_bits = [
@@ -106,8 +264,13 @@ def analyze_example_text(text: str) -> Dict[str, Any]:
     style_prompt = "\n- ".join(["Style Guide:"] + style_bits)
 
     return {
-        "sections": sections,            # list of {title, content}
-        "readability": metrics,          # metrics dict
-        "phrase_bank": phrases,          # top frequent content words
-        "style_prompt": style_prompt,    # human-readable style guidance
+        "sections": sections,                # list of {title, content}
+        "section_outline": section_outline,  # condensed outline with previews
+        "section_lookup": section_lookup,    # quick title lookup
+        "letter_structure": letter_structure,  # recipient, RE, salutation, intro preview
+        "task_sections": task_sections,      # extracted Task blocks
+        "aoc_actions": aoc_actions,          # example detailed AOC steps
+        "readability": metrics,              # metrics dict
+        "phrase_bank": phrases,              # top frequent content words
+        "style_prompt": style_prompt,        # human-readable style guidance
     }

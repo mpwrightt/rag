@@ -177,11 +177,17 @@ async def initialize_database():
         await ensure_incremental_update_schema()
     except Exception as e:
         logger.warning(f"Failed to ensure incremental update schema: {e}")
+    # Ensure proposals feedback schema
+    try:
+        await ensure_proposals_feedback_schema()
+    except Exception as e:
+        logger.warning(f"Failed to ensure proposals feedback schema: {e}")
 
 
 async def close_database():
     """Close database connection pool."""
     await db_pool.close()
+ 
 
 
 async def ensure_incremental_update_schema():
@@ -224,6 +230,23 @@ async def ensure_incremental_update_schema():
                 """)
         except Exception:
             logger.exception("ensure_incremental_update_schema failed")
+            raise
+
+
+async def ensure_proposals_feedback_schema():
+    """Ensure proposal_versions has section_ratings JSONB for feedback."""
+    async with db_pool.acquire() as conn:
+        try:
+            async with conn.transaction():
+                await conn.execute(
+                    """
+                    ALTER TABLE proposal_versions
+                        ADD COLUMN IF NOT EXISTS section_ratings JSONB DEFAULT '{}'::jsonb;
+                    """
+                )
+                # Optional: simple index on proposal_id already exists; ratings are small JSON blobs
+        except Exception:
+            logger.exception("ensure_proposals_feedback_schema failed")
             raise
 
 
@@ -2770,7 +2793,6 @@ async def list_proposal_versions_db(
             for r in rows
         ]
 
-
 async def update_proposal_db(
     proposal_id: str,
     *,
@@ -2783,7 +2805,7 @@ async def update_proposal_db(
     """Update mutable fields of a proposal and return the updated record."""
     async with db_pool.acquire() as conn:
         # Build dynamic update parts
-        sets = []
+        sets: List[str] = []
         args: List[Any] = []
         if title is not None:
             sets.append("title = $%d" % (len(args) + 1))
@@ -2825,3 +2847,142 @@ async def update_proposal_db(
             "created_at": row["created_at"].isoformat() if row["created_at"] else None,
             "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
         }
+
+
+async def add_section_feedback_db(
+    *,
+    proposal_id: str,
+    version_id: str,
+    section_key: str,
+    rating: int,
+    user_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Record thumbs up/down feedback for a section on a specific proposal version.
+
+    This increments counters in proposal_versions.section_ratings JSONB as:
+      {
+        "<section_key>": { "thumbs_up": int, "thumbs_down": int, "last_feedback_at": ts }
+      }
+    """
+    if section_key is None or not str(section_key).strip():
+        raise ValueError("section_key is required")
+    if rating not in (1, -1):
+        raise ValueError("rating must be 1 (up) or -1 (down)")
+
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT sections, section_ratings
+            FROM proposal_versions
+            WHERE id = $1::uuid AND proposal_id = $2::uuid
+            """,
+            version_id,
+            proposal_id,
+        )
+        if not row:
+            raise ValueError("proposal_version_not_found")
+
+        # Parse existing ratings JSONB
+        raw_ratings = row["section_ratings"]
+        try:
+            ratings = raw_ratings if isinstance(raw_ratings, dict) else (json.loads(raw_ratings) if raw_ratings else {})
+        except Exception:
+            ratings = {}
+
+        entry = ratings.get(section_key) or {}
+        ups = int(entry.get("thumbs_up") or 0)
+        downs = int(entry.get("thumbs_down") or 0)
+        if rating == 1:
+            ups += 1
+        else:
+            downs += 1
+        entry.update({
+            "thumbs_up": ups,
+            "thumbs_down": downs,
+            "last_feedback_at": datetime.now(timezone.utc).isoformat(),
+            "last_user": user_id,
+        })
+        ratings[section_key] = entry
+
+        await conn.execute(
+            """
+            UPDATE proposal_versions
+            SET section_ratings = $3::jsonb
+            WHERE id = $1::uuid AND proposal_id = $2::uuid
+            """,
+            version_id,
+            proposal_id,
+            json.dumps(ratings),
+        )
+
+        return ratings
+
+
+async def get_top_rated_section_examples_db(
+    section_key: str,
+    *,
+    limit: int = 3,
+) -> List[Dict[str, Any]]:
+    """Return top positively-rated examples for a given section key across proposal_versions.
+
+    Each example contains: { 'content', 'title', 'proposal_id', 'version_id', 'thumbs_up', 'thumbs_down', 'created_at' }
+    """
+    if not section_key:
+        return []
+
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT 
+                pv.id::text AS version_id,
+                pv.proposal_id::text AS proposal_id,
+                pv.sections,
+                pv.section_ratings,
+                pv.created_at
+            FROM proposal_versions pv
+            WHERE pv.section_ratings ? $1
+            ORDER BY (
+                COALESCE((pv.section_ratings-> $1 ->> 'thumbs_up')::int, 0)
+                - COALESCE((pv.section_ratings-> $1 ->> 'thumbs_down')::int, 0)
+            ) DESC, pv.created_at DESC
+            LIMIT $2
+            """,
+            section_key,
+            limit,
+        )
+
+        examples: List[Dict[str, Any]] = []
+        for r in rows:
+            raw_sections = r["sections"]
+            try:
+                sections = raw_sections if isinstance(raw_sections, list) else (json.loads(raw_sections) if raw_sections else [])
+            except Exception:
+                sections = []
+            # find section by key
+            match = None
+            for s in sections:
+                try:
+                    if (s.get("key") or "") == section_key:
+                        match = s
+                        break
+                except Exception:
+                    continue
+            if not match:
+                continue
+            raw_ratings = r["section_ratings"]
+            try:
+                ratings = raw_ratings if isinstance(raw_ratings, dict) else (json.loads(raw_ratings) if raw_ratings else {})
+            except Exception:
+                ratings = {}
+            entry = ratings.get(section_key) or {}
+            examples.append({
+                "content": (match.get("content") or ""),
+                "title": (match.get("title") or ""),
+                "proposal_id": r["proposal_id"],
+                "version_id": r["version_id"],
+                "thumbs_up": int(entry.get("thumbs_up") or 0),
+                "thumbs_down": int(entry.get("thumbs_down") or 0),
+                "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+            })
+
+        return examples

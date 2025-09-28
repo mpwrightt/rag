@@ -3,6 +3,7 @@ FastAPI endpoints for the agentic RAG system.
 """
 
 import os
+import io
 import asyncio
 import json
 import logging
@@ -17,7 +18,7 @@ from datetime import datetime
 import uuid
 
 from fastapi import FastAPI, HTTPException, Request, Depends, UploadFile, File, Form
-from fastapi.responses import StreamingResponse, Response, JSONResponse
+from fastapi.responses import StreamingResponse, Response, JSONResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 import uvicorn
@@ -64,6 +65,8 @@ from .db_utils import (
     list_proposal_versions_db,
     update_proposal_db,
     list_proposal_documents_db,
+    add_section_feedback_db,
+    get_top_rated_section_examples_db,
     # Summary jobs
     create_summary_job,
     update_summary_job_status,
@@ -311,6 +314,12 @@ UPLOAD_SESSIONS: Dict[str, Dict[str, Any]] = {}
 
 # In-memory ingest job tracker (ephemeral)
 INGEST_JOBS: Dict[str, Dict[str, Any]] = {}
+
+# In-memory proposal helpers (ephemeral, process-lifetime)
+# - PROPOSAL_STYLE_HINTS: stores example analysis such as style_prompt and inferred sections
+# - PROPOSAL_DRAFT_TEXTS: stores raw draft text uploaded by user
+PROPOSAL_STYLE_HINTS: Dict[str, Dict[str, Any]] = {}
+PROPOSAL_DRAFT_TEXTS: Dict[str, str] = {}
 
 
 # Helper functions for agent execution
@@ -979,6 +988,38 @@ async def api_upload_proposal_example(proposal_id: str, file: UploadFile = File(
                 md_text = raw_path.read_text(encoding='utf-8', errors='ignore')
 
         analysis = analyze_example_text(md_text or "")
+        # Store in ephemeral memory for later generation prompts
+        try:
+            hints = analysis or {}
+            raw_text = (md_text or "").strip()
+            # Detect common bullet marker used in the example (prefer non-markdown symbols)
+            bullet_candidates = ["", "•", "●", "▪", "–", "-", "*", "·"]
+            bullet_counts = {}
+            for line in raw_text.splitlines():
+                s = line.strip()
+                for b in bullet_candidates:
+                    if s.startswith(b + " "):
+                        bullet_counts[b] = bullet_counts.get(b, 0) + 1
+            bullet_marker = None
+            if bullet_counts:
+                # pick the most frequent bullet
+                bullet_marker = sorted(bullet_counts.items(), key=lambda x: x[1], reverse=True)[0][0]
+            # Detect Task heading pattern and AOC pattern
+            has_task_pattern = bool(re.search(r"(?mi)^Task\s+\d+\s*:\s*", raw_text))
+            has_aoc_pattern = bool(re.search(r"(?mi)^AOC[-\s]*\d+", raw_text))
+            has_re_line = bool(re.search(r"(?mi)^RE:\s*", raw_text))
+            has_salutation = bool(re.search(r"(?mi)^Dear\s+", raw_text))
+            hints["formatting"] = {
+                "bullet_marker": bullet_marker,
+                "has_task_pattern": has_task_pattern,
+                "has_aoc_pattern": has_aoc_pattern,
+                "has_re_line": has_re_line,
+                "has_salutation": has_salutation,
+            }
+            hints["raw_text"] = raw_text[:25000]  # keep a bounded amount
+            PROPOSAL_STYLE_HINTS[proposal_id] = hints
+        except Exception:
+            pass
         return {"analysis": analysis}
     except Exception as e:
         logger.exception("Failed to analyze example proposal: %s", e)
@@ -1001,6 +1042,11 @@ async def api_upload_proposal_draft(proposal_id: str, file: UploadFile = File(..
                 md_text, _ = convert_to_markdown(str(raw_path))
             except Exception:
                 md_text = raw_path.read_text(encoding='utf-8', errors='ignore')
+        # Store for later auto-fill/use in prompts (ephemeral)
+        try:
+            PROPOSAL_DRAFT_TEXTS[proposal_id] = md_text or ""
+        except Exception:
+            pass
         return {"characters": len(md_text or "")}
     except Exception as e:
         logger.exception("Failed to upload draft: %s", e)
@@ -1024,6 +1070,38 @@ async def api_create_proposal_version(proposal_id: str, request: Request):
         raise HTTPException(status_code=500, detail="Failed to create proposal version")
 
 
+@app.post("/proposals/{proposal_id}/versions/{version_id}/sections/{section_key}/feedback")
+async def api_submit_section_feedback(proposal_id: str, version_id: str, section_key: str, request: Request):
+    """Record thumbs up/down feedback for a specific section on a proposal version.
+
+    Body JSON:
+      - rating: 1 (thumbs up) or -1 (thumbs down)
+    """
+    try:
+        body = await request.json()
+        try:
+            rating = int(body.get("rating"))
+        except Exception:
+            raise HTTPException(status_code=400, detail="rating must be 1 or -1")
+        if rating not in (1, -1):
+            raise HTTPException(status_code=400, detail="rating must be 1 or -1")
+
+        user_id = request.headers.get("x-user-id")
+        updated = await add_section_feedback_db(
+            proposal_id=proposal_id,
+            version_id=version_id,
+            section_key=section_key,
+            rating=rating,
+            user_id=user_id,
+        )
+        return {"ok": True, "section_ratings": updated}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to submit section feedback: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to submit section feedback")
+
+
 @app.post("/proposals/{proposal_id}/validate")
 async def api_validate_proposal(proposal_id: str):
     """Validate latest proposal version. For now, returns a simple OK stub."""
@@ -1038,6 +1116,96 @@ async def api_validate_proposal(proposal_id: str):
         return {"status": "errors", "warnings": [], "errors": [str(e)]}
 
 
+def _build_proposal_html(sections: Any, title: str = "Proposal") -> str:
+    try:
+        parts = [
+            "<html>",
+            "<head>",
+            f"<meta charset='utf-8'><title>{title}</title>",
+            "<style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:24px;} h2{margin-top:24px;border-bottom:1px solid #eee;padding-bottom:4px;} .section{margin-bottom:16px;}</style>",
+            "</head>",
+            "<body>",
+            f"<h1>{title}</h1>",
+        ]
+        for s in (sections or []):
+            stitle = (s.get("title") or "Section") if isinstance(s, dict) else "Section"
+            scontent = (s.get("content") or "") if isinstance(s, dict) else ""
+            parts.append(f"<div class='section'><h2>{stitle}</h2>\n<div>{scontent}</div></div>")
+        parts.append("</body></html>")
+        return "\n".join(parts)
+    except Exception:
+        return "<html><body><h1>Proposal</h1><p>No content.</p></body></html>"
+
+
+@app.get("/proposals/{proposal_id}/export")
+async def api_export_proposal(proposal_id: str, download: bool = False):
+    """Export the latest proposal version as HTML (inline by default)."""
+    try:
+        latest = await get_latest_proposal_version_db(proposal_id)
+        if not latest:
+            raise HTTPException(status_code=404, detail="No versions found for this proposal")
+        proposal = await get_proposal_db(proposal_id)
+        title = proposal.get("title") if isinstance(proposal, dict) else f"Proposal {proposal_id}"
+        html = _build_proposal_html(latest.get("sections"), title=title or f"Proposal {proposal_id}")
+        headers = {}
+        if download:
+            headers["Content-Disposition"] = f"attachment; filename=proposal_{proposal_id}.html"
+        return HTMLResponse(content=html, headers=headers)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Export HTML failed: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to export proposal HTML")
+
+
+@app.get("/proposals/{proposal_id}/export/docx")
+async def api_export_proposal_docx(proposal_id: str, download: bool = True):
+    """Export the latest proposal version as a DOCX file. Falls back to HTML if python-docx is unavailable."""
+    try:
+        latest = await get_latest_proposal_version_db(proposal_id)
+        if not latest:
+            raise HTTPException(status_code=404, detail="No versions found for this proposal")
+        proposal = await get_proposal_db(proposal_id)
+        title = proposal.get("title") if isinstance(proposal, dict) else f"Proposal {proposal_id}"
+
+        try:
+            from docx import Document  # type: ignore
+        except Exception:
+            # Fallback: return HTML download
+            html = _build_proposal_html(latest.get("sections"), title=title or f"Proposal {proposal_id}")
+            headers = {"Content-Disposition": f"attachment; filename=proposal_{proposal_id}.html"} if download else {}
+            return HTMLResponse(content=html, headers=headers)
+
+        doc = Document()
+        doc.add_heading(title or f"Proposal {proposal_id}", level=1)
+        for s in (latest.get("sections") or []):
+            stitle = (s.get("title") or "Section") if isinstance(s, dict) else "Section"
+            scontent = (s.get("content") or "") if isinstance(s, dict) else ""
+            doc.add_heading(stitle, level=2)
+            if scontent:
+                # Strip basic HTML tags for docx body; naive fallback
+                try:
+                    from bs4 import BeautifulSoup  # optional, best-effort
+                    text = BeautifulSoup(scontent, 'html.parser').get_text("\n")
+                except Exception:
+                    import re as _re
+                    text = _re.sub(r"<[^>]+>", "", scontent)
+                for para in (text or "").split("\n\n"):
+                    if para.strip():
+                        doc.add_paragraph(para.strip())
+
+        buff = io.BytesIO()
+        doc.save(buff)
+        buff.seek(0)
+        filename = f"proposal_{proposal_id}.docx"
+        headers = {"Content-Disposition": f"attachment; filename={filename}"} if download else {}
+        return StreamingResponse(buff, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", headers=headers)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Export DOCX failed: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to export proposal DOCX")
+
 @app.post("/proposals/{proposal_id}/generate/stream")
 async def proposal_generate_stream(proposal_id: str, request: Request):
     """Stream generation for a single proposal section with retrieval SSE events.
@@ -1051,6 +1219,7 @@ async def proposal_generate_stream(proposal_id: str, request: Request):
     try:
         body = await request.json()
         section_title = (body.get("section_title") or "Section").strip()
+        section_key = (body.get("section_key") or None)
         section_instructions = (body.get("section_instructions") or "").strip()
         meta = body.get("metadata") or {}
 
@@ -1112,15 +1281,134 @@ async def proposal_generate_stream(proposal_id: str, request: Request):
                         guided_task = None
 
                 # Build a generation prompt for the section
+                # Include style guidance if the user uploaded an example proposal
+                style_hint = (PROPOSAL_STYLE_HINTS.get(proposal_id, {}) or {}).get("style_prompt")
+                phrase_bank = (PROPOSAL_STYLE_HINTS.get(proposal_id, {}) or {}).get("phrase_bank")
+                formatting = (PROPOSAL_STYLE_HINTS.get(proposal_id, {}) or {}).get("formatting") or {}
+                draft_text = PROPOSAL_DRAFT_TEXTS.get(proposal_id, "")
+
+                # Retrieve top-rated examples for this section, if any
+                top_examples: List[Dict[str, Any]] = []
+                try:
+                    if section_key:
+                        top_examples = await get_top_rated_section_examples_db(section_key, limit=3)
+                except Exception as e:
+                    logger.debug(f"Fetching top-rated examples failed (non-fatal): {e}")
+
+                # Prefetch scoped vector context snippets to ground the draft
+                context_snippets: List[str] = []
+                try:
+                    vec_input = VectorSearchInput(
+                        query=f"{section_title} {section_instructions}".strip() or section_title,
+                        limit=12,
+                        collection_ids=prefs.get("collection_ids"),
+                        document_ids=prefs.get("document_ids"),
+                        chunk_ids=prefs.get("chunk_ids"),
+                    )
+                    top_chunks = await vector_search_tool(vec_input)
+                    for idx, ch in enumerate(top_chunks[:12]):
+                        try:
+                            citation = f"[{idx+1}] {ch.document_title or ''} — {ch.content.strip()}"
+                            # Keep snippets reasonably short
+                            if len(citation) > 800:
+                                citation = citation[:800] + "…"
+                            context_snippets.append(citation)
+                        except Exception:
+                            pass
+                except Exception as e:
+                    logger.debug(f"Prefetch vector context failed (non-fatal): {e}")
+
+                drafting_policy = (
+                    "You are in Proposal Drafting Mode. You are explicitly permitted to draft "
+                    "professional proposal content. Do not refuse to draft due to 'creative content' "
+                    "limitations. When specific facts are unavailable, write a polished, generic draft "
+                    "and mark placeholders like <Client Name> or <Project Timeline>. Always prefer to ground "
+                    "claims in the provided context snippets when relevant, and maintain a confident, helpful tone."
+                )
+
+                # Build optional formatting guide derived from example
+                fmt_bits: List[str] = []
+                bullet_marker = formatting.get("bullet_marker")
+                if bullet_marker:
+                    fmt_bits.append(f"Use this exact bullet character for lists: '{bullet_marker}' followed by a space.")
+                if formatting.get("has_task_pattern"):
+                    fmt_bits.append("For 'Scope of Work' sections, structure subsections as 'Task N: Title'.")
+                if formatting.get("has_aoc_pattern"):
+                    fmt_bits.append("When listing Areas of Concern, prefix headings as 'AOC-<number> <Title>' on their own lines.")
+                if formatting.get("has_re_line") or formatting.get("has_salutation"):
+                    fmt_bits.append("For cover letter style sections, begin with 'RE: <Subject>' and 'Dear <Recipient Name>:' on separate lines.")
+                if fmt_bits:
+                    formatting_guide = "Formatting Guide (mirror example layout):\n- " + "\n- ".join(fmt_bits)
+                else:
+                    formatting_guide = None
+
+                # Section-specific guide to strongly enforce structure
+                section_specific_guide = None
+                try:
+                    st_lower = (section_title or "").lower()
+                    if "scope" in st_lower and "work" in st_lower:
+                        bm = formatting.get("bullet_marker") or "-"
+                        section_specific_guide = (
+                            "For this section, structure subsections exactly as 'Task <number>: <Title>'. "
+                            f"When listing items, use the bullet marker '{bm} ' at the start of each list line."
+                        )
+                    elif any(k in st_lower for k in ["regulatory", "compliance", "aoc"]):
+                        bm = formatting.get("bullet_marker") or "-"
+                        section_specific_guide = (
+                            "When listing Areas of Concern, prefix headings as 'AOC-<number> <Title>' and use brief explanatory paragraphs. "
+                            f"Use the bullet marker '{bm} ' for sublists where appropriate."
+                        )
+                    elif any(k in st_lower for k in ["cover", "letter"]):
+                        section_specific_guide = (
+                            "Begin with a header line 'RE: <Subject>' followed by a salutation 'Dear <Recipient Name>:' on the next line. "
+                            "Write in formal letter style."
+                        )
+                except Exception:
+                    section_specific_guide = None
+
                 prompt_parts = [
+                    drafting_policy,
                     f"Draft the '{section_title}' section of a professional proposal.",
                 ]
                 if section_instructions:
                     prompt_parts.append(f"Follow these instructions: {section_instructions}")
+                if style_hint:
+                    prompt_parts.append(f"Style guidance to mirror:\n{style_hint}")
+                if formatting_guide:
+                    prompt_parts.append(formatting_guide)
+                if top_examples:
+                    # Include brief exemplars distilled from feedback
+                    ex_lines: List[str] = []
+                    for i, ex in enumerate(top_examples[:3], start=1):
+                        content = (ex.get("content") or "").strip()
+                        title = (ex.get("title") or "").strip() or f"Example {i}"
+                        snippet = content[:800] + ("…" if len(content) > 800 else "")
+                        ex_lines.append(f"[{i}] {title}:\n{snippet}")
+                    prompt_parts.append(
+                        "Successful patterns from previously upvoted sections (use tone/structure appropriately, do not copy verbatim):\n" + "\n\n".join(ex_lines)
+                    )
+                if section_specific_guide:
+                    prompt_parts.append(section_specific_guide)
+                if phrase_bank and isinstance(phrase_bank, list) and phrase_bank:
+                    prompt_parts.append(
+                        "Preferred terminology (optional, from example): " + ", ".join(phrase_bank[:15])
+                    )
+                if context_snippets:
+                    prompt_parts.append(
+                        "Context snippets (cite with [n] when you use a fact):\n" + "\n\n".join(context_snippets)
+                    )
+                if draft_text:
+                    # Trim draft content to avoid exceeding context; keep a generous but bounded portion
+                    trimmed_draft = draft_text.strip()
+                    if len(trimmed_draft) > 6000:
+                        trimmed_draft = trimmed_draft[:6000] + "…"
+                    prompt_parts.append(
+                        "Existing draft content to adapt and improve (use as source material where relevant):\n" + trimmed_draft
+                    )
                 prompt_parts.append(
-                    "Use concise, clear language and maintain consistent branding."
+                    "Requirements:\n- Maintain consistent branding.\n- Use clear, concise paragraphs.\n- Include numbered citations [1], [2] when you rely on a context snippet.\n- If context is thin, still produce a useful draft with sensible placeholders."
                 )
-                prompt = "\n".join(prompt_parts)
+                prompt = "\n\n".join(prompt_parts)
 
                 # Execute using rag_agent with scoping deps
                 deps = AgentDependencies(
@@ -1199,6 +1487,151 @@ async def proposal_generate_stream(proposal_id: str, request: Request):
     except Exception as e:
         logger.exception("Proposal generate stream failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/proposals/{proposal_id}/aocs/discover")
+async def proposal_aoc_discover(proposal_id: str, request: Request):
+    """Discover AOC codes and optional titles from proposal-scoped context.
+
+    Body JSON fields (optional):
+      - contextMode: 'all' | 'collections' | 'documents'
+      - selectedCollections: [ids]
+      - selectedDocuments: [ids]
+      - limit: number of chunks to scan (default 150)
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    context_mode = (body.get("contextMode") or "all").lower()
+    collection_ids = body.get("selectedCollections") or []
+    document_ids = body.get("selectedDocuments") or []
+    limit = int(body.get("limit") or 150)
+
+    # Build search preferences
+    prefs: Dict[str, Any] = {}
+    if context_mode == "collections" and isinstance(collection_ids, list):
+        prefs["collection_ids"] = collection_ids
+    if context_mode == "documents" and isinstance(document_ids, list):
+        prefs["document_ids"] = document_ids
+
+    # Vector search with queries that likely surface AOC mentions
+    queries = [
+        "AOC-",
+        "Areas of Concern (AOC)",
+        "AOC code",
+    ]
+    seen_codes = set()
+    aocs: List[Dict[str, str]] = []
+
+    code_re = re.compile(r"AOC[-\s]?([0-9]+[A-Za-z]?)", re.IGNORECASE)
+
+    async def scan_query(q: str):
+        try:
+            vi = VectorSearchInput(
+                query=q,
+                limit=limit,
+                collection_ids=prefs.get("collection_ids"),
+                document_ids=prefs.get("document_ids"),
+            )
+            hits = await vector_search_tool(vi)
+            for h in hits or []:
+                text = (getattr(h, "content", None) or "")
+                for m in code_re.finditer(text):
+                    code = f"AOC-{m.group(1).upper()}"
+                    if code in seen_codes:
+                        continue
+                    # Try to grab a short title after the code in the same sentence
+                    tail = text[m.end(): m.end()+140]
+                    title = None
+                    # look for dash/colon patterns
+                    dash_idx = tail.find("-")
+                    colon_idx = tail.find(":")
+                    sep_idx = dash_idx if (dash_idx != -1 and (colon_idx == -1 or dash_idx < colon_idx)) else colon_idx
+                    if sep_idx != -1:
+                        cand = tail[sep_idx+1:].strip().split(".\n")[0].split(". ")[0]
+                        cand = cand[:80].strip()
+                        title = cand
+                    aocs.append({"code": code, **({"title": title} if title else {})})
+                    seen_codes.add(code)
+                    if len(seen_codes) >= 100:
+                        return
+        except Exception as e:
+            logger.debug(f"AOC discover scan failed for query '{q}': {e}")
+
+    # Run scans sequentially to respect DB pool limits
+    for q in queries:
+        await scan_query(q)
+        if len(seen_codes) >= 100:
+            break
+
+    # Also scan uploaded draft text (if any) for inline AOC headings
+    try:
+        draft_text = (PROPOSAL_DRAFT_TEXTS.get(proposal_id) or "").strip()
+        if draft_text:
+            def _clean_title(raw: str) -> str:
+                t = (raw or "").strip()
+                if not t:
+                    return ""
+                # Remove dot leaders (contiguous or spaced) and bullet-like dots
+                t = re.sub(r"(?:\s*[\.\u2024\u2027\u2219\u00B7•\u2022]\s*){3,}", "", t)
+                # Remove stray trailing "- Back-" fragments
+                t = re.sub(r"\s*[-–—]\s*Back\s*[-–—]?\s*$", "", t, flags=re.IGNORECASE)
+                # Collapse multiple spaces
+                t = re.sub(r"\s{2,}", " ", t).strip()
+                # Trim trailing and leading punctuation
+                t = re.sub(r"[\s\.\-–—:;,]+$", "", t).strip()
+                t = re.sub(r"^[\s\.\-–—:;,]+", "", t).strip()
+                return t[:80]
+
+            for m in code_re.finditer(draft_text):
+                code = f"AOC-{m.group(1).upper()}"
+                if code in seen_codes:
+                    continue
+                # Heuristic title extraction from the same line
+                line_start = draft_text.rfind('\n', 0, m.start()) + 1
+                line_end_n = draft_text.find('\n', m.end())
+                line_end = line_end_n if line_end_n != -1 else len(draft_text)
+                line = draft_text[line_start:line_end]
+                title = None
+                # Take the remainder of the line after the code token.
+                # If there is an immediate separator (dash/en dash/em dash/colon) right after the code, strip only that leading separator.
+                after = line[m.end()-line_start:]
+                after2 = re.sub(r"^\s*[-–—:]\s*", "", after)
+                cand = after2.strip()
+                # Split off page leaders / repeated dots
+                cand = re.split(r"\s?\.{2,}\s?", cand)[0]
+                # And line breaks after a period
+                cand = cand.split('.\n')[0]
+                cand = _clean_title(cand)
+                title = cand or None
+                aocs.append({"code": code, **({"title": title} if title else {})})
+                seen_codes.add(code)
+    except Exception as e:
+        logger.debug(f"Draft AOC scan failed: {e}")
+
+    # If nothing found, try looking up proposal documents and lightly seed
+    if not aocs:
+        try:
+            docs = await list_proposal_documents_db(proposal_id, source_type=None)
+            ids = [d.get("id") or d.get("document_id") for d in (docs or []) if (d.get("id") or d.get("document_id"))]
+            if ids:
+                vi = VectorSearchInput(query="AOC-", limit=limit, document_ids=ids)
+                hits = await vector_search_tool(vi)
+                for h in hits or []:
+                    text = (getattr(h, "content", None) or "")
+                    for m in code_re.finditer(text):
+                        code = f"AOC-{m.group(1).upper()}"
+                        if code in seen_codes:
+                            continue
+                        aocs.append({"code": code})
+                        seen_codes.add(code)
+        except Exception as e:
+            logger.debug(f"Fallback proposal doc scan failed: {e}")
+
+    # Return deduped list
+    return {"aocs": aocs}
 
 
 @app.post("/pricing/parse")
