@@ -151,6 +151,14 @@ class EmbeddingGenerator:
         """Return exponential backoff delay."""
         return self.retry_delay * (2 ** attempt)
 
+    async def embed_chunks(self, chunks: List[DocumentChunk]) -> List[DocumentChunk]:
+        """Attach embeddings to provided `DocumentChunk` instances."""
+        if not chunks:
+            return []
+
+        embedded_chunks, _ = await embed_document_chunks(chunks, embedding_generator=self)
+        return embedded_chunks
+
 
 # Factory function expected by ingestion.ingest
 def create_embedder(model: Optional[str] = None, batch_size: int = 100, max_retries: int = 3, retry_delay: float = 1.0) -> EmbeddingGenerator:
