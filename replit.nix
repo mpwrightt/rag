@@ -1,41 +1,23 @@
 {pkgs}: {
   deps = [
-    # Python and package management
-    pkgs.python311Full
+    # Python and package management (slim)
+    pkgs.python311
     pkgs.python311Packages.pip
     pkgs.python311Packages.setuptools
     pkgs.python311Packages.wheel
-    
+
     # SSL/TLS support for API calls
     pkgs.openssl
     pkgs.cacert
-    
-    # Database connection libraries
-    pkgs.postgresql
+
+    # Database client library only (no server)
     pkgs.libpq
-    
-    # Image processing (if needed for document processing)
+
+    # Image processing libs for Pillow/pdf2image
     pkgs.libjpeg
     pkgs.libpng
     pkgs.zlib
     pkgs.poppler_utils
-    
-    # System utilities
-    pkgs.curl
-    pkgs.wget
-    pkgs.git
-    
-    # Build tools for Python packages
-    pkgs.gcc
-    pkgs.gnumake
-    pkgs.pkg-config
-    
-    # For Neo4j driver and graph operations
-    pkgs.cyrus_sasl
-    
-    # Node.js (in case any Python packages need node)
-    pkgs.nodejs_20
-    pkgs.nodePackages.npm
   ];
   
   # Environment variables for the Nix environment
