@@ -18,6 +18,22 @@ sys.path.insert(0, str(current_dir))
 # Load environment variables
 load_dotenv()
 
+# Auto-detect and set POPPLER_PATH for Nix environments
+if not os.getenv("POPPLER_PATH") and os.path.exists("/nix/store"):
+    try:
+        import glob
+        candidates = glob.glob("/nix/store/*-poppler-utils-*/bin")
+        candidates.sort(reverse=True)
+        for candidate in candidates:
+            if os.path.exists(os.path.join(candidate, "pdftoppm")):
+                os.environ["POPPLER_PATH"] = candidate
+                print(f"✅ Auto-detected POPPLER_PATH: {candidate}")
+                break
+        if not os.getenv("POPPLER_PATH"):
+            print("⚠️  Could not auto-detect poppler-utils in /nix/store")
+    except Exception as e:
+        print(f"⚠️  Failed to auto-detect POPPLER_PATH: {e}")
+
 # Import the FastAPI app from agent module with error handling
 try:
     from agent.api import app

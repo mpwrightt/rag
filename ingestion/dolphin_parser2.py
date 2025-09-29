@@ -138,13 +138,19 @@ class DolphinParser:
 
         # Search Nix store and sort by version (prefer newer)
         try:
-            nix_candidates = []
-            nix_candidates += glob.glob("/nix/store/*-poppler-*/bin")
-            nix_candidates += glob.glob("/nix/store/*-poppler-utils-*/bin")
-            # Sort to prefer higher version numbers
-            nix_candidates.sort(reverse=True)
-            candidates += nix_candidates
-            logger.info(f"Found {len(nix_candidates)} Nix poppler candidates")
+            # Check if /nix/store exists first
+            if os.path.exists("/nix/store"):
+                nix_candidates = []
+                nix_candidates += glob.glob("/nix/store/*-poppler-*/bin")
+                nix_candidates += glob.glob("/nix/store/*-poppler-utils-*/bin")
+                # Sort to prefer higher version numbers
+                nix_candidates.sort(reverse=True)
+                candidates += nix_candidates
+                logger.info(f"Found {len(nix_candidates)} Nix poppler candidates in /nix/store")
+                if nix_candidates:
+                    logger.info(f"First few candidates: {nix_candidates[:3]}")
+            else:
+                logger.info("/nix/store does not exist, skipping Nix search")
         except Exception as e:
             logger.warning(f"Failed to glob Nix store for poppler: {e}")
 
@@ -170,15 +176,35 @@ class DolphinParser:
             # Resolve Poppler
             poppler_path = self._discover_poppler_path()
             if not poppler_path:
-                logger.warning("Poppler not explicitly found; relying on PATH for pdftoppm")
+                logger.warning("Poppler not explicitly found; trying to use without explicit path")
 
-            # Convert PDF to images
-            images = convert_from_path(
-                pdf_path,
-                dpi=200,  # Good balance of quality vs size
-                fmt="PNG",
-                poppler_path=poppler_path,
-            )
+            # Convert PDF to images - try with explicit path first, then without
+            try:
+                if poppler_path:
+                    images = convert_from_path(
+                        pdf_path,
+                        dpi=200,
+                        fmt="PNG",
+                        poppler_path=poppler_path,
+                    )
+                else:
+                    # Let pdf2image try to find it in PATH
+                    images = convert_from_path(
+                        pdf_path,
+                        dpi=200,
+                        fmt="PNG",
+                    )
+            except Exception as e:
+                # If poppler_path was set and failed, try without it
+                if poppler_path:
+                    logger.warning(f"Failed with poppler_path={poppler_path}, retrying without: {e}")
+                    images = convert_from_path(
+                        pdf_path,
+                        dpi=200,
+                        fmt="PNG",
+                    )
+                else:
+                    raise
 
             # Persist images in a temp dir that survives until process exit
             temp_dir = tempfile.mkdtemp(prefix="dolphin_pdf_")
