@@ -115,35 +115,50 @@ class DolphinParser:
         if env_path:
             try:
                 if os.path.isfile(env_path) and os.path.basename(env_path) == "pdftoppm":
+                    logger.info(f"Using POPPLER_PATH from env (file): {env_path}")
                     return os.path.dirname(env_path)
                 if os.path.isdir(env_path) and os.path.exists(os.path.join(env_path, "pdftoppm")):
+                    logger.info(f"Using POPPLER_PATH from env (dir): {env_path}")
                     return env_path
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to use POPPLER_PATH from env: {e}")
 
-        # Try PATH
+        # Try PATH first (most reliable)
         which = shutil.which("pdftoppm")
         if which:
-            return os.path.dirname(which)
+            poppler_dir = os.path.dirname(which)
+            logger.info(f"Found pdftoppm in PATH: {poppler_dir}")
+            return poppler_dir
 
         # Probe common directories, including Nix store
         candidates: List[str] = [
             "/usr/bin",
             "/usr/local/bin",
         ]
+
+        # Search Nix store and sort by version (prefer newer)
         try:
-            candidates += glob.glob("/nix/store/*-poppler-*/bin")
-            candidates += glob.glob("/nix/store/*-poppler-utils-*/bin")
-        except Exception:
-            pass
+            nix_candidates = []
+            nix_candidates += glob.glob("/nix/store/*-poppler-*/bin")
+            nix_candidates += glob.glob("/nix/store/*-poppler-utils-*/bin")
+            # Sort to prefer higher version numbers
+            nix_candidates.sort(reverse=True)
+            candidates += nix_candidates
+            logger.info(f"Found {len(nix_candidates)} Nix poppler candidates")
+        except Exception as e:
+            logger.warning(f"Failed to glob Nix store for poppler: {e}")
 
         for c in candidates:
             try:
-                if os.path.exists(os.path.join(c, "pdftoppm")):
+                pdftoppm_path = os.path.join(c, "pdftoppm")
+                if os.path.exists(pdftoppm_path) and os.access(pdftoppm_path, os.X_OK):
+                    logger.info(f"Found executable pdftoppm at: {c}")
                     return c
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to check candidate {c}: {e}")
                 continue
 
+        logger.error("Could not locate pdftoppm in any known location")
         return None
 
     def _convert_pdf_to_images(self, pdf_path: str) -> List[str]:

@@ -26,11 +26,14 @@
     PYTHONUNBUFFERED = "1";
     PIP_DISABLE_PIP_VERSION_CHECK = "1";
     PIP_NO_CACHE_DIR = "1";
-    
+
     # SSL certificate path for secure connections
     SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
-    
+
     # PostgreSQL library path
     LD_LIBRARY_PATH = "${pkgs.libpq}/lib:${pkgs.openssl.out}/lib";
+
+    # Poppler utilities path for pdf2image
+    PATH = "${pkgs.poppler_utils}/bin:$PATH";
   };
 }
