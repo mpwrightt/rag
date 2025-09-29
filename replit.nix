@@ -32,8 +32,5 @@
 
     # PostgreSQL library path
     LD_LIBRARY_PATH = "${pkgs.libpq}/lib:${pkgs.openssl.out}/lib";
-
-    # Poppler utilities path for pdf2image
-    PATH = "${pkgs.poppler_utils}/bin:$PATH";
   };
 }
