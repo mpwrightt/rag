@@ -56,8 +56,16 @@ def get_llm_model(model_choice: Optional[str] = None) -> GoogleModel:
 
 
 def get_embedding_model() -> str:
-    """Return the embedding model identifier."""
-    return os.getenv("EMBEDDING_MODEL", _DEFAULT_EMBEDDING_MODEL)
+    """Return the embedding model identifier with proper Google API format."""
+    model = os.getenv("EMBEDDING_MODEL", _DEFAULT_EMBEDDING_MODEL)
+    # Ensure model has 'models/' prefix for Google Gemini API
+    if model and not model.startswith("models/") and not model.startswith("tunedModels/"):
+        # Auto-fix common model names
+        if model in ["text-embedding-004", "text-embedding-3-small", "text-embedding-3-large"]:
+            if "text-embedding-004" in model:
+                model = f"models/{model}"
+                logger.info(f"Auto-corrected embedding model to: {model}")
+    return model
 
 
 def get_ingestion_model() -> GoogleModel:

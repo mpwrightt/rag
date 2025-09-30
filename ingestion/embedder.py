@@ -61,6 +61,7 @@ class EmbeddingGenerator:
         # Model-specific configurations
         self.model_configs = {
             "text-embedding-004": {"dimensions": 768, "max_tokens": 8191},
+            "models/text-embedding-004": {"dimensions": 768, "max_tokens": 8191},  # Google API format
             # Backwards compatibility with OpenAI-style identifiers if env overrides persist
             "text-embedding-3-small": {"dimensions": 1536, "max_tokens": 8191},
             "text-embedding-3-large": {"dimensions": 3072, "max_tokens": 8191},
