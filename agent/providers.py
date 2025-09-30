@@ -17,7 +17,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 _DEFAULT_LLM_MODEL = "gemini-2.5-flash"
-_DEFAULT_EMBEDDING_MODEL = "text-embedding-004"
+_DEFAULT_EMBEDDING_MODEL = "models/text-embedding-004"
 _GENAI_CONFIGURED = False
 
 
