@@ -199,47 +199,18 @@ class SemanticChunker:
     
     async def _split_long_section(self, section: str) -> List[str]:
         """
-        Split a long section using LLM for semantic boundaries.
-        
+        Split a long section. Use simple splitting for efficiency.
+        LLM chunking is too slow for large documents.
+
         Args:
             section: Section to split
-        
+
         Returns:
             List of sub-chunks
         """
-        try:
-            prompt = f"""
-            Split the following text into semantically coherent chunks. Each chunk should:
-            1. Be roughly {self.config.chunk_size} characters long
-            2. End at natural semantic boundaries
-            3. Maintain context and readability
-            4. Not exceed {self.config.max_chunk_size} characters
-            
-            Return only the split text with "---CHUNK---" as separator between chunks.
-            
-            Text to split:
-            {section}
-            """
-            
-            # Use Pydantic AI for LLM calls
-            from pydantic_ai import Agent
-            temp_agent = Agent(self.model)
-            
-            response = await temp_agent.run(prompt)
-            result = response.data
-            chunks = [chunk.strip() for chunk in result.split("---CHUNK---")]
-            
-            # Validate chunks
-            valid_chunks = []
-            for chunk in chunks:
-                if (self.config.min_chunk_size <= len(chunk) <= self.config.max_chunk_size):
-                    valid_chunks.append(chunk)
-            
-            return valid_chunks if valid_chunks else self._simple_split(section)
-            
-        except Exception as e:
-            logger.error(f"LLM chunking failed: {e}")
-            return self._simple_split(section)
+        # Always use simple split for oversized sections
+        # The structural splitting already handles semantic boundaries well
+        return self._simple_split(section)
     
     def _simple_split(self, text: str) -> List[str]:
         """

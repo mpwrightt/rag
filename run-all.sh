@@ -1,14 +1,12 @@
 #!/bin/bash
 
-# Enhanced DataDiver startup script with Dolphin integration
+# DataDiver startup script
 # Usage: ./run-all.sh [options]
 
 set -e
 
 # Default values
 NO_CONVEX=false
-NO_DOLPHIN=false
-SETUP_DOLPHIN=false
 API_PORT=8058
 NEXT_PORT=3000
 
@@ -17,14 +15,6 @@ while [[ $# -gt 0 ]]; do
   case $1 in
     --no-convex)
       NO_CONVEX=true
-      shift
-      ;;
-    --no-dolphin)
-      NO_DOLPHIN=true
-      shift
-      ;;
-    --setup-dolphin)
-      SETUP_DOLPHIN=true
       shift
       ;;
     --api-port)
@@ -39,17 +29,14 @@ while [[ $# -gt 0 ]]; do
       echo "Usage: $0 [options]"
       echo ""
       echo "Options:"
-      echo "  --setup-dolphin    Download and setup Dolphin model (first time)"
-      echo "  --no-dolphin       Skip Dolphin, use traditional parsers only"
       echo "  --no-convex        Skip Convex database server"
       echo "  --api-port PORT    Custom API port (default: 8058)"
       echo "  --next-port PORT   Custom frontend port (default: 3000)"
       echo "  -h, --help         Show this help message"
       echo ""
       echo "Examples:"
-      echo "  $0                    # Standard run with auto-detection"
-      echo "  $0 --setup-dolphin   # First-time setup with Dolphin"
-      echo "  $0 --no-dolphin      # Run without Dolphin"
+      echo "  $0                    # Standard run"
+      echo "  $0 --no-convex        # Run without Convex"
       exit 0
       ;;
     *)
@@ -65,7 +52,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 echo "🚀 Running DataDiver project from: $SCRIPT_DIR"
-echo "🐬 Enhanced with Dolphin multimodal document parser"
 
 # Array to store background process PIDs
 PIDS=()
@@ -86,33 +72,6 @@ cleanup() {
 
 # Setup signal handlers
 trap cleanup SIGINT SIGTERM
-
-# Check if Dolphin setup is needed
-if [[ "$SETUP_DOLPHIN" == true ]]; then
-  echo ""
-  echo "🔧 Setting up Dolphin document parser..."
-  if python scripts/setup_dolphin.py; then
-    echo "✅ Dolphin setup completed successfully!"
-    export USE_DOLPHIN=1
-  else
-    echo "❌ Dolphin setup failed. Continuing without Dolphin..."
-    export USE_DOLPHIN=0
-  fi
-elif [[ "$NO_DOLPHIN" != true ]]; then
-  echo ""
-  echo "🔍 Verifying Dolphin setup..."
-  if python scripts/setup_dolphin.py --verify-only >/dev/null 2>&1; then
-    echo "✅ Dolphin is ready!"
-    export USE_DOLPHIN=1
-  else
-    echo "⚠️  Dolphin not available. Use --setup-dolphin to install. Continuing without Dolphin..."
-    export USE_DOLPHIN=0
-  fi
-else
-  echo ""
-  echo "⏭️  Skipping Dolphin (use --no-dolphin to skip explicitly)"
-  export USE_DOLPHIN=0
-fi
 
 echo ""
 echo "🚀 Starting services..."
@@ -151,11 +110,6 @@ echo "📊 Frontend: http://localhost:$NEXT_PORT"
 echo "🔌 API: http://localhost:$API_PORT"
 if [[ "$NO_CONVEX" != true ]]; then
   echo "💾 Convex: Running (PID: $CONVEX_PID)"
-fi
-if [[ "$USE_DOLPHIN" == "1" ]]; then
-  echo "🐬 Dolphin: Enhanced document parsing enabled"
-else
-  echo "📄 Document parsing: Traditional parsers only"
 fi
 
 echo ""

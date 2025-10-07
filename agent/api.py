@@ -1016,7 +1016,7 @@ async def api_upload_proposal_example(proposal_id: str, file: UploadFile = File(
                 "has_re_line": has_re_line,
                 "has_salutation": has_salutation,
             }
-            hints["raw_text"] = raw_text[:25000]  # keep a bounded amount
+            hints["raw_text"] = raw_text  # full example text (1M context window)
             PROPOSAL_STYLE_HINTS[proposal_id] = hints
         except Exception:
             pass
@@ -1376,7 +1376,7 @@ async def proposal_generate_stream(proposal_id: str, request: Request):
                 if style_hint:
                     prompt_parts.append(f"Style guidance to mirror:\n{style_hint}")
 
-                # Enhanced: Include Dolphin structure analysis insights
+                # Include structure analysis insights
                 if structure_analysis:
                     structure_guidance = []
                     if structure_analysis.get("has_tables"):
@@ -1418,12 +1418,9 @@ async def proposal_generate_stream(proposal_id: str, request: Request):
                         "Context snippets (cite with [n] when you use a fact):\n" + "\n\n".join(context_snippets)
                     )
                 if draft_text:
-                    # Trim draft content to avoid exceeding context; keep a generous but bounded portion
-                    trimmed_draft = draft_text.strip()
-                    if len(trimmed_draft) > 6000:
-                        trimmed_draft = trimmed_draft[:6000] + "…"
+                    # Full draft content (1M context window supports complete documents)
                     prompt_parts.append(
-                        "Existing draft content to adapt and improve (use as source material where relevant):\n" + trimmed_draft
+                        "Existing draft content to adapt and improve (use as source material where relevant):\n" + draft_text.strip()
                     )
                 prompt_parts.append(
                     "Requirements:\n- Maintain consistent branding.\n- Use clear, concise paragraphs.\n- Include numbered citations [1], [2] when you rely on a context snippet.\n- If context is thin, still produce a useful draft with sensible placeholders."

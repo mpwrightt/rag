@@ -26,8 +26,7 @@
 
 ## What's Disabled for Disk Space
 
-- **Dolphin Parser**: Advanced PDF parsing (falls back to pdfminer)
-- **PyTorch/Transformers**: Heavy ML dependencies
+- **Heavy ML dependencies**: PyTorch/Transformers removed
 - **Advanced Features**: Graph search, hybrid search
 
 ## Alternative ML Processing
@@ -35,8 +34,7 @@
 If you need advanced document parsing:
 
 1. **Use Google Colab** for preprocessing documents
-2. **Deploy Dolphin separately** on a service with more storage
-3. **Use Hugging Face Inference API** for ML tasks
+2. **Use Hugging Face Inference API** for ML tasks
 
 ## Monitoring Disk Usage
 

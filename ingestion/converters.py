@@ -1,6 +1,5 @@
 """
 Utilities to convert various document types to Markdown for unified ingestion.
-Enhanced with Dolphin multimodal document parser for better structure extraction.
 """
 from __future__ import annotations
 
@@ -16,17 +15,11 @@ logger = logging.getLogger(__name__)
 
 # Optional heavy deps imported lazily
 try:
-    from .dolphin_parser import get_dolphin_parser, is_dolphin_available
-    DOLPHIN_AVAILABLE = is_dolphin_available()
+    from .docling_parser import get_docling_parser, is_docling_available
+    DOCLING_AVAILABLE = is_docling_available()
 except Exception:
-    # Try alternate implementation with Poppler auto-discovery
-    try:
-        from .dolphin_parser2 import get_dolphin_parser, is_dolphin_available  # type: ignore
-        DOLPHIN_AVAILABLE = is_dolphin_available()
-        logger.info("Loaded Dolphin parser from dolphin_parser2 fallback module")
-    except Exception:
-        DOLPHIN_AVAILABLE = False
-        logger.warning("Dolphin parser not available - falling back to traditional parsers")
+    DOCLING_AVAILABLE = False
+    logger.warning("Docling parser not available - falling back to traditional parsers")
 
 def _looks_like_binary_text(text: str) -> bool:
     """Detect binary/gibberish text such as raw PDF bytes or ZIP/XML bodies.
@@ -112,18 +105,19 @@ def convert_to_markdown(file_path: str) -> Tuple[str, Dict[str, Any]]:
             return text, meta
 
         if ext == "pdf":
-            # First attempt: Dolphin multimodal parser (if available)
-            if DOLPHIN_AVAILABLE and os.getenv("USE_DOLPHIN", "1").lower() in {"1", "true", "yes", "on"}:
+            # First attempt: Docling (if available and enabled)
+            if DOCLING_AVAILABLE and os.getenv("USE_DOCLING", "1").lower() in {"1", "true", "yes", "on"}:
                 try:
-                    dolphin_parser = get_dolphin_parser()
-                    markdown_content, dolphin_meta = dolphin_parser.parse_document(str(p))
-                    if markdown_content.strip():
-                        logger.info(f"Successfully parsed {p.name} with Dolphin parser")
-                        return _normalize_text(markdown_content), {**meta, **dolphin_meta}
-                    else:
-                        logger.warning("Dolphin parser returned empty content for %s", p.name)
+                    docling_parser = get_docling_parser()
+                    if docling_parser:
+                        markdown_content, docling_meta = docling_parser.parse_document(str(p))
+                        if markdown_content.strip():
+                            logger.info(f"Successfully parsed {p.name} with Docling")
+                            return _normalize_text(markdown_content), {**meta, **docling_meta}
+                        else:
+                            logger.warning("Docling parser returned empty content for %s", p.name)
                 except Exception as e:
-                    logger.warning("Dolphin parsing failed for %s: %s", p.name, e)
+                    logger.warning("Docling parsing failed for %s: %s", p.name, e)
                     logger.info("Falling back to traditional PDF parsers")
 
             # Second attempt: pdfminer text extraction (fallback)
@@ -131,7 +125,7 @@ def convert_to_markdown(file_path: str) -> Tuple[str, Dict[str, Any]]:
                 from pdfminer.high_level import extract_text
                 text = extract_text(str(p)) or ""
                 if text.strip():
-                    return _normalize_text(text), {**meta, "note": "pdfminer_fallback"}
+                    return _normalize_text(text), meta
                 else:
                     logger.warning("PDF conversion via pdfminer returned empty text for %s", p.name)
             except Exception as e:
@@ -150,7 +144,7 @@ def convert_to_markdown(file_path: str) -> Tuple[str, Dict[str, Any]]:
                     doc.close()
                     text = "\n\n".join(pages_text)
                     if text.strip():
-                        return _normalize_text(text), {**meta, "note": "pymupdf_fallback"}
+                        return _normalize_text(text), meta
                 except Exception as e2:
                     logger.warning("PyMuPDF extraction failed: %s", e2)
             except Exception:
@@ -194,6 +188,19 @@ def convert_to_markdown(file_path: str) -> Tuple[str, Dict[str, Any]]:
             return _normalize_text(_raw), {**meta, "warning": "pdf extraction failed; raw decode used"}
 
         if ext in {"docx"}:
+            # Try Docling first (if available)
+            if DOCLING_AVAILABLE and os.getenv("USE_DOCLING", "1").lower() in {"1", "true", "yes", "on"}:
+                try:
+                    docling_parser = get_docling_parser()
+                    if docling_parser:
+                        markdown_content, docling_meta = docling_parser.parse_document(str(p))
+                        if markdown_content.strip():
+                            logger.info(f"Successfully parsed {p.name} with Docling")
+                            return _normalize_text(markdown_content), {**meta, **docling_meta}
+                except Exception as e:
+                    logger.warning("Docling parsing failed for %s: %s", p.name, e)
+
+            # Fallback to python-docx
             try:
                 from docx import Document
                 doc = Document(str(p))
@@ -208,6 +215,19 @@ def convert_to_markdown(file_path: str) -> Tuple[str, Dict[str, Any]]:
                 return "", {**meta, "warning": "docx read failed; no readable text"}
 
         if ext in {"pptx"}:
+            # Try Docling first (if available)
+            if DOCLING_AVAILABLE and os.getenv("USE_DOCLING", "1").lower() in {"1", "true", "yes", "on"}:
+                try:
+                    docling_parser = get_docling_parser()
+                    if docling_parser:
+                        markdown_content, docling_meta = docling_parser.parse_document(str(p))
+                        if markdown_content.strip():
+                            logger.info(f"Successfully parsed {p.name} with Docling")
+                            return _normalize_text(markdown_content), {**meta, **docling_meta}
+                except Exception as e:
+                    logger.warning("Docling parsing failed for %s: %s", p.name, e)
+
+            # Fallback to python-pptx
             try:
                 from pptx import Presentation
                 prs = Presentation(str(p))

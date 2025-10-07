@@ -25,24 +25,19 @@ _STOP = set(
 
 
 def extract_text_or_markdown(file_path: str) -> str:
-    """Convert the source file to plaintext/markdown for downstream analysis.
-    Enhanced to use Dolphin parser for better structure extraction from PDFs.
-    """
+    """Convert the source file to plaintext/markdown for downstream analysis."""
     path = Path(file_path)
     suffix = path.suffix.lower()
 
-    # For PDFs, try enhanced converters first (which includes Dolphin)
+    # For PDFs, try converters first
     if suffix == ".pdf":
         try:
             from ingestion.converters import convert_to_markdown  # type: ignore
             md_text, metadata = convert_to_markdown(str(path))
             if md_text:
-                # Log which parser was used for debugging
-                parser_used = metadata.get("parser", metadata.get("note", "unknown"))
-                logger.debug(f"Proposal analyzer used {parser_used} for {path.name}")
                 return md_text
         except Exception as e:
-            logger.warning(f"Enhanced converters failed for {path.name}: {e}")
+            logger.warning(f"Converters failed for {path.name}: {e}")
 
         # Fallback to PyMuPDF if available
         if fitz is not None:
@@ -72,13 +67,12 @@ def extract_text_or_markdown(file_path: str) -> str:
 
 def _split_headings(text: str) -> List[Dict[str, Any]]:
     """Extract a best-effort section outline based on common heading patterns.
-    Enhanced to handle Dolphin's structured output better.
     Supports:
       - Markdown headings: ^#{1,6}\s+Title
       - ALL CAPS lines with optional numbers: ^\d+\.\s+TITLE or TITLE
       - Title Case lines surrounded by blank lines
-      - Table structures from Dolphin output
-      - Formula blocks from Dolphin output
+      - Table structures
+      - Formula blocks
     Returns a list of sections: {title, start_index, end_index, content, type}
     """
     lines = text.splitlines()
@@ -89,14 +83,14 @@ def _split_headings(text: str) -> List[Dict[str, Any]]:
         if not s:
             continue
 
-        # Markdown headings (from Dolphin or manual)
+        # Markdown headings
         if re.match(r"^#{1,6}\s+.+", s):
             title = re.sub(r"^#{1,6}\s+", "", s).strip()
             section_type = "heading"
             indices.append((i, title, section_type))
             continue
 
-        # Page separators from Dolphin
+        # Page separators
         if re.match(r"^---\s*$", s) and i+1 < len(lines) and lines[i+1].strip().startswith("# Page"):
             continue  # Skip separator, let page heading be caught
 
@@ -110,7 +104,7 @@ def _split_headings(text: str) -> List[Dict[str, Any]]:
                 indices.append((i, table_title, "table"))
                 continue
 
-        # Formula blocks from Dolphin ($$...$$)
+        # Formula blocks ($$...$$)
         if s.startswith("$$") and s.endswith("$$") and len(s) > 4:
             formula_title = f"Formula (Line {i+1})"
             indices.append((i, formula_title, "formula"))
@@ -308,9 +302,7 @@ def _phrase_bank(text: str, top_n: int = 20) -> List[str]:
 
 
 def _analyze_document_structure(sections: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Analyze document structure to provide insights for proposal generation.
-    Enhanced to understand Dolphin's structured output.
-    """
+    """Analyze document structure to provide insights for proposal generation."""
     structure = {
         "total_sections": len(sections),
         "has_tables": False,
@@ -355,9 +347,7 @@ def _analyze_document_structure(sections: List[Dict[str, Any]]) -> Dict[str, Any
 
 
 def analyze_example_text(text: str) -> Dict[str, Any]:
-    """Analyze example proposal text and return structure + style hints.
-    Enhanced to handle Dolphin's structured output with tables and formulas.
-    """
+    """Analyze example proposal text and return structure + style hints."""
     text = text or ""
     sections = _split_headings(text)
     metrics = _readability(text)
@@ -368,10 +358,10 @@ def analyze_example_text(text: str) -> Dict[str, Any]:
     section_lookup = _build_section_lookup(sections)
     aoc_actions = _extract_aoc_actions(text)
 
-    # Enhanced analysis for Dolphin-processed content
+    # Document structure analysis
     structure_analysis = _analyze_document_structure(sections)
 
-    # Style prompt summarizing tone and format (enhanced)
+    # Style prompt summarizing tone and format
     style_bits = [
         f"Target reading level ~ Grade {metrics['grade_level_proxy']} (proxy)",
         f"Average sentence length ~ {metrics['avg_words_per_sentence']} words",
