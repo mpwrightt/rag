@@ -52,8 +52,9 @@ pandas==2.2.2
 openpyxl==3.1.5
 lxml==5.3.0
 
-# Docling - Advanced document parsing
-docling>=2.0.0
+# Docling - Advanced document parsing (OPTIONAL - large dependency)
+# Uncomment if you need advanced ML-based document parsing:
+# docling>=2.0.0
 requests==2.32.4
 rsa==4.9.1
 six==1.17.0
